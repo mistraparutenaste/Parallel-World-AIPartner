@@ -12,3 +12,14 @@
 
 # Isolated implementation worktrees
 /.worktrees/
+
+# Build outputs and local dependencies
+target/
+node_modules/
+dist/
+
+# Local configuration and runtime data
+.env
+*.log
+*.sqlite3
+.superpowers/
