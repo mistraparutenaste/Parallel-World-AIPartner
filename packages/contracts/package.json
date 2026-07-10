@@ -2,6 +2,13 @@
   "name": "@parallel-world/contracts",
   "private": true,
   "type": "module",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
