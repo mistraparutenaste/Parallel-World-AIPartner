@@ -1,0 +1,297 @@
+# File Verification Report
+
+選択済み7モデル(Haru/Hiyori/Mao/Mark/Ren/Rice/Wanko)について、.model3.jsonから参照される全ファイルの存在・パス逸脱チェックを実施。
+
+## haru
+- [OK] Haru.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Haru.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Haru.2048/texture_00.png)
+- [OK] テクスチャ[1]: 存在確認 (Haru.2048/texture_01.png)
+- [OK] .physics3.json: 存在確認 (Haru.physics3.json)
+- [OK] .pose3.json: 存在確認 (Haru.pose3.json)
+- [OK] .cdi3.json: 存在確認 (Haru.cdi3.json)
+- [OK] .userdata3.json: 存在確認 (Haru.userdata3.json)
+- [OK] 表情[F01]: 存在確認 (expressions/F01.exp3.json)
+- [OK] 表情[F02]: 存在確認 (expressions/F02.exp3.json)
+- [OK] 表情[F03]: 存在確認 (expressions/F03.exp3.json)
+- [OK] 表情[F04]: 存在確認 (expressions/F04.exp3.json)
+- [OK] 表情[F05]: 存在確認 (expressions/F05.exp3.json)
+- [OK] 表情[F06]: 存在確認 (expressions/F06.exp3.json)
+- [OK] 表情[F07]: 存在確認 (expressions/F07.exp3.json)
+- [OK] 表情[F08]: 存在確認 (expressions/F08.exp3.json)
+- [OK] モーション[Idle][0]: 存在確認 (motions/haru_g_idle.motion3.json)
+- [OK] モーション[Idle][1]: 存在確認 (motions/haru_g_m15.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/haru_g_m26.motion3.json)
+- [OK] モーション音声[TapBody][0]: 存在確認 (sounds/haru_talk_13.wav)
+- [OK] モーション[TapBody][1]: 存在確認 (motions/haru_g_m06.motion3.json)
+- [OK] モーション音声[TapBody][1]: 存在確認 (sounds/haru_Info_14.wav)
+- [OK] モーション[TapBody][2]: 存在確認 (motions/haru_g_m20.motion3.json)
+- [OK] モーション音声[TapBody][2]: 存在確認 (sounds/haru_normal_6.wav)
+- [OK] モーション[TapBody][3]: 存在確認 (motions/haru_g_m09.motion3.json)
+- [OK] モーション音声[TapBody][3]: 存在確認 (sounds/haru_Info_04.wav)
+
+## hiyori
+- [OK] Hiyori.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Hiyori.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Hiyori.2048/texture_00.png)
+- [OK] テクスチャ[1]: 存在確認 (Hiyori.2048/texture_01.png)
+- [OK] .physics3.json: 存在確認 (Hiyori.physics3.json)
+- [OK] .pose3.json: 存在確認 (Hiyori.pose3.json)
+- [OK] .cdi3.json: 存在確認 (Hiyori.cdi3.json)
+- [OK] .userdata3.json: 存在確認 (Hiyori.userdata3.json)
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[Idle][0]: 存在確認 (motions/Hiyori_m01.motion3.json)
+- [OK] モーション[Idle][1]: 存在確認 (motions/Hiyori_m02.motion3.json)
+- [OK] モーション[Idle][2]: 存在確認 (motions/Hiyori_m03.motion3.json)
+- [OK] モーション[Idle][3]: 存在確認 (motions/Hiyori_m05.motion3.json)
+- [OK] モーション[Idle][4]: 存在確認 (motions/Hiyori_m06.motion3.json)
+- [OK] モーション[Idle][5]: 存在確認 (motions/Hiyori_m07.motion3.json)
+- [OK] モーション[Idle][6]: 存在確認 (motions/Hiyori_m08.motion3.json)
+- [OK] モーション[Idle][7]: 存在確認 (motions/Hiyori_m09.motion3.json)
+- [OK] モーション[Idle][8]: 存在確認 (motions/Hiyori_m10.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/Hiyori_m04.motion3.json)
+
+## mao
+- [OK] Mao.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Mao.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Mao.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (Mao.physics3.json)
+- [OK] .pose3.json: 存在確認 (Mao.pose3.json)
+- [OK] .cdi3.json: 存在確認 (Mao.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [OK] 表情[exp_01]: 存在確認 (expressions/exp_01.exp3.json)
+- [OK] 表情[exp_02]: 存在確認 (expressions/exp_02.exp3.json)
+- [OK] 表情[exp_03]: 存在確認 (expressions/exp_03.exp3.json)
+- [OK] 表情[exp_04]: 存在確認 (expressions/exp_04.exp3.json)
+- [OK] 表情[exp_05]: 存在確認 (expressions/exp_05.exp3.json)
+- [OK] 表情[exp_06]: 存在確認 (expressions/exp_06.exp3.json)
+- [OK] 表情[exp_07]: 存在確認 (expressions/exp_07.exp3.json)
+- [OK] 表情[exp_08]: 存在確認 (expressions/exp_08.exp3.json)
+- [OK] モーション[Idle][0]: 存在確認 (motions/mtn_01.motion3.json)
+- [OK] モーション[Idle][1]: 存在確認 (motions/sample_01.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/mtn_02.motion3.json)
+- [OK] モーション[TapBody][1]: 存在確認 (motions/mtn_03.motion3.json)
+- [OK] モーション[TapBody][2]: 存在確認 (motions/mtn_04.motion3.json)
+- [OK] モーション[TapBody][3]: 存在確認 (motions/special_01.motion3.json)
+- [OK] モーション[TapBody][4]: 存在確認 (motions/special_02.motion3.json)
+- [OK] モーション[TapBody][5]: 存在確認 (motions/special_03.motion3.json)
+
+## mark
+- [OK] Mark.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Mark.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Mark.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (Mark.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Mark.cdi3.json)
+- [OK] .userdata3.json: 存在確認 (Mark.userdata3.json)
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[Idle][0]: 存在確認 (motions/mark_m01.motion3.json)
+- [OK] モーション[Idle][1]: 存在確認 (motions/mark_m02.motion3.json)
+- [OK] モーション[Idle][2]: 存在確認 (motions/mark_m03.motion3.json)
+- [OK] モーション[Idle][3]: 存在確認 (motions/mark_m04.motion3.json)
+- [OK] モーション[Idle][4]: 存在確認 (motions/mark_m05.motion3.json)
+- [OK] モーション[Idle][5]: 存在確認 (motions/mark_m06.motion3.json)
+
+## ren
+- [OK] Ren.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Ren.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Ren.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (Ren.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Ren.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [OK] 表情[exp_01]: 存在確認 (expressions/exp_01.exp3.json)
+- [OK] 表情[exp_02]: 存在確認 (expressions/exp_02.exp3.json)
+- [OK] 表情[exp_03]: 存在確認 (expressions/exp_03.exp3.json)
+- [OK] 表情[exp_04]: 存在確認 (expressions/exp_04.exp3.json)
+- [OK] 表情[exp_05]: 存在確認 (expressions/exp_05.exp3.json)
+- [OK] モーション[Idle][0]: 存在確認 (motions/mtn_01.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/mtn_02.motion3.json)
+- [OK] モーション[TapBody][1]: 存在確認 (motions/mtn_03.motion3.json)
+
+## rice
+- [OK] Rice.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Rice.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Rice.2048/texture_00.png)
+- [OK] テクスチャ[1]: 存在確認 (Rice.2048/texture_01.png)
+- [OK] .physics3.json: 存在確認 (Rice.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Rice.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[Idle][0]: 存在確認 (motions/idle.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/mtn_01.motion3.json)
+- [OK] モーション[TapBody][1]: 存在確認 (motions/mtn_02.motion3.json)
+- [OK] モーション[TapBody][2]: 存在確認 (motions/mtn_03.motion3.json)
+
+## wanko
+- [OK] Wanko.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Wanko.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Wanko.1024/texture_00.png)
+- [OK] .physics3.json: 存在確認 (Wanko.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Wanko.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[Idle][0]: 存在確認 (motions/idle_01.motion3.json)
+- [OK] モーション[Idle][1]: 存在確認 (motions/idle_03.motion3.json)
+- [OK] モーション[Idle][2]: 存在確認 (motions/idle_04.motion3.json)
+- [OK] モーション[TapBody][0]: 存在確認 (motions/touch_02.motion3.json)
+- [OK] モーション[TapBody][1]: 存在確認 (motions/touch_04.motion3.json)
+
+## kei / kei_vowels_pro
+- [OK] kei_vowels_pro.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (kei_vowels_pro.moc3)
+- [OK] テクスチャ[0]: 存在確認 (kei_vowels_pro.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (kei_vowels_pro.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (kei_vowels_pro.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [OK] .motionsync3.json: 存在確認 (kei_vowels_pro.motionsync3.json)
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[][0]: 存在確認 (motions/01_kei_en.motion3.json)
+- [OK] モーション音声[][0]: 存在確認 (sounds/01_kei_en.wav)
+- [OK] モーション[][1]: 存在確認 (motions/01_kei_jp.motion3.json)
+- [OK] モーション音声[][1]: 存在確認 (sounds/01_kei_jp.wav)
+- [OK] モーション[][2]: 存在確認 (motions/01_kei_ko.motion3.json)
+- [OK] モーション音声[][2]: 存在確認 (sounds/01_kei_ko.wav)
+- [OK] モーション[][3]: 存在確認 (motions/01_kei_zh.motion3.json)
+- [OK] モーション音声[][3]: 存在確認 (sounds/01_kei_zh.wav)
+
+## kei / kei_basic_free
+- [OK] kei_basic_free.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (kei_basic_free.moc3)
+- [OK] テクスチャ[0]: 存在確認 (kei_basic_free.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (kei_basic_free.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (kei_basic_free.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [OK] .motionsync3.json: 存在確認 (kei_basic_free.motionsync3.json)
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[][0]: 存在確認 (motions/01_kei_en.motion3.json)
+- [OK] モーション音声[][0]: 存在確認 (sounds/01_kei_en.wav)
+- [OK] モーション[][1]: 存在確認 (motions/01_kei_jp.motion3.json)
+- [OK] モーション音声[][1]: 存在確認 (sounds/01_kei_jp.wav)
+- [OK] モーション[][2]: 存在確認 (motions/01_kei_ko.motion3.json)
+- [OK] モーション音声[][2]: 存在確認 (sounds/01_kei_ko.wav)
+- [OK] モーション[][3]: 存在確認 (motions/01_kei_zh.motion3.json)
+- [OK] モーション音声[][3]: 存在確認 (sounds/01_kei_zh.wav)
+
+## epsilon / epsilon_pro/runtime
+- [OK] Epsilon.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Epsilon.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Epsilon.1024/texture_00.png)
+- [OK] テクスチャ[1]: 存在確認 (Epsilon.1024/texture_01.png)
+- [OK] テクスチャ[2]: 存在確認 (Epsilon.1024/texture_02.png)
+- [OK] .physics3.json: 存在確認 (Epsilon.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Epsilon.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] .motionsync3.json: 対象モデルでは未提供
+- [OK] 表情[Angry.exp3.json]: 存在確認 (expressions/Angry.exp3.json)
+- [OK] 表情[Blushing.exp3.json]: 存在確認 (expressions/Blushing.exp3.json)
+- [OK] 表情[f01.exp3.json]: 存在確認 (expressions/f01.exp3.json)
+- [OK] 表情[f02.exp3.json]: 存在確認 (expressions/f02.exp3.json)
+- [OK] 表情[Normal.exp3.json]: 存在確認 (expressions/Normal.exp3.json)
+- [OK] 表情[Sad.exp3.json]: 存在確認 (expressions/Sad.exp3.json)
+- [OK] 表情[Smile.exp3.json]: 存在確認 (expressions/Smile.exp3.json)
+- [OK] 表情[Surprised.exp3.json]: 存在確認 (expressions/Surprised.exp3.json)
+- [OK] モーション[Idle][0]: 存在確認 (motion/Epsilon_idle_01.motion3.json)
+- [OK] モーション[Tap][0]: 存在確認 (motion/Epsilon_m_03.motion3.json)
+- [OK] モーション[Tap][1]: 存在確認 (motion/Epsilon_m_sp_02.motion3.json)
+- [OK] モーション[Tap][2]: 存在確認 (motion/Epsilon_m_sp_03.motion3.json)
+- [OK] モーション[Tap][3]: 存在確認 (motion/Epsilon_m_sp_05.motion3.json)
+- [OK] モーション[Flick3][0]: 存在確認 (motion/Epsilon_m_sp_01.motion3.json)
+- [OK] モーション[Flick3][1]: 存在確認 (motion/Epsilon_m_04.motion3.json)
+- [OK] モーション[FlickUp][0]: 存在確認 (motion/Epsilon_m_01.motion3.json)
+- [OK] モーション[FlickUp][1]: 存在確認 (motion/Epsilon_m_05.motion3.json)
+- [OK] モーション[FlickDown][0]: 存在確認 (motion/Epsilon_m_06.motion3.json)
+- [OK] モーション[FlickDown][1]: 存在確認 (motion/Epsilon_m_08.motion3.json)
+- [OK] モーション[Flick][0]: 存在確認 (motion/Epsilon_m_02.motion3.json)
+- [OK] モーション[Flick][1]: 存在確認 (motion/Epsilon_m_07.motion3.json)
+- [OK] モーション[Shake][0]: 存在確認 (motion/Epsilon_shake_01.motion3.json)
+- [OK] モーション[Shake][1]: 存在確認 (motion/Epsilon_m_sp_04.motion3.json)
+
+## epsilon / epsilon_free/runtime
+- [OK] Epsilon_free.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (Epsilon_free.moc3)
+- [OK] テクスチャ[0]: 存在確認 (Epsilon_free.2048/texture_00.png)
+- [OK] .physics3.json: 存在確認 (Epsilon_free.physics3.json)
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (Epsilon_free.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] .motionsync3.json: 対象モデルでは未提供
+- [OK] 表情[Angry]: 存在確認 (expressions/Angry.exp3.json)
+- [OK] 表情[Blushing]: 存在確認 (expressions/Blushing.exp3.json)
+- [OK] 表情[f01]: 存在確認 (expressions/f01.exp3.json)
+- [OK] 表情[f02]: 存在確認 (expressions/f02.exp3.json)
+- [OK] 表情[Normal]: 存在確認 (expressions/Normal.exp3.json)
+- [OK] 表情[Sad]: 存在確認 (expressions/Sad.exp3.json)
+- [OK] 表情[Smile]: 存在確認 (expressions/Smile.exp3.json)
+- [OK] 表情[Surprised]: 存在確認 (expressions/Surprised.exp3.json)
+- [OK] モーション[Idle][0]: 存在確認 (motion/Epsilon_idle_01.motion3.json)
+- [OK] モーション[FlickUp][0]: 存在確認 (motion/Epsilon_m_01.motion3.json)
+- [OK] モーション[FlickUp][1]: 存在確認 (motion/Epsilon_m_05.motion3.json)
+- [OK] モーション[Flick][0]: 存在確認 (motion/Epsilon_m_02.motion3.json)
+- [OK] モーション[Flick][1]: 存在確認 (motion/Epsilon_m_07.motion3.json)
+- [OK] モーション[Tap][0]: 存在確認 (motion/Epsilon_m_03.motion3.json)
+- [OK] モーション[Tap][1]: 存在確認 (motion/Epsilon_m_sp_02.motion3.json)
+- [OK] モーション[Tap][2]: 存在確認 (motion/Epsilon_m_sp_03.motion3.json)
+- [OK] モーション[Tap][3]: 存在確認 (motion/Epsilon_m_sp_05.motion3.json)
+- [OK] モーション[Flick3][0]: 存在確認 (motion/Epsilon_m_04.motion3.json)
+- [OK] モーション[Flick3][1]: 存在確認 (motion/Epsilon_m_sp_01.motion3.json)
+- [OK] モーション[FlickDown][0]: 存在確認 (motion/Epsilon_m_06.motion3.json)
+- [OK] モーション[FlickDown][1]: 存在確認 (motion/Epsilon_m_08.motion3.json)
+- [OK] モーション[Shake][0]: 存在確認 (motion/Epsilon_m_sp_04.motion3.json)
+- [OK] モーション[Shake][1]: 存在確認 (motion/Epsilon_shake_01.motion3.json)
+
+## simple-model / runtime
+- [OK] simple.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (simple.moc3)
+- [OK] テクスチャ[0]: 存在確認 (simple.1024/texture_00.png)
+- [--] .physics3.json: 対象モデルでは未提供
+- [--] .pose3.json: 対象モデルでは未提供
+- [OK] .cdi3.json: 存在確認 (simple.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] .motionsync3.json: 対象モデルでは未提供
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[Tap][0]: 存在確認 (motion/Scene.motion3.json)
+
+## haru-receptionist / runtime
+- [OK] haru_greeter_t05.model3.json はJSONとして読み込み可能
+- [OK] .moc3: 存在確認 (haru_greeter_t05.moc3)
+- [OK] テクスチャ[0]: 存在確認 (haru_greeter_t05.2048/texture_00.png)
+- [OK] テクスチャ[1]: 存在確認 (haru_greeter_t05.2048/texture_01.png)
+- [OK] .physics3.json: 存在確認 (haru_greeter_t05.physics3.json)
+- [OK] .pose3.json: 存在確認 (haru_greeter_t05.pose3.json)
+- [OK] .cdi3.json: 存在確認 (haru_greeter_t05.cdi3.json)
+- [--] .userdata3.json: 対象モデルでは未提供
+- [--] .motionsync3.json: 対象モデルでは未提供
+- [--] 表情(.exp3.json): 対象モデルでは未提供
+- [OK] モーション[][0]: 存在確認 (motion/haru_g_idle.motion3.json)
+- [OK] モーション[][1]: 存在確認 (motion/haru_g_m01.motion3.json)
+- [OK] モーション[][2]: 存在確認 (motion/haru_g_m02.motion3.json)
+- [OK] モーション[][3]: 存在確認 (motion/haru_g_m03.motion3.json)
+- [OK] モーション[][4]: 存在確認 (motion/haru_g_m04.motion3.json)
+- [OK] モーション[][5]: 存在確認 (motion/haru_g_m05.motion3.json)
+- [OK] モーション[][6]: 存在確認 (motion/haru_g_m06.motion3.json)
+- [OK] モーション[][7]: 存在確認 (motion/haru_g_m07.motion3.json)
+- [OK] モーション[][8]: 存在確認 (motion/haru_g_m08.motion3.json)
+- [OK] モーション[][9]: 存在確認 (motion/haru_g_m09.motion3.json)
+- [OK] モーション[][10]: 存在確認 (motion/haru_g_m10.motion3.json)
+- [OK] モーション[][11]: 存在確認 (motion/haru_g_m11.motion3.json)
+- [OK] モーション[][12]: 存在確認 (motion/haru_g_m12.motion3.json)
+- [OK] モーション[][13]: 存在確認 (motion/haru_g_m13.motion3.json)
+- [OK] モーション[][14]: 存在確認 (motion/haru_g_m14.motion3.json)
+- [OK] モーション[][15]: 存在確認 (motion/haru_g_m15.motion3.json)
+- [OK] モーション[][16]: 存在確認 (motion/haru_g_m16.motion3.json)
+- [OK] モーション[][17]: 存在確認 (motion/haru_g_m17.motion3.json)
+- [OK] モーション[][18]: 存在確認 (motion/haru_g_m18.motion3.json)
+- [OK] モーション[][19]: 存在確認 (motion/haru_g_m19.motion3.json)
+- [OK] モーション[][20]: 存在確認 (motion/haru_g_m20.motion3.json)
+- [OK] モーション[][21]: 存在確認 (motion/haru_g_m21.motion3.json)
+- [OK] モーション[][22]: 存在確認 (motion/haru_g_m22.motion3.json)
+- [OK] モーション[][23]: 存在確認 (motion/haru_g_m23.motion3.json)
+- [OK] モーション[][24]: 存在確認 (motion/haru_g_m24.motion3.json)
+- [OK] モーション[][25]: 存在確認 (motion/haru_g_m25.motion3.json)
+- [OK] モーション[][26]: 存在確認 (motion/haru_g_m26.motion3.json)

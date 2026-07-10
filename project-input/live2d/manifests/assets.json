@@ -1,0 +1,1876 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-10T16:24:19Z",
+  "assets": [
+    {
+      "id": "live2d-haru",
+      "name": "Haru",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/haru",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Haru.2048/texture_00.png",
+          "size": 1526786,
+          "sha256": "30fce81e6b2d69fb99e8d1b5f391a6e0240f671095e491e9bbe24ddd7c7f434d"
+        },
+        {
+          "path": "Haru.2048/texture_01.png",
+          "size": 1188664,
+          "sha256": "e1e977447ee7e6e347f1b96b9103ae269e6f4e4a8cf38068d161537415cc51c8"
+        },
+        {
+          "path": "Haru.cdi3.json",
+          "size": 5536,
+          "sha256": "f0b7b68e8404fb2a327f77515388f9f2418d038e3eb98a7ecff89818c3dd4e97"
+        },
+        {
+          "path": "Haru.moc3",
+          "size": 384704,
+          "sha256": "aa59f7a3dc3b30b23b5f10afd9192ed755e4d01dc9a12442d99b972a418e2543"
+        },
+        {
+          "path": "Haru.model3.json",
+          "size": 2083,
+          "sha256": "5a41969802b8f9019ca731b07d918fc137e6a61eb9943bdd3f532aeaa0936f8c"
+        },
+        {
+          "path": "Haru.physics3.json",
+          "size": 5914,
+          "sha256": "b09a654759a0a0a49998a263757b10f310377adab4b8a281ae5c70902a8a7d1f"
+        },
+        {
+          "path": "Haru.pose3.json",
+          "size": 274,
+          "sha256": "cd1c1e2c0faac3bf0c42fdf1a4d5a064ebd5e1f2dc4116a9a7c723b948818ef6"
+        },
+        {
+          "path": "Haru.userdata3.json",
+          "size": 313,
+          "sha256": "6d001365965cdabd9fb36cffa9583c9e3eff20331d791c00064c4f9246ca2893"
+        },
+        {
+          "path": "expressions/F01.exp3.json",
+          "size": 124,
+          "sha256": "b143d37d24af8fa5d619e333e791facd87d6396ab75e09fa9051e760f8ff96e7"
+        },
+        {
+          "path": "expressions/F02.exp3.json",
+          "size": 464,
+          "sha256": "c0bd4f923b12f40f8ad778766cf48a260054ff346156aaee062dcad788053063"
+        },
+        {
+          "path": "expressions/F03.exp3.json",
+          "size": 739,
+          "sha256": "cdea71773205e6299155820c12afe20c15dcf53f0e73da7a30c364fe5d16d38c"
+        },
+        {
+          "path": "expressions/F04.exp3.json",
+          "size": 841,
+          "sha256": "354c58609b64a74daf8d7e37b4d28a365548aa5ba1bf941ec4d8db4bd3bb43bd"
+        },
+        {
+          "path": "expressions/F05.exp3.json",
+          "size": 474,
+          "sha256": "4f43af57229467492fab13a88f600b741f42887493e993b6ec9f558688d2dcea"
+        },
+        {
+          "path": "expressions/F06.exp3.json",
+          "size": 475,
+          "sha256": "1bf9ad6a640b8009d429d883718b2bf2d0091b380c63ca1c65326bdbc17105aa"
+        },
+        {
+          "path": "expressions/F07.exp3.json",
+          "size": 907,
+          "sha256": "77e3b941e2525aff0308ed82998e6b4356c896e97d9411c528f98fd4a753d685"
+        },
+        {
+          "path": "expressions/F08.exp3.json",
+          "size": 421,
+          "sha256": "be652831b79458fd3f9d55b28c15b0e93d551dd730c5e1053e23d238fe879a21"
+        },
+        {
+          "path": "motions/haru_g_idle.motion3.json",
+          "size": 21183,
+          "sha256": "8a4fac459abf35dfb049188e4330d485a9fce54ae6111625f4ffae4d9b03abfb"
+        },
+        {
+          "path": "motions/haru_g_m01.motion3.json",
+          "size": 11944,
+          "sha256": "ed85c07795fba2e57d7701b706ba04516b83a0b7e4463752320c2c0a8bdca033"
+        },
+        {
+          "path": "motions/haru_g_m02.motion3.json",
+          "size": 12055,
+          "sha256": "8a187a9a830ddb62f5471dc974782af68f61dfeb12b31eb3858d3513cf2c035d"
+        },
+        {
+          "path": "motions/haru_g_m03.motion3.json",
+          "size": 16981,
+          "sha256": "8edba3952e0c45ce0bc3d20755ba212528b6450641e82dec162d7a327d48b82b"
+        },
+        {
+          "path": "motions/haru_g_m04.motion3.json",
+          "size": 23449,
+          "sha256": "9532599ea7c54452e1b2a689652a76e50fa1d261f0a5cd0adaaa01b1c567fbdf"
+        },
+        {
+          "path": "motions/haru_g_m05.motion3.json",
+          "size": 14198,
+          "sha256": "5015d14ffad99a9eb43f48dfaa6e400072b610467611ad72221b04a21e3252c6"
+        },
+        {
+          "path": "motions/haru_g_m06.motion3.json",
+          "size": 15118,
+          "sha256": "311c544c67282cbc40ac1e0287751b20a7f49a46f4eea989b7071efc3188053c"
+        },
+        {
+          "path": "motions/haru_g_m07.motion3.json",
+          "size": 14821,
+          "sha256": "faa3aa7ca9c05cc395003a4a072ea8d3397c9a3480c9220e486dd70beb32bda9"
+        },
+        {
+          "path": "motions/haru_g_m08.motion3.json",
+          "size": 15439,
+          "sha256": "8933e2e0db8818037db817d5e6aa4fd795c6f3e302fceae26f2b5a4b88889446"
+        },
+        {
+          "path": "motions/haru_g_m09.motion3.json",
+          "size": 25066,
+          "sha256": "d6c8abb01dcfee8246cccbe7a437f025cb31884f8408f3207e1a6e4139888e45"
+        },
+        {
+          "path": "motions/haru_g_m10.motion3.json",
+          "size": 34954,
+          "sha256": "27933b0363abda5c13a55cfea5f2968293abcbc8995140773ff2bf7186c631c1"
+        },
+        {
+          "path": "motions/haru_g_m11.motion3.json",
+          "size": 14475,
+          "sha256": "cd4afa96422f649cdf32782f6d79594a52fbc106717a4b4056caaddbec7538d3"
+        },
+        {
+          "path": "motions/haru_g_m12.motion3.json",
+          "size": 22441,
+          "sha256": "a512cf99c416ead14cd8bc89f2e3b021fce2bcf46f670f1d151d374d95476ab8"
+        },
+        {
+          "path": "motions/haru_g_m13.motion3.json",
+          "size": 11601,
+          "sha256": "cb59cafad6567b4dfe71f69d6fc19d17902f9a397badc4e4003491229fe744be"
+        },
+        {
+          "path": "motions/haru_g_m14.motion3.json",
+          "size": 20625,
+          "sha256": "a61765c485d61169b2dbd3a4b760d409964edd6f272f3ae26ef3069e8ebc7559"
+        },
+        {
+          "path": "motions/haru_g_m15.motion3.json",
+          "size": 13540,
+          "sha256": "4383147bd61a7bd2d990591512bfe29eea743f93868e8679ffed16e588628088"
+        },
+        {
+          "path": "motions/haru_g_m16.motion3.json",
+          "size": 18639,
+          "sha256": "7ab44f3e3e3258c4666fb3ed3643e947faf04a2c17b77bc0b12121ea983c9e23"
+        },
+        {
+          "path": "motions/haru_g_m17.motion3.json",
+          "size": 16109,
+          "sha256": "9be971760fb922e3dc3d588b7eca15c48655db721c3578d73e54daf55fc8677d"
+        },
+        {
+          "path": "motions/haru_g_m18.motion3.json",
+          "size": 13424,
+          "sha256": "4dbecfa60f081dc5ff63a08fbbf27889663f766b4c449df534a904528d2b7f36"
+        },
+        {
+          "path": "motions/haru_g_m19.motion3.json",
+          "size": 11302,
+          "sha256": "598c52b4068482ece9c1d6ddf1f0f0dd8b18eb625fa3e758a0acb677bb2eac9d"
+        },
+        {
+          "path": "motions/haru_g_m20.motion3.json",
+          "size": 23651,
+          "sha256": "536e467d6533c0883b2ad6c8915bc632b4d4188fc3d3abb19cc6b4f5fd12ddb9"
+        },
+        {
+          "path": "motions/haru_g_m21.motion3.json",
+          "size": 23906,
+          "sha256": "02efb8fc2296da6531d364dec7929c1685763046b744ba470326b7961c7123b3"
+        },
+        {
+          "path": "motions/haru_g_m22.motion3.json",
+          "size": 27408,
+          "sha256": "02f2bca00f22281966a86d6885dbdee67d725c7dc163e5b2bbbeb1ccf9fb5ec3"
+        },
+        {
+          "path": "motions/haru_g_m23.motion3.json",
+          "size": 16695,
+          "sha256": "24cef039138ce14c902807cf1a4d24ce48cfb4802c788a9a9fb8b5a6c4556444"
+        },
+        {
+          "path": "motions/haru_g_m24.motion3.json",
+          "size": 18090,
+          "sha256": "70c9f34193f3d9fd30f9ec204a333b0169bb290540e751cfa203de6611a9c8d7"
+        },
+        {
+          "path": "motions/haru_g_m25.motion3.json",
+          "size": 17528,
+          "sha256": "bef0fdcd9bc40d61eebb723234e00a5f87ba00d97f31f65dd215b862c3074245"
+        },
+        {
+          "path": "motions/haru_g_m26.motion3.json",
+          "size": 23275,
+          "sha256": "2b20fbbf31439a5792c808085ecd4c9dc5addeb6195c6d113a25e77f7acc0f4f"
+        },
+        {
+          "path": "sounds/haru_Info_04.wav",
+          "size": 111354,
+          "sha256": "df9bdccee25492b1787bde80877a0bbbe442c71385083ce63987ff4d7aba456d"
+        },
+        {
+          "path": "sounds/haru_Info_14.wav",
+          "size": 267922,
+          "sha256": "a1723f7f6a7858882091d50b4762f063e577a671630b0d910b429c49804fa0c7"
+        },
+        {
+          "path": "sounds/haru_normal_6.wav",
+          "size": 142374,
+          "sha256": "7cbee57fa4a59bf5e645b19408df0a1869a4d2d7234d5bfd8e0849262dd39c6d"
+        },
+        {
+          "path": "sounds/haru_talk_13.wav",
+          "size": 138862,
+          "sha256": "a0890e39bd46e45469e6ea3da96859957f161bbef19146591c8437ed57d0bb0f"
+        }
+      ]
+    },
+    {
+      "id": "live2d-hiyori",
+      "name": "Hiyori",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/hiyori",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Hiyori.2048/texture_00.png",
+          "size": 1814312,
+          "sha256": "560aea0d910dc04950d669640b2ef17c0d817969e9909f477f166bb5cbd8ffbe"
+        },
+        {
+          "path": "Hiyori.2048/texture_01.png",
+          "size": 2504416,
+          "sha256": "87fe9ab7db81ab3025e0407229e449233581e00fa92c8e911923bc6c7d98ce84"
+        },
+        {
+          "path": "Hiyori.cdi3.json",
+          "size": 9660,
+          "sha256": "0fc3fc76b7a68136056c8832c930c8af9f93899f359eded7349b481ea2342d03"
+        },
+        {
+          "path": "Hiyori.moc3",
+          "size": 443648,
+          "sha256": "0323f5f377b9afef54318be09e9b4eea2a8cb266190ff9d2f843f95ecb77716c"
+        },
+        {
+          "path": "Hiyori.model3.json",
+          "size": 1736,
+          "sha256": "973cb3392f7b01f5f73e9d3fedc495a81a0f3ee8014e5df72ef943311c56ee12"
+        },
+        {
+          "path": "Hiyori.physics3.json",
+          "size": 26160,
+          "sha256": "c7a6d641893519c0bbc615545887f03f6c5b8031b4096873740b618370452fc1"
+        },
+        {
+          "path": "Hiyori.pose3.json",
+          "size": 166,
+          "sha256": "ff1cc242790f196c87a7379dc1340b608723db60af1b2825e00da8f351ffc1bf"
+        },
+        {
+          "path": "Hiyori.userdata3.json",
+          "size": 623,
+          "sha256": "75fe50a89ea695b46c98dce8991c2f3d67e3d7a479786e6310460289b552d29b"
+        },
+        {
+          "path": "motions/Hiyori_m01.motion3.json",
+          "size": 10622,
+          "sha256": "c4f0d982c685b81c1af0ced96c8f6bd5118b8a3fa972c3a12a46652b8d78461d"
+        },
+        {
+          "path": "motions/Hiyori_m02.motion3.json",
+          "size": 14248,
+          "sha256": "858c582874a0c4badfec38d4caf19e232fea5ba714f5a2ac6a282c617910c154"
+        },
+        {
+          "path": "motions/Hiyori_m03.motion3.json",
+          "size": 12732,
+          "sha256": "de33a8ce78226a5ff80cfa941fb5a4c50b6c1c4b346031ed44b384f772b62cf9"
+        },
+        {
+          "path": "motions/Hiyori_m04.motion3.json",
+          "size": 8772,
+          "sha256": "54ddb94d0494772e10355429c547bb7e29601f38d663087804b0c793b29cc51f"
+        },
+        {
+          "path": "motions/Hiyori_m05.motion3.json",
+          "size": 16061,
+          "sha256": "7f71061c9207ac1da6e06098ede9318307a7e75715a3ef97c82646acd9ee8620"
+        },
+        {
+          "path": "motions/Hiyori_m06.motion3.json",
+          "size": 19492,
+          "sha256": "55c007646febe4cb76d20cbb0623086986dbb55c7ef82212693a5e26636a32ef"
+        },
+        {
+          "path": "motions/Hiyori_m07.motion3.json",
+          "size": 9636,
+          "sha256": "3f06cb70f5654eed3389978885e4dff151b6cf9e8d59248680addcd267ff793a"
+        },
+        {
+          "path": "motions/Hiyori_m08.motion3.json",
+          "size": 10551,
+          "sha256": "66022fff5cff3c30b7fc1295bf92e4975e3ab9980d5cb296b5e24a2a8acc6daf"
+        },
+        {
+          "path": "motions/Hiyori_m09.motion3.json",
+          "size": 11479,
+          "sha256": "9edbd6a88e977221fa90625b5f94c9fd27212e1183288105584be8272543ade7"
+        },
+        {
+          "path": "motions/Hiyori_m10.motion3.json",
+          "size": 9604,
+          "sha256": "ba0ba6764a80459432ffd48d6bd5ba261fd25f196208ade3016be74efb9d3dfc"
+        }
+      ]
+    },
+    {
+      "id": "live2d-mao",
+      "name": "Mao",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/mao",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Mao.2048/texture_00.png",
+          "size": 3130953,
+          "sha256": "0b97283d69e62d346bcca25f8a91a5dd477f2e668ad9801b15fa7f108631c624"
+        },
+        {
+          "path": "Mao.cdi3.json",
+          "size": 16797,
+          "sha256": "f261069f302c013f1c60b48045aa4bf5ac2cb086ebb54917f7e5c3f47e5c8f81"
+        },
+        {
+          "path": "Mao.moc3",
+          "size": 879680,
+          "sha256": "ad5195b39e35e0da8ba0c825ad9cc2d60571502007f6f7d4f00963b768bb90d8"
+        },
+        {
+          "path": "Mao.model3.json",
+          "size": 1699,
+          "sha256": "d5fb29f93ef3cf3eba96b5aa9538eca063abbebee81a8d2dbeecea0cef4fecba"
+        },
+        {
+          "path": "Mao.physics3.json",
+          "size": 21838,
+          "sha256": "27de73695ca6418a84953a0b2776e78160f9d0b988521e9bbfa02ff913f20a6d"
+        },
+        {
+          "path": "Mao.pose3.json",
+          "size": 254,
+          "sha256": "efac160eccb7183ee6555d4e53a739042e1c55b92f59a99c2e4bed8e73a5ab91"
+        },
+        {
+          "path": "expressions/exp_01.exp3.json",
+          "size": 1981,
+          "sha256": "afbe54559e428acdaf43190d1c497792048c35ed37979f33d9a37c70181ddf5b"
+        },
+        {
+          "path": "expressions/exp_02.exp3.json",
+          "size": 1981,
+          "sha256": "6d35132627f9e362e526c0ce8c2152ece2b305c9abd3368da43460c2af8538f6"
+        },
+        {
+          "path": "expressions/exp_03.exp3.json",
+          "size": 1981,
+          "sha256": "460a3077d61adfdd1e6b9a062d0d7c3fcc2fb74c80f67ec3649982a9fab49bee"
+        },
+        {
+          "path": "expressions/exp_04.exp3.json",
+          "size": 1985,
+          "sha256": "abad61f4ec7f1a157d6b914643e5bd4ffb29964e67f538cace420ebc9f69a716"
+        },
+        {
+          "path": "expressions/exp_05.exp3.json",
+          "size": 1986,
+          "sha256": "331fe0d9c78861496a9cc9acba9650f295a72af8c36df7036ab8a372840d2cc1"
+        },
+        {
+          "path": "expressions/exp_06.exp3.json",
+          "size": 1985,
+          "sha256": "52f1e391008d61efb17a33602c004a637a42bdb8af8aca3d2319ac5dac215ed1"
+        },
+        {
+          "path": "expressions/exp_07.exp3.json",
+          "size": 1987,
+          "sha256": "8bf587d3d7bef509166c8ff95cc9f47c23c895eaf55f9d95110263e44452a53a"
+        },
+        {
+          "path": "expressions/exp_08.exp3.json",
+          "size": 1982,
+          "sha256": "761190452e48d22727fce91e76270af2c27b0bb0ee3d04b2c6b0dc6cec49f88d"
+        },
+        {
+          "path": "motions/mtn_01.motion3.json",
+          "size": 27661,
+          "sha256": "4a17c9b0b4ffd42ee5b8386cba0ae18916953ac693d79f44cd831bf5d59877f6"
+        },
+        {
+          "path": "motions/mtn_02.motion3.json",
+          "size": 24274,
+          "sha256": "aa8c78c03f1d5fe143eedecfb7d077e7e4a7804c93723ba661eef2dd6a5d5ae0"
+        },
+        {
+          "path": "motions/mtn_03.motion3.json",
+          "size": 22934,
+          "sha256": "e31eab8c371a253322c68968dbe5895e3029562f31a5b8d277012e94b0a6badd"
+        },
+        {
+          "path": "motions/mtn_04.motion3.json",
+          "size": 27346,
+          "sha256": "a95f67d35c81755dee7f3be1e5e60171f090026725f628c99a1e3585985a1ac1"
+        },
+        {
+          "path": "motions/sample_01.motion3.json",
+          "size": 28330,
+          "sha256": "21293d1d7c91f8d8b055f5215274df663e345a198517ebf8e3d26613ba37324a"
+        },
+        {
+          "path": "motions/special_01.motion3.json",
+          "size": 34229,
+          "sha256": "141320d2e8913097156bf61aa2c27cd51ffcf8ba5d288172da288d2afcc164db"
+        },
+        {
+          "path": "motions/special_02.motion3.json",
+          "size": 41809,
+          "sha256": "68e6e12c14d2c06504891971dcdce7771637aedbda9ef5edc616fd4f6972d20c"
+        },
+        {
+          "path": "motions/special_03.motion3.json",
+          "size": 48041,
+          "sha256": "fe6b990b6d26a48955c0b33e27c3de8e020c98d2d06be41dcdfecdd053e6dd0f"
+        }
+      ]
+    },
+    {
+      "id": "live2d-mark",
+      "name": "Mark",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/mark",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Mark.2048/texture_00.png",
+          "size": 465924,
+          "sha256": "2d1190a596f202423b005075e15816013544b456f78e029e18b5fde45329785c"
+        },
+        {
+          "path": "Mark.cdi3.json",
+          "size": 2590,
+          "sha256": "f66a52b92b7e9aceca0a81e2ba21babce95a56adb7d86642bb256f56b71e0899"
+        },
+        {
+          "path": "Mark.moc3",
+          "size": 124736,
+          "sha256": "f6351429bd3dd655ac95d1027e463ae415e99e2b1b43431a9662fcd316373e9e"
+        },
+        {
+          "path": "Mark.model3.json",
+          "size": 1119,
+          "sha256": "143b23ff339c01fd963d82c5bcc102aa0b4b11bd6baf4adeba4e84fde04ff6b6"
+        },
+        {
+          "path": "Mark.physics3.json",
+          "size": 2198,
+          "sha256": "6324414044835687b8bcc358a1add196e622b007115087b8ce512de28e7050df"
+        },
+        {
+          "path": "Mark.userdata3.json",
+          "size": 448,
+          "sha256": "0999d1b734818f9990a7d435c0dcf1ec76353db4864fb0071b8fdaae478fb4b9"
+        },
+        {
+          "path": "motions/mark_m01.motion3.json",
+          "size": 28711,
+          "sha256": "0a8e5ecea2d7de5ccedd968ad8ebc7011a9ef39de8b3cac68a6f3e0131458748"
+        },
+        {
+          "path": "motions/mark_m02.motion3.json",
+          "size": 18717,
+          "sha256": "c292927418fb3f1af2ed7bfc8a5cf93d21e73ca425550c44ae3818bc1c095c19"
+        },
+        {
+          "path": "motions/mark_m03.motion3.json",
+          "size": 9201,
+          "sha256": "df2d18c1d0c0ec35068c2ec662665048ec0d9ba879ac42207e8b991af3c88c2b"
+        },
+        {
+          "path": "motions/mark_m04.motion3.json",
+          "size": 15897,
+          "sha256": "e191085176c05074f8762ce4a46c35a21d5a7fe8176af2a4dcf2e028fb37c018"
+        },
+        {
+          "path": "motions/mark_m05.motion3.json",
+          "size": 13054,
+          "sha256": "a681213b1c6f72eb97cd019d9571caec0d8520f32f7a8e45902c2ff6438e5d1e"
+        },
+        {
+          "path": "motions/mark_m06.motion3.json",
+          "size": 8451,
+          "sha256": "11189f96fd1505199a8442675f4538c401d73ac0c63679dfed6e744e6278c17d"
+        }
+      ]
+    },
+    {
+      "id": "live2d-ren",
+      "name": "Ren",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/ren",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Ren.2048/texture_00.png",
+          "size": 1470558,
+          "sha256": "daa6cc507efe49ccf185b164d458f0d68d546426d41528e7faf075f6902b9e9e"
+        },
+        {
+          "path": "Ren.cdi3.json",
+          "size": 11113,
+          "sha256": "aae40f11bff2d0debeacc3dd9c57f604a5e5bf8f526ef2408bc941779edac422"
+        },
+        {
+          "path": "Ren.moc3",
+          "size": 915200,
+          "sha256": "a9ccf7d6b2f4f16c8b13da29b9b4f34dc865ba9c8ad88a0388530e7f2d6cc533"
+        },
+        {
+          "path": "Ren.model3.json",
+          "size": 1157,
+          "sha256": "6d003c1d34c17a60c17556e8b27c017d9cad09a381a9b35db74a4df52363e630"
+        },
+        {
+          "path": "Ren.physics3.json",
+          "size": 20679,
+          "sha256": "4890844caff47d7bfed200ad27b39688343a4d10e581f630b1e8cd3f3258586b"
+        },
+        {
+          "path": "expressions/exp_01.exp3.json",
+          "size": 1045,
+          "sha256": "0798ad8b8903b383f5d37f4bcbb1157d7fab3042a5b26e7b1af4e8a7903d4e56"
+        },
+        {
+          "path": "expressions/exp_02.exp3.json",
+          "size": 1047,
+          "sha256": "34b818b9f74c071bab9a52c482200049a170e99df83bdca40cdc3db07c39fb57"
+        },
+        {
+          "path": "expressions/exp_03.exp3.json",
+          "size": 1047,
+          "sha256": "2308948dceb0982b7118d59e370356c93bdcce85f93200d5bc9b13c56cda80c3"
+        },
+        {
+          "path": "expressions/exp_04.exp3.json",
+          "size": 1050,
+          "sha256": "52621dafb2adf742672b5af943cdf7158ac8d437ad4ef8d5a20692e5c60b466f"
+        },
+        {
+          "path": "expressions/exp_05.exp3.json",
+          "size": 1052,
+          "sha256": "d649edfab5944711a2a313345691eef0442a98713a5d2a767b321bc3ff54e6e5"
+        },
+        {
+          "path": "motions/mtn_01.motion3.json",
+          "size": 18202,
+          "sha256": "cd1f4a566b237adbd1bc138a31002150a0b7ef9efd9951a396250faee63893dc"
+        },
+        {
+          "path": "motions/mtn_02.motion3.json",
+          "size": 37525,
+          "sha256": "ceeb1ffdf9d9d50d3f3c9ae134d318bfd918fedf2e6f531128a92d0b6349ee69"
+        },
+        {
+          "path": "motions/mtn_03.motion3.json",
+          "size": 50727,
+          "sha256": "4004e17ea8f2945e5a17c6eb385569a5a44d36bdac211ccdb5cf0c2e6afc4ae0"
+        }
+      ]
+    },
+    {
+      "id": "live2d-rice",
+      "name": "Rice",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/rice",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Rice.2048/texture_00.png",
+          "size": 1061518,
+          "sha256": "9930643898aeea3a5f11f06933e79a217b64fbec80c06158f512e85454ea60ea"
+        },
+        {
+          "path": "Rice.2048/texture_01.png",
+          "size": 1505136,
+          "sha256": "d80053659ecb2eab98269ade228253034827b8744db1fcb67843acbcc37906de"
+        },
+        {
+          "path": "Rice.cdi3.json",
+          "size": 12974,
+          "sha256": "8cdda2aa4ded26313f4cccea99cc1bc34cf939405f1d6e064d25387981648138"
+        },
+        {
+          "path": "Rice.moc3",
+          "size": 479104,
+          "sha256": "be56f2d656d279d8db9fe302ec744fa5992ff884b2ebb233f202772d5dd7e4dc"
+        },
+        {
+          "path": "Rice.model3.json",
+          "size": 767,
+          "sha256": "0dd95a8524d4540467569e9264e979d7dbc53312d7dd710ca54591b734c1cd52"
+        },
+        {
+          "path": "Rice.physics3.json",
+          "size": 25513,
+          "sha256": "72f3c854bf00b551bd379785975571c88239b2da9e6db42a9935bcf4a9f2fa3d"
+        },
+        {
+          "path": "motions/idle.motion3.json",
+          "size": 10165,
+          "sha256": "b15a5ba6d59f7369b2b44f960f809c588921d008317d9f15f8a7c66eed0b3fba"
+        },
+        {
+          "path": "motions/mtn_01.motion3.json",
+          "size": 22819,
+          "sha256": "1bbbb3b91c5574d04cee312b02e1e89d12e6c155f39b8b4816654daf6658c27d"
+        },
+        {
+          "path": "motions/mtn_02.motion3.json",
+          "size": 13541,
+          "sha256": "9db0c12a957829078987e0fb7352681a5064c663d4c27366529272f579d3973b"
+        },
+        {
+          "path": "motions/mtn_03.motion3.json",
+          "size": 21062,
+          "sha256": "5b2d1910a114fae8c86e8589506872681a233448c11d7694f0faa819325ebe7b"
+        }
+      ]
+    },
+    {
+      "id": "live2d-wanko",
+      "name": "Wanko",
+      "sourceType": "official-github",
+      "sourceUrl": "https://github.com/Live2D/CubismWebSamples",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+      "localPath": "project-input/live2d/selected/wanko",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "Wanko.1024/texture_00.png",
+          "size": 566299,
+          "sha256": "ac8b02a0f259dcf03ca46960baaea3d340298cd8c606ea3a1b3d95a77a94ea3b"
+        },
+        {
+          "path": "Wanko.cdi3.json",
+          "size": 3986,
+          "sha256": "46709213efa27aece03bd03d89a377dc8b141db460f2a8a37bc03862b4d03fe8"
+        },
+        {
+          "path": "Wanko.moc3",
+          "size": 107456,
+          "sha256": "ae474fc8f67aa7491ed39d76cfbeadf22bed1b40a7d57a7ed5fefe35107e83ad"
+        },
+        {
+          "path": "Wanko.model3.json",
+          "size": 835,
+          "sha256": "66627edce440b236d0d9757c65e408b9081a2e4d4ddcfb3fd2d48bac617b3764"
+        },
+        {
+          "path": "Wanko.physics3.json",
+          "size": 5937,
+          "sha256": "941fcfe315000b83d7b7eafdb2971301f1f9446e07eff437947e0f9e7bdbe849"
+        },
+        {
+          "path": "motions/idle_01.motion3.json",
+          "size": 6897,
+          "sha256": "732d91a814b2a5e460b1056d9f3cad3d11bb4ede2b4ec0695cc734ab685625d3"
+        },
+        {
+          "path": "motions/idle_02.motion3.json",
+          "size": 7781,
+          "sha256": "6253098cf2036dd8dcafc89271c83b371107b75e3d3deab497c18fc8bbd0fd14"
+        },
+        {
+          "path": "motions/idle_03.motion3.json",
+          "size": 7475,
+          "sha256": "85f1f26202a1f48e2b3776603d4ea35b3a687b61dd185fa70005f9ae38172dfd"
+        },
+        {
+          "path": "motions/idle_04.motion3.json",
+          "size": 6406,
+          "sha256": "ef390659ebc380a2371b92d1c03032d357e9f0bc66b5a58380dd5ef859864a0c"
+        },
+        {
+          "path": "motions/shake_01.motion3.json",
+          "size": 7296,
+          "sha256": "9dff81cd613ed3784a0f74c7d656487c2d01ea268651e750a9051067b20312c6"
+        },
+        {
+          "path": "motions/shake_02.motion3.json",
+          "size": 8335,
+          "sha256": "5e3b95bdd93a08ac0e4555bc2c1ca2a01098ae6d29bf77f1c0fda8b50b7e7501"
+        },
+        {
+          "path": "motions/touch_01.motion3.json",
+          "size": 5819,
+          "sha256": "67530fbb58a8ccb84646b1d792e508bbcd40a63278948005b82269c89efa915e"
+        },
+        {
+          "path": "motions/touch_02.motion3.json",
+          "size": 6712,
+          "sha256": "399372b0ad251f4476edc0434dbbd8691d6a0b4b9a36a69cd3a77ca464c20615"
+        },
+        {
+          "path": "motions/touch_03.motion3.json",
+          "size": 6228,
+          "sha256": "46070d593ebee2fac69edda5a649e56b6886b8c808e6570d61c45ed747d6657e"
+        },
+        {
+          "path": "motions/touch_04.motion3.json",
+          "size": 5986,
+          "sha256": "a8abbb63ab5b3363037df866bebc8f55d0c509b1d62106ce42780768f672458e"
+        },
+        {
+          "path": "motions/touch_05.motion3.json",
+          "size": 5031,
+          "sha256": "44775b40cb2074068df425078530528ead3b895f33f03d8509d9dc3e1f1775c5"
+        },
+        {
+          "path": "motions/touch_06.motion3.json",
+          "size": 7070,
+          "sha256": "365e23f9447dc5812d9e9f28b1dbcead52216f80274b90b0e82240a01ac6ae09"
+        }
+      ]
+    },
+    {
+      "id": "live2d-kei",
+      "name": "Kei",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/kei/",
+      "sourceVersion": "kei_ja (downloaded 2026-07-11)",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/selected/kei",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test",
+        "motionsync-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "ReadMe.txt",
+          "size": 2350,
+          "sha256": "452779a743773a3065f32005ee1378f2d5dbe9621348aecb262ef1d6cb53bd86"
+        },
+        {
+          "path": "kei_basic_free/kei_basic_free_t02.can3",
+          "size": 335687,
+          "sha256": "973c2bd6921b3c2e9b12928e071eaaef8c6995ee479c9561fdaf0be9eda09010"
+        },
+        {
+          "path": "kei_basic_free/kei_basic_free_t02.cmo3",
+          "size": 2444077,
+          "sha256": "e351ecce3c206529c3bb78f74f79af7a62ecbe3099cf794babfc0e729e5440a0"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.2048/texture_00.png",
+          "size": 973445,
+          "sha256": "bc41b0309877cf9d58564bae33430be4a8aa8e7e7c4aa42c8ddaee514abe7187"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.cdi3.json",
+          "size": 4191,
+          "sha256": "2c09e33b4582e917a965b7ba67fc958faac4c99c80c44894bd811bcdbbead3d7"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.moc3",
+          "size": 248064,
+          "sha256": "0119515dfce27ed795f6a254076def0fd42271253aa5707631e97fe2f262c24f"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.model3.json",
+          "size": 1121,
+          "sha256": "88b3ec39a09285fffa185c6f79165eea437a39f3efc77b4e2176fea4bef573ac"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.motionsync3.json",
+          "size": 2791,
+          "sha256": "8885882ca0c0ec1df5ddc2685af72cf010d8b9eb51a0919a2d733d4a544eb77a"
+        },
+        {
+          "path": "kei_basic_free/runtime/kei_basic_free.physics3.json",
+          "size": 8509,
+          "sha256": "06b7d2d836cc518733adef8a00e870f97815c35222116550a881348d7b077916"
+        },
+        {
+          "path": "kei_basic_free/runtime/motions/01_kei_en.motion3.json",
+          "size": 3434,
+          "sha256": "962d382940f3a1b500715670f2ba47b34dd545a3540dbc0d74804053b0fcb996"
+        },
+        {
+          "path": "kei_basic_free/runtime/motions/01_kei_jp.motion3.json",
+          "size": 3938,
+          "sha256": "b939624c94a544d8ba1fd8365b399d920308ba98f9787a9cd6dd640fb0484a11"
+        },
+        {
+          "path": "kei_basic_free/runtime/motions/01_kei_ko.motion3.json",
+          "size": 3938,
+          "sha256": "42381dd2b7dd26310c1e48a31cfaae35dcafeb4b0ecee4b65b0f44bcf91f216c"
+        },
+        {
+          "path": "kei_basic_free/runtime/motions/01_kei_zh.motion3.json",
+          "size": 3396,
+          "sha256": "5b27efa4645a354a1bc88dbc2bf9ffbd3c5147317af8b6ffdc8adfa56e8420f5"
+        },
+        {
+          "path": "kei_basic_free/runtime/sounds/01_kei_en.wav",
+          "size": 2862450,
+          "sha256": "02e0c4f0a43ca3d584c74b321611086ffad5b28e8cf8b74178245f4342bc2758"
+        },
+        {
+          "path": "kei_basic_free/runtime/sounds/01_kei_jp.wav",
+          "size": 3163836,
+          "sha256": "1fd0f20d6b2a647c04b9c990b846c0a5dcc63956f4ae7c923e991941de69d1d5"
+        },
+        {
+          "path": "kei_basic_free/runtime/sounds/01_kei_ko.wav",
+          "size": 3419792,
+          "sha256": "1cceed1560491b1dc58ae2100709ae2db2ba2417066a95282c15a706eb16b4e6"
+        },
+        {
+          "path": "kei_basic_free/runtime/sounds/01_kei_zh.wav",
+          "size": 2779170,
+          "sha256": "cf0f18c3e5aa787cee700841f03da7cafe27a8f8a15a974ae10ffd3a75db73de"
+        },
+        {
+          "path": "kei_vowels_pro/kei_vowels_pro_t02.can3",
+          "size": 653924,
+          "sha256": "de40c7616a0fc359bf87f7bb1e89aca26616f7adf3032e417cdf03f84e956f4d"
+        },
+        {
+          "path": "kei_vowels_pro/kei_vowels_pro_t02.cmo3",
+          "size": 2436036,
+          "sha256": "4010359f887176e68f5bbf5e239e283c28bf75ee0c9a5a46f78af9bc83da98b9"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.2048/texture_00.png",
+          "size": 973512,
+          "sha256": "7cb94c28e0c27875e5523f36ff3e57d4591ab8ba5f63d9e45849ec3da81c80bf"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.cdi3.json",
+          "size": 4428,
+          "sha256": "c989a021a85c3ec6a00101ce5d6fea939e6475357ad2bafdefa24d7f0c776fe5"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.moc3",
+          "size": 259968,
+          "sha256": "143aebf6f5b3e0c0c8ed92cfd7049d76858b6dd9440d236f21251d8f33f43d5f"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.model3.json",
+          "size": 1099,
+          "sha256": "a9eed9ecd9fa93345f8c70be6a10995353e5efae5fdbcfcf13ea01c30e20e4bd"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.motionsync3.json",
+          "size": 4611,
+          "sha256": "313ad8b31a9d20e28b4044bff7e32cb5bbb91fbd79785be81d388485117c4abd"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/kei_vowels_pro.physics3.json",
+          "size": 8509,
+          "sha256": "06b7d2d836cc518733adef8a00e870f97815c35222116550a881348d7b077916"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/motions/01_kei_en.motion3.json",
+          "size": 3804,
+          "sha256": "3615cb4b89c5a9fdc3229ed5be1f380e9602a5d9442912d31c305feb4e2c9cf3"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/motions/01_kei_jp.motion3.json",
+          "size": 4308,
+          "sha256": "6ed98e006a662b1dd13b8fc28fd6c7888ab7b344e123a9d4973c43dba89abda7"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/motions/01_kei_ko.motion3.json",
+          "size": 4308,
+          "sha256": "c1c897ccd747d22b05c1a1d60f8748ed1a96994e97485d131bfb82a3325862ce"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/motions/01_kei_zh.motion3.json",
+          "size": 3760,
+          "sha256": "a2f186c5a99bc1e14f1100c55cce570690ad745865e08ea77c07bf8daf621e0e"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/sounds/01_kei_en.wav",
+          "size": 2862450,
+          "sha256": "02e0c4f0a43ca3d584c74b321611086ffad5b28e8cf8b74178245f4342bc2758"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/sounds/01_kei_jp.wav",
+          "size": 3163836,
+          "sha256": "1fd0f20d6b2a647c04b9c990b846c0a5dcc63956f4ae7c923e991941de69d1d5"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/sounds/01_kei_ko.wav",
+          "size": 3419792,
+          "sha256": "1cceed1560491b1dc58ae2100709ae2db2ba2417066a95282c15a706eb16b4e6"
+        },
+        {
+          "path": "kei_vowels_pro/runtime/sounds/01_kei_zh.wav",
+          "size": 2779170,
+          "sha256": "cf0f18c3e5aa787cee700841f03da7cafe27a8f8a15a974ae10ffd3a75db73de"
+        }
+      ]
+    },
+    {
+      "id": "live2d-sdk-web-zip",
+      "name": "CubismSdkForWeb-5-r.5.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/sdk/download/web/",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/sdk/CubismSdkForWeb-5-r.5.zip",
+      "licenseCategory": "live2d-sdk",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "CubismSdkForWeb-5-r.5.zip",
+          "size": 20708681,
+          "sha256": "67064a7fb1812cf502f5c4a03bfe12cc638c75a621bb4acf06bb28763df06ba0"
+        }
+      ]
+    },
+    {
+      "id": "live2d-kei-zip",
+      "name": "kei_ja.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/kei/",
+      "sourceVersion": "kei_ja",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/models/kei/kei_ja.zip",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "kei_ja.zip",
+          "size": 18790626,
+          "sha256": "4a81ae50232170c9556e1c27f64fa383969e85b9d5aa69aa112206dbf6890928"
+        }
+      ]
+    },
+    {
+      "id": "live2d-epsilon",
+      "name": "Epsilon",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/epsilon/",
+      "sourceVersion": "epsilon_ja (downloaded 2026-07-11)",
+      "localPath": "project-input/live2d/selected/epsilon",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "epsilon_free/Epsilon_free_expressions_t02.can3",
+          "size": 73820,
+          "sha256": "117ad943a6e9d15981abe72b31820aa150085eb793f6728c329cd843647730fe"
+        },
+        {
+          "path": "epsilon_free/Epsilon_free_motions_t02.can3",
+          "size": 172695,
+          "sha256": "969aaad40c476e5795541300372fbf99728ff5a349c1cc1cabf7ea751252d815"
+        },
+        {
+          "path": "epsilon_free/Epsilon_free_t02.cmo3",
+          "size": 8824232,
+          "sha256": "5732192816cdd1d8ef488856d30a67f15deed85fe731eb41f9c8158d31930bd7"
+        },
+        {
+          "path": "epsilon_free/ReadMe.txt",
+          "size": 2161,
+          "sha256": "d0fa2042aeb36c2ea7876435b4992a1b50fe5c780ca84ddd9bb2444a12b2509f"
+        },
+        {
+          "path": "epsilon_free/runtime/Epsilon_free.2048/texture_00.png",
+          "size": 2583868,
+          "sha256": "02c25813b25fa971367ffe5f3fa94160cba0b05bcdcddaa42f1fde80b2adff40"
+        },
+        {
+          "path": "epsilon_free/runtime/Epsilon_free.cdi3.json",
+          "size": 3800,
+          "sha256": "5319f956f79d20fd0c7a531cd75ce1920535f4ec19ec66186af63b3f11aefa2a"
+        },
+        {
+          "path": "epsilon_free/runtime/Epsilon_free.moc3",
+          "size": 188416,
+          "sha256": "4d2489c2d49c452d9f14c7a79d72434c268aa809d3ee163adf8b7f85502240a7"
+        },
+        {
+          "path": "epsilon_free/runtime/Epsilon_free.model3.json",
+          "size": 2182,
+          "sha256": "b6b870d83db77fa25d56f244a7a4cb8277656833d3fba7a948fbfb354f112c30"
+        },
+        {
+          "path": "epsilon_free/runtime/Epsilon_free.physics3.json",
+          "size": 3289,
+          "sha256": "9705f99c2239941f76c6b0b8c66e4c1ecac234c1e47c1a22135c50b4e592ff0a"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Angry.exp3.json",
+          "size": 1126,
+          "sha256": "d0aa3da9d7219ea89be995bed05375f25760233065d7b02bcda92b272609d581"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Blushing.exp3.json",
+          "size": 1050,
+          "sha256": "1a89579c7828f1bab8d245d8e9bbb67265ea84c1d9a748b9ac97f2c4743a2c04"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Normal.exp3.json",
+          "size": 51,
+          "sha256": "2082b9a8b3860f52a9ae7abdd76461e8855cf32dffa6dc75e850b2d6a1a4405f"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Sad.exp3.json",
+          "size": 785,
+          "sha256": "aa5124de441ed9ff25492bc4ae553efd6e523e6d3c777ba177206d9f4d2d767d"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Smile.exp3.json",
+          "size": 563,
+          "sha256": "b1d5e026b3d8dd5ff987ceff02ed43ef2033b42ff4cc7f3801680854a6690aa5"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/Surprised.exp3.json",
+          "size": 846,
+          "sha256": "a78b51b483cb922b4d7e015bb192364ebf8975371841cf61ef576ccde837db1b"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/f01.exp3.json",
+          "size": 1132,
+          "sha256": "db6e232a3aa41d0e060f68f337c6ddc7bcc5f4df6be2747050bc4142d6b42f4f"
+        },
+        {
+          "path": "epsilon_free/runtime/expressions/f02.exp3.json",
+          "size": 794,
+          "sha256": "c071cef07b95c52502d184138b028f45e77b336878963a23a3a5fb1c37cc9261"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_idle_01.motion3.json",
+          "size": 12517,
+          "sha256": "e3950670ed4dace3549703c3c60428f4e00082f2518d67ed689edbe9897f3b41"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_01.motion3.json",
+          "size": 7146,
+          "sha256": "58e50077ef0bf0d7ce8650b3df0406bb1944b876fc2933293986f73c690881ea"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_02.motion3.json",
+          "size": 7817,
+          "sha256": "0c7bcfc5fceffabbf3423b23d13500d2f71a42d5f927050bf00b3fe9b7148421"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_03.motion3.json",
+          "size": 6933,
+          "sha256": "612118ae9abcf5d7e1696247c594683fa77e7dc1f0946192e1323540fbc68302"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_04.motion3.json",
+          "size": 6632,
+          "sha256": "864cc645674d874d6e395f06fc8770efdbf38c661732af132126fd14b3779296"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_05.motion3.json",
+          "size": 9274,
+          "sha256": "75143aa29d402190f5bda8364e6016bda97c98629ebaa88401362ef8032114dd"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_06.motion3.json",
+          "size": 6581,
+          "sha256": "f6286d577635571d0f1be75b4115cc6079074c89c609fc813e76ec5c061da7cd"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_07.motion3.json",
+          "size": 8693,
+          "sha256": "5c22371463640f25bee5393acf47fda707c4af58de93349026e6d275575c54f2"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_08.motion3.json",
+          "size": 9946,
+          "sha256": "9f2b98c1b6727e9d54929ccb7c6fe598b1d60387f44942c97d7b5dd5d247b9f0"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_sp_01.motion3.json",
+          "size": 10730,
+          "sha256": "3a40a4fe80acb9980b9d46f548b2c81a1a9b504ed843bea70ed938ae434439ee"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_sp_02.motion3.json",
+          "size": 11301,
+          "sha256": "65d1babdd9074c1dcc438a7c3ffda065f2be3c93321581ca09648cf3e7693d1d"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_sp_03.motion3.json",
+          "size": 8467,
+          "sha256": "68b348f36395c2ba95e3eda74bbb01c6785f95f374455662ad2b1a27e6b9de3a"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_sp_04.motion3.json",
+          "size": 13183,
+          "sha256": "1de4b32d853a5451ab6638cce726d24e56ba4677d98878dae648c0fcbb600e23"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_m_sp_05.motion3.json",
+          "size": 8374,
+          "sha256": "934f26094305371511a89e0ec3a20140994f2b960271eb79d659a9277e69376a"
+        },
+        {
+          "path": "epsilon_free/runtime/motion/Epsilon_shake_01.motion3.json",
+          "size": 7800,
+          "sha256": "3d8dcd8629126c37671e1d10a42c7cca3488df61c696a032a85fa95adbe47663"
+        },
+        {
+          "path": "epsilon_pro/Epsilon_expressions_t02.can3",
+          "size": 81680,
+          "sha256": "28d73e0365569e3c5831022dc7b8acafc7ba60d26e8ebc27fe30eb552284281e"
+        },
+        {
+          "path": "epsilon_pro/Epsilon_motions_t02.can3",
+          "size": 188355,
+          "sha256": "02926e8843d9b8812406021d5013a4071880138d3eab606c7619f5e4272a1710"
+        },
+        {
+          "path": "epsilon_pro/Epsilon_t02.cmo3",
+          "size": 12611955,
+          "sha256": "f142d80d83a7fc80568d9491cb4dd8991c807265902745467b85926513fe68f5"
+        },
+        {
+          "path": "epsilon_pro/Readme.txt",
+          "size": 2158,
+          "sha256": "27d543a4de8e1dc8b939d362c6f4d5176f4db70ea9cd7d84e4e2e9b3c8de76da"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.1024/texture_00.png",
+          "size": 846782,
+          "sha256": "d97e575caa2f5c0a44b124ab55fded9cb8183b0206c8be3d8f4c7e53a2f59887"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.1024/texture_01.png",
+          "size": 708915,
+          "sha256": "5d00e2c5a06630525e5b18467eadf7edd3a14c51a1b0ab07fe29667a1ca74625"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.1024/texture_02.png",
+          "size": 843166,
+          "sha256": "cfebaa0f3b9f85d71950273af75bf85193158e3031c51dd461358c8df6920fd6"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.cdi3.json",
+          "size": 4631,
+          "sha256": "b3bff9e15ae7e1f3c6feec80e448a61e9d50a74403d6d6fb5f738cda4ee1a5ea"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.moc3",
+          "size": 206848,
+          "sha256": "7546feaa1f7ce8e95ee7f287d223deb1ac8f532fc065517c50e8fcedbf032a72"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.model3.json",
+          "size": 2310,
+          "sha256": "60af1776ef48f1742910d74ae0c27376f90fd9c740fee56e1cdaeb2971d586ae"
+        },
+        {
+          "path": "epsilon_pro/runtime/Epsilon.physics3.json",
+          "size": 3696,
+          "sha256": "57b15e55f96f8fd5ce1ad1e2c971d2e8c2ca5cbed36d5c5dc29e195992992150"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Angry.exp3.json",
+          "size": 1126,
+          "sha256": "d0aa3da9d7219ea89be995bed05375f25760233065d7b02bcda92b272609d581"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Blushing.exp3.json",
+          "size": 1050,
+          "sha256": "1a89579c7828f1bab8d245d8e9bbb67265ea84c1d9a748b9ac97f2c4743a2c04"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Normal.exp3.json",
+          "size": 51,
+          "sha256": "2082b9a8b3860f52a9ae7abdd76461e8855cf32dffa6dc75e850b2d6a1a4405f"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Sad.exp3.json",
+          "size": 785,
+          "sha256": "aa5124de441ed9ff25492bc4ae553efd6e523e6d3c777ba177206d9f4d2d767d"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Smile.exp3.json",
+          "size": 563,
+          "sha256": "b1d5e026b3d8dd5ff987ceff02ed43ef2033b42ff4cc7f3801680854a6690aa5"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/Surprised.exp3.json",
+          "size": 846,
+          "sha256": "a78b51b483cb922b4d7e015bb192364ebf8975371841cf61ef576ccde837db1b"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/f01.exp3.json",
+          "size": 1132,
+          "sha256": "db6e232a3aa41d0e060f68f337c6ddc7bcc5f4df6be2747050bc4142d6b42f4f"
+        },
+        {
+          "path": "epsilon_pro/runtime/expressions/f02.exp3.json",
+          "size": 794,
+          "sha256": "c071cef07b95c52502d184138b028f45e77b336878963a23a3a5fb1c37cc9261"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_idle_01.motion3.json",
+          "size": 12517,
+          "sha256": "e3950670ed4dace3549703c3c60428f4e00082f2518d67ed689edbe9897f3b41"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_01.motion3.json",
+          "size": 7146,
+          "sha256": "58e50077ef0bf0d7ce8650b3df0406bb1944b876fc2933293986f73c690881ea"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_02.motion3.json",
+          "size": 7817,
+          "sha256": "0c7bcfc5fceffabbf3423b23d13500d2f71a42d5f927050bf00b3fe9b7148421"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_03.motion3.json",
+          "size": 6933,
+          "sha256": "612118ae9abcf5d7e1696247c594683fa77e7dc1f0946192e1323540fbc68302"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_04.motion3.json",
+          "size": 6632,
+          "sha256": "864cc645674d874d6e395f06fc8770efdbf38c661732af132126fd14b3779296"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_05.motion3.json",
+          "size": 9274,
+          "sha256": "75143aa29d402190f5bda8364e6016bda97c98629ebaa88401362ef8032114dd"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_06.motion3.json",
+          "size": 6581,
+          "sha256": "f6286d577635571d0f1be75b4115cc6079074c89c609fc813e76ec5c061da7cd"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_07.motion3.json",
+          "size": 8693,
+          "sha256": "5c22371463640f25bee5393acf47fda707c4af58de93349026e6d275575c54f2"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_08.motion3.json",
+          "size": 9946,
+          "sha256": "9f2b98c1b6727e9d54929ccb7c6fe598b1d60387f44942c97d7b5dd5d247b9f0"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_sp_01.motion3.json",
+          "size": 10730,
+          "sha256": "3a40a4fe80acb9980b9d46f548b2c81a1a9b504ed843bea70ed938ae434439ee"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_sp_02.motion3.json",
+          "size": 11301,
+          "sha256": "65d1babdd9074c1dcc438a7c3ffda065f2be3c93321581ca09648cf3e7693d1d"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_sp_03.motion3.json",
+          "size": 8467,
+          "sha256": "68b348f36395c2ba95e3eda74bbb01c6785f95f374455662ad2b1a27e6b9de3a"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_sp_04.motion3.json",
+          "size": 13183,
+          "sha256": "1de4b32d853a5451ab6638cce726d24e56ba4677d98878dae648c0fcbb600e23"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_m_sp_05.motion3.json",
+          "size": 8374,
+          "sha256": "934f26094305371511a89e0ec3a20140994f2b960271eb79d659a9277e69376a"
+        },
+        {
+          "path": "epsilon_pro/runtime/motion/Epsilon_shake_01.motion3.json",
+          "size": 7800,
+          "sha256": "3d8dcd8629126c37671e1d10a42c7cca3488df61c696a032a85fa95adbe47663"
+        }
+      ]
+    },
+    {
+      "id": "live2d-simple-model",
+      "name": "Simple model",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/simple-model/",
+      "sourceVersion": "simple_ja (downloaded 2026-07-11)",
+      "localPath": "project-input/live2d/selected/simple-model",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "ReadMe.txt",
+          "size": 2180,
+          "sha256": "95488d28693b546a0e3c97e33fcdbe43e155672913eb97d5ca3c7bab3a8e80c0"
+        },
+        {
+          "path": "runtime/motion/Scene.motion3.json",
+          "size": 1178,
+          "sha256": "54168f8a90dbd0b0e6291b526a2c2b07bc86c8734c6dbf27153a52f30fe1765e"
+        },
+        {
+          "path": "runtime/simple.1024/texture_00.png",
+          "size": 215379,
+          "sha256": "fe16a1630cfec79fdb6fe1fbe4d5f112ad9ae425adfee5954b205a1f1ce15987"
+        },
+        {
+          "path": "runtime/simple.cdi3.json",
+          "size": 2916,
+          "sha256": "ccba459205b4c34de5518c3f9e661d54f9ea9ad6f5feef3dddf4f59c3fea03c4"
+        },
+        {
+          "path": "runtime/simple.moc3",
+          "size": 22080,
+          "sha256": "f710118fccd40ffdb2893dfd9866173f5c4002dc89798d345a890c127dba0ba1"
+        },
+        {
+          "path": "runtime/simple.model3.json",
+          "size": 499,
+          "sha256": "a96791fa4c813e51d85840643e67add7b58382b17a35fb95a83c4a5a353c6cba"
+        },
+        {
+          "path": "simple_t01.can3",
+          "size": 11511,
+          "sha256": "f4406a52cb0a011df6fe0b46ece4bd3dca7bb8ed1b95e31c5fbe7ef7ced70768"
+        },
+        {
+          "path": "simple_t01.cmo3",
+          "size": 687128,
+          "sha256": "9dd4f3f97825aa8aa64bc601349f21e8369f5f49e245ef718b3edc9da47fd631"
+        }
+      ]
+    },
+    {
+      "id": "live2d-haru-receptionist",
+      "name": "Haru (receptionist version) PRO",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/haru-receptionist/",
+      "sourceVersion": "haru_greeter_ja (downloaded 2026-07-11, user-approved extra addition)",
+      "localPath": "project-input/live2d/selected/haru-receptionist",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "ReadMe.txt",
+          "size": 2917,
+          "sha256": "1371442da46ba8d8af99bd7d316cd189ddf14fb4320e59fc0a844b6162019676"
+        },
+        {
+          "path": "haru_greeter_t03.can3",
+          "size": 411252,
+          "sha256": "b0aea5d6f27694178124ab9aff0cb152711308ef420d7268f9708834d7fbcbcf"
+        },
+        {
+          "path": "haru_greeter_t05.cmo3",
+          "size": 11820163,
+          "sha256": "20a8cc5a1bb417da77c079714013f0e7468dcd889e68a1f7ae28df0fd4dfeecd"
+        },
+        {
+          "path": "haru_受付スーツ_インポート_t07.psd",
+          "size": 11617922,
+          "sha256": "cce6cb57d1281a6164415954fc37f58fe69d2a04e37e1fca4a186801bbc62cf3"
+        },
+        {
+          "path": "haru_受付スーツ_素材分け_t07.psd",
+          "size": 43947184,
+          "sha256": "ed0a498d5b09ee2164ad06382c45901bd13661f9b8ae047721854c2c4c50bc04"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.2048/texture_00.png",
+          "size": 1526786,
+          "sha256": "30fce81e6b2d69fb99e8d1b5f391a6e0240f671095e491e9bbe24ddd7c7f434d"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.2048/texture_01.png",
+          "size": 1188664,
+          "sha256": "e1e977447ee7e6e347f1b96b9103ae269e6f4e4a8cf38068d161537415cc51c8"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.cdi3.json",
+          "size": 5707,
+          "sha256": "af2c75bb89e39098c97783c887c108db7dc25f229f421fe0f06ca6931ce3c224"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.moc3",
+          "size": 387392,
+          "sha256": "597571191064a12ffe592bcb5fade586ef5876bbbcf78905c348a78a0991432a"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.model3.json",
+          "size": 2276,
+          "sha256": "fc9c2532e0a8142b542ae3e3a11417aae1d1ee998c73be0d792f8f078eff1a3e"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.physics3.json",
+          "size": 5914,
+          "sha256": "b09a654759a0a0a49998a263757b10f310377adab4b8a281ae5c70902a8a7d1f"
+        },
+        {
+          "path": "runtime/haru_greeter_t05.pose3.json",
+          "size": 274,
+          "sha256": "0014f220336de55bebb506892c0541853e05771e3f16dfd98389f709aabd127c"
+        },
+        {
+          "path": "runtime/motion/haru_g_idle.motion3.json",
+          "size": 21183,
+          "sha256": "8a4fac459abf35dfb049188e4330d485a9fce54ae6111625f4ffae4d9b03abfb"
+        },
+        {
+          "path": "runtime/motion/haru_g_m01.motion3.json",
+          "size": 11944,
+          "sha256": "ed85c07795fba2e57d7701b706ba04516b83a0b7e4463752320c2c0a8bdca033"
+        },
+        {
+          "path": "runtime/motion/haru_g_m02.motion3.json",
+          "size": 12055,
+          "sha256": "8a187a9a830ddb62f5471dc974782af68f61dfeb12b31eb3858d3513cf2c035d"
+        },
+        {
+          "path": "runtime/motion/haru_g_m03.motion3.json",
+          "size": 16981,
+          "sha256": "8edba3952e0c45ce0bc3d20755ba212528b6450641e82dec162d7a327d48b82b"
+        },
+        {
+          "path": "runtime/motion/haru_g_m04.motion3.json",
+          "size": 23449,
+          "sha256": "9532599ea7c54452e1b2a689652a76e50fa1d261f0a5cd0adaaa01b1c567fbdf"
+        },
+        {
+          "path": "runtime/motion/haru_g_m05.motion3.json",
+          "size": 14198,
+          "sha256": "5015d14ffad99a9eb43f48dfaa6e400072b610467611ad72221b04a21e3252c6"
+        },
+        {
+          "path": "runtime/motion/haru_g_m06.motion3.json",
+          "size": 15118,
+          "sha256": "311c544c67282cbc40ac1e0287751b20a7f49a46f4eea989b7071efc3188053c"
+        },
+        {
+          "path": "runtime/motion/haru_g_m07.motion3.json",
+          "size": 14821,
+          "sha256": "faa3aa7ca9c05cc395003a4a072ea8d3397c9a3480c9220e486dd70beb32bda9"
+        },
+        {
+          "path": "runtime/motion/haru_g_m08.motion3.json",
+          "size": 15439,
+          "sha256": "8933e2e0db8818037db817d5e6aa4fd795c6f3e302fceae26f2b5a4b88889446"
+        },
+        {
+          "path": "runtime/motion/haru_g_m09.motion3.json",
+          "size": 25066,
+          "sha256": "d6c8abb01dcfee8246cccbe7a437f025cb31884f8408f3207e1a6e4139888e45"
+        },
+        {
+          "path": "runtime/motion/haru_g_m10.motion3.json",
+          "size": 34954,
+          "sha256": "27933b0363abda5c13a55cfea5f2968293abcbc8995140773ff2bf7186c631c1"
+        },
+        {
+          "path": "runtime/motion/haru_g_m11.motion3.json",
+          "size": 14475,
+          "sha256": "cd4afa96422f649cdf32782f6d79594a52fbc106717a4b4056caaddbec7538d3"
+        },
+        {
+          "path": "runtime/motion/haru_g_m12.motion3.json",
+          "size": 22441,
+          "sha256": "a512cf99c416ead14cd8bc89f2e3b021fce2bcf46f670f1d151d374d95476ab8"
+        },
+        {
+          "path": "runtime/motion/haru_g_m13.motion3.json",
+          "size": 11601,
+          "sha256": "cb59cafad6567b4dfe71f69d6fc19d17902f9a397badc4e4003491229fe744be"
+        },
+        {
+          "path": "runtime/motion/haru_g_m14.motion3.json",
+          "size": 20625,
+          "sha256": "a61765c485d61169b2dbd3a4b760d409964edd6f272f3ae26ef3069e8ebc7559"
+        },
+        {
+          "path": "runtime/motion/haru_g_m15.motion3.json",
+          "size": 13540,
+          "sha256": "4383147bd61a7bd2d990591512bfe29eea743f93868e8679ffed16e588628088"
+        },
+        {
+          "path": "runtime/motion/haru_g_m16.motion3.json",
+          "size": 18639,
+          "sha256": "7ab44f3e3e3258c4666fb3ed3643e947faf04a2c17b77bc0b12121ea983c9e23"
+        },
+        {
+          "path": "runtime/motion/haru_g_m17.motion3.json",
+          "size": 16109,
+          "sha256": "9be971760fb922e3dc3d588b7eca15c48655db721c3578d73e54daf55fc8677d"
+        },
+        {
+          "path": "runtime/motion/haru_g_m18.motion3.json",
+          "size": 13424,
+          "sha256": "4dbecfa60f081dc5ff63a08fbbf27889663f766b4c449df534a904528d2b7f36"
+        },
+        {
+          "path": "runtime/motion/haru_g_m19.motion3.json",
+          "size": 11302,
+          "sha256": "598c52b4068482ece9c1d6ddf1f0f0dd8b18eb625fa3e758a0acb677bb2eac9d"
+        },
+        {
+          "path": "runtime/motion/haru_g_m20.motion3.json",
+          "size": 23651,
+          "sha256": "536e467d6533c0883b2ad6c8915bc632b4d4188fc3d3abb19cc6b4f5fd12ddb9"
+        },
+        {
+          "path": "runtime/motion/haru_g_m21.motion3.json",
+          "size": 23906,
+          "sha256": "02efb8fc2296da6531d364dec7929c1685763046b744ba470326b7961c7123b3"
+        },
+        {
+          "path": "runtime/motion/haru_g_m22.motion3.json",
+          "size": 27408,
+          "sha256": "02f2bca00f22281966a86d6885dbdee67d725c7dc163e5b2bbbeb1ccf9fb5ec3"
+        },
+        {
+          "path": "runtime/motion/haru_g_m23.motion3.json",
+          "size": 16695,
+          "sha256": "24cef039138ce14c902807cf1a4d24ce48cfb4802c788a9a9fb8b5a6c4556444"
+        },
+        {
+          "path": "runtime/motion/haru_g_m24.motion3.json",
+          "size": 18090,
+          "sha256": "70c9f34193f3d9fd30f9ec204a333b0169bb290540e751cfa203de6611a9c8d7"
+        },
+        {
+          "path": "runtime/motion/haru_g_m25.motion3.json",
+          "size": 17528,
+          "sha256": "bef0fdcd9bc40d61eebb723234e00a5f87ba00d97f31f65dd215b862c3074245"
+        },
+        {
+          "path": "runtime/motion/haru_g_m26.motion3.json",
+          "size": 23275,
+          "sha256": "2b20fbbf31439a5792c808085ecd4c9dc5addeb6195c6d113a25e77f7acc0f4f"
+        }
+      ]
+    },
+    {
+      "id": "live2d-motionsync-web-zip",
+      "name": "CubismSdkMotionSyncPluginForWeb-5-r.2.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/sdk/download/motionsync/",
+      "sourceVersion": "5-r.2 (for Web)",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/motionsync/CubismSdkMotionSyncPluginForWeb-5-r.2.zip",
+      "licenseCategory": "live2d-sdk",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "CubismSdkMotionSyncPluginForWeb-5-r.2.zip",
+          "size": 14640671,
+          "sha256": "74dc9236e28263f9cba7962704ce61ad06677e79ca6e56657f216a098015452f"
+        }
+      ]
+    },
+    {
+      "id": "live2d-epsilon-zip",
+      "name": "epsilon_ja.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/epsilon/",
+      "sourceVersion": "epsilon_ja",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/models/epsilon/epsilon_ja.zip",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "epsilon_ja.zip",
+          "size": 26626829,
+          "sha256": "a2e4d747bb0fca4f5920637ac8acc350b08c46e3275344a273cb9c37d405f9e1"
+        }
+      ]
+    },
+    {
+      "id": "live2d-simple-model-zip",
+      "name": "simple_ja.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/simple-model/",
+      "sourceVersion": "simple_ja",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/models/simple-model/simple_ja.zip",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "simple_ja.zip",
+          "size": 904359,
+          "sha256": "a6b19a98a883e455622fa258d99ddb372ed13244ed82520c1fa18b98990e2c2e"
+        }
+      ]
+    },
+    {
+      "id": "live2d-haru-receptionist-zip",
+      "name": "haru_greeter_ja.zip",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/learn/sample/haru-receptionist/",
+      "sourceVersion": "haru_greeter_ja",
+      "sourceCommit": null,
+      "localPath": "project-input/live2d/downloads/models/haru-receptionist/haru_greeter_ja.zip",
+      "licenseCategory": "live2d-original-character",
+      "intendedUse": [
+        "raw-download-archive"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "haru_greeter_ja.zip",
+          "size": 40966036,
+          "sha256": "3db5c9180fc8446f7d92eee13ea33f584e5d1308e101d7afa4fe3b037a0ed94e"
+        }
+      ]
+    },
+    {
+      "id": "live2d-motionsync-core",
+      "name": "Live2D Cubism MotionSync Core (for Web)",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/en/sdk/download/motionsync/",
+      "sourceVersion": "5-r.2 (for Web)",
+      "sourceCommit": null,
+      "localPath": "third_party/live2d/CubismWebMotionSyncComponents/Core",
+      "licenseCategory": "live2d-proprietary-core",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "CHANGELOG.md",
+          "size": 1235,
+          "sha256": "1c110ac42c42d38e142417304e13d5abcbd5c2e54f7cfbdb784c52dc7d14ec4b"
+        },
+        {
+          "path": "CRI/LICENSE.md",
+          "size": 531,
+          "sha256": "9888e8d0e69969430e4fbd800a243bacc915213b5a6f052bcf7b1fa7ecc80066"
+        },
+        {
+          "path": "CRI/RedistributableFiles.txt",
+          "size": 271,
+          "sha256": "408ded6e78c1cb7898adb5f4756b4d497e0cc660b3b64504160d9d0d39c03b3a"
+        },
+        {
+          "path": "CRI/live2dcubismmotionsynccore.d.ts",
+          "size": 9100,
+          "sha256": "a4aedace54df065bcd2d93115021b3fdd580c36cf76e3724b02ef084ffccca5e"
+        },
+        {
+          "path": "CRI/live2dcubismmotionsynccore.js",
+          "size": 584818,
+          "sha256": "ddb7a8dc3a131e7fdd0ba2094b63fa92a80fc4c82536661daaaca323887b4c67"
+        },
+        {
+          "path": "CRI/live2dcubismmotionsynccore.js.map",
+          "size": 10050,
+          "sha256": "36099c3f33c891e52bc27cbfa6120b8f4f2818d00523ec5a423163d8905414cc"
+        },
+        {
+          "path": "CRI/live2dcubismmotionsynccore.min.js",
+          "size": 563022,
+          "sha256": "60e2a8ba9b422a0f8a3d7e066739352e9b903cc1011339984ad922e80a3cd19a"
+        },
+        {
+          "path": "CRIWARELOGO_1.png",
+          "size": 6153,
+          "sha256": "8663074dba874d4dc5eb57abb254bbb82041e77d14e642916ba0f0aaed153f74"
+        },
+        {
+          "path": "LICENSE.md",
+          "size": 1481,
+          "sha256": "f4858f29ec2c9e163a14b67871f6cdd91181d268932bfeef0b4bb87ab218fc4d"
+        },
+        {
+          "path": "README.ja.md",
+          "size": 1443,
+          "sha256": "0e0effc50a1997c0df9cada629f7912a424cf13be6c92c320ac05080196701d4"
+        },
+        {
+          "path": "README.md",
+          "size": 1051,
+          "sha256": "d928b61bd17b9d1f237f90bd2ec56e8a72b7ba3fd8a9724b4c98b2cb37d6852b"
+        }
+      ]
+    },
+    {
+      "id": "live2d-cubism-core",
+      "name": "Live2D Cubism Core for Web",
+      "sourceType": "official-website",
+      "sourceUrl": "https://www.live2d.com/sdk/download/web/",
+      "sourceVersion": "5-r.5",
+      "sourceCommit": null,
+      "localPath": "third_party/live2d/CubismWebSamples/Core",
+      "licenseCategory": "live2d-proprietary-core",
+      "intendedUse": [
+        "local-development",
+        "integration-test"
+      ],
+      "redistributionApproved": false,
+      "files": [
+        {
+          "path": "CHANGELOG.md",
+          "size": 6982,
+          "sha256": "21556a2d10d8fe8aa5f9ff61786eed77b02f9595a8d8e713ba12de4e291c8327"
+        },
+        {
+          "path": "LICENSE.md",
+          "size": 520,
+          "sha256": "b81e37048010ef1d336106151201a0323c3309cae44aecdedf57831fe88fa991"
+        },
+        {
+          "path": "README.ja.md",
+          "size": 1093,
+          "sha256": "45c33c96ad56c571c7982f3c5b4819647184fc4da6e3d8c5e4a3460693db468c"
+        },
+        {
+          "path": "README.md",
+          "size": 770,
+          "sha256": "7a27d6d2586c555fca63e25baa9369f9da8a83781e35900c4b09ea437a5297f5"
+        },
+        {
+          "path": "RedistributableFiles.txt",
+          "size": 205,
+          "sha256": "d16c123688299e1e69a7f5ebc01b3bd75a8d408c024002a7d35b2aae94003f8c"
+        },
+        {
+          "path": "live2dcubismcore.d.ts",
+          "size": 15015,
+          "sha256": "25fcaa2a6dfe311db95ad1795a2a7e6286d9192719df4e2c3e634915dc050334"
+        },
+        {
+          "path": "live2dcubismcore.js",
+          "size": 246861,
+          "sha256": "3ba426cc788d74f276598e98fe97983214f2a95758b48dafb1e606d041db1ba7"
+        },
+        {
+          "path": "live2dcubismcore.js.map",
+          "size": 29138,
+          "sha256": "787d6c213e62eedf3617d79cff892a8599b96eba80418b27ddafc96b4a763454"
+        },
+        {
+          "path": "live2dcubismcore.min.js",
+          "size": 228042,
+          "sha256": "8741f739779b5d5210872bd3d7d99f0f1e56e6c87409e7d26d6bb4b80aa1ef47"
+        }
+      ]
+    }
+  ]
+}

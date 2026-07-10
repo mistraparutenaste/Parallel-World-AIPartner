@@ -1,0 +1,14 @@
+# Live2D downloaded assets
+/project-input/live2d/downloads/
+/project-input/live2d/originals/
+/project-input/live2d/selected/
+/third_party/live2d/
+
+# Proprietary Live2D Core
+**/CubismCore.js
+**/CubismCore.min.js
+**/Live2DCubismCore.*
+**/CubismMotionSyncCore*
+
+# Isolated implementation worktrees
+/.worktrees/
