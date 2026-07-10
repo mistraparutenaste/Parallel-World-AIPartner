@@ -158,7 +158,7 @@ git commit -m "feat: establish workspace and conversation domain"
 - Consumes: `pw_domain::conversation::ConversationState`。
 - Produces: `AppStatusDto { schema_version: u16, conversation_state: ConversationStateDto }`、`SCHEMA_VERSION: u16 = 1`、`pnpm --filter @parallel-world/contracts typecheck`。
 
-- [ ] **Step 1: DTOのfailing testを書く**
+- [x] **Step 1: DTOのfailing testを書く**
 
 ```rust
 #[cfg(test)]
@@ -178,13 +178,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: REDを確認する**
+- [x] **Step 2: REDを確認する**
 
 Run: `cargo test -p pw-contracts`
 
 Expected: DTO型が未定義のためcompile failure。
 
-- [ ] **Step 3: DTOとexporterを実装する**
+- [x] **Step 3: DTOとexporterを実装する**
 
 `ConversationStateDto` はdomain stateと同じvariantを持ち、serde/TSでsnake_caseへ変換する。`AppStatusDto` は `schema_version` と `conversation_state` を持つ。両型に `ts_rs::TS` をderiveし、exporterはリポジトリルートから `packages/contracts/src/generated` へbindingsを出力する。exporterは出力先を一度作成し、`AppStatusDto::export_all_to` と `ConversationStateDto::export_all_to` を呼ぶ。
 
@@ -195,7 +195,7 @@ export type { AppStatusDto } from './generated/AppStatusDto';
 export type { ConversationStateDto } from './generated/ConversationStateDto';
 ```
 
-- [ ] **Step 4: 契約生成と型検査を確認する**
+- [x] **Step 4: 契約生成と型検査を確認する**
 
 Run: `cargo test -p pw-contracts`
 
@@ -209,7 +209,7 @@ Run: `pnpm --filter @parallel-world/contracts typecheck`
 
 Expected: exit 0。
 
-- [ ] **Step 5: 記録してコミットする**
+- [x] **Step 5: 記録してコミットする**
 
 `作業内容.md` に契約schema version、生成コマンド、テスト結果を追記する。
 
