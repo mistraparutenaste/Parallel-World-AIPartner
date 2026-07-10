@@ -40,7 +40,7 @@
 - Consumes: なし。
 - Produces: `pw_domain::conversation::ConversationState`。状態は `Starting`, `Idle`, `Listening`, `Transcribing`, `Thinking`, `Speaking`, `Muted`, `Interrupting`, `Cancelled`, `Recovering`, `SttUnavailable`, `LlmUnavailable`, `TtsUnavailable`, `RendererUnavailable`。
 
-- [ ] **Step 1: failing testと最小workspace manifestを作成する**
+- [x] **Step 1: failing testと最小workspace manifestを作成する**
 
 `Cargo.toml` にworkspace、`crates/pw-domain/Cargo.toml` にserde依存、`state.rs` に次のテストだけを作成する。
 
@@ -66,13 +66,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: REDを確認する**
+- [x] **Step 2: REDを確認する**
 
 Run: `cargo test -p pw-domain`
 
 Expected: `ConversationState` が未定義のためcompile failure。
 
-- [ ] **Step 3: 最小実装とworkspace設定を追加する**
+- [x] **Step 3: 最小実装とworkspace設定を追加する**
 
 `ConversationState` を次の形で実装する。
 
@@ -114,7 +114,7 @@ impl ConversationState {
 
 ルートCargo workspaceでは `resolver = "3"`、`edition = "2024"`、`rust-version = "1.96"`、workspace lint `unsafe_code = "forbid"` を設定する。`rust-toolchain.toml` は `1.96.0`、`rustfmt`、`clippy` を固定する。ルート`package.json`はprivate workspaceとし、`packageManager`を`pnpm@11.11.0`へ固定する。`.gitignore`へ`target/`, `node_modules/`, `dist/`, `.env`, `*.log`, `*.sqlite3`, `.superpowers/`を追加する。
 
-- [ ] **Step 4: GREENと品質ゲートを確認する**
+- [x] **Step 4: GREENと品質ゲートを確認する**
 
 Run: `cargo fmt --all --check`
 
@@ -128,7 +128,7 @@ Run: `cargo test --workspace`
 
 Expected: 2 tests passed、0 failed。
 
-- [ ] **Step 5: 記録してコミットする**
+- [x] **Step 5: 記録してコミットする**
 
 `作業内容.md` にTask 1のRED/GREEN出力と作成ファイルを追記する。
 
