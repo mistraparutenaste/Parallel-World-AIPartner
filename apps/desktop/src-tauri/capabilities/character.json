@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "character",
+  "description": "Character window: transparent Live2D surface. Drag and plain display only; no settings writes, no shell, no fs.",
+  "windows": ["character"],
+  "permissions": ["core:default", "core:window:allow-start-dragging"]
+}

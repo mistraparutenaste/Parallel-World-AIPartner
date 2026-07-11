@@ -1,0 +1,69 @@
+//! Guard tests for the per-window capability files.
+//!
+//! These tests pin the security boundary: the character window must
+//! never gain shell, filesystem or settings powers, and the chat and
+//! settings windows may only call the commands listed here.
+
+use std::path::Path;
+
+fn capability_permissions(name: &str) -> (serde_json::Value, Vec<String>) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("capabilities")
+        .join(format!("{name}.json"));
+    let raw = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+    let json: serde_json::Value = serde_json::from_str(&raw).expect("capability must be JSON");
+    let permissions = json["permissions"]
+        .as_array()
+        .expect("permissions must be an array")
+        .iter()
+        .map(|permission| {
+            permission
+                .as_str()
+                .expect("permissions must be plain identifiers")
+                .to_owned()
+        })
+        .collect();
+    (json, permissions)
+}
+
+fn custom_permissions(permissions: &[String]) -> Vec<&String> {
+    permissions
+        .iter()
+        .filter(|permission| !permission.starts_with("core:"))
+        .collect()
+}
+
+#[test]
+fn character_capability_targets_only_the_character_window() {
+    let (json, _) = capability_permissions("character");
+    assert_eq!(json["windows"], serde_json::json!(["character"]));
+}
+
+#[test]
+fn character_capability_denies_shell_fs_and_settings_commands() {
+    let (_, permissions) = capability_permissions("character");
+    for permission in &permissions {
+        assert!(!permission.contains("shell"), "shell leaked: {permission}");
+        assert!(!permission.contains("fs:"), "fs leaked: {permission}");
+        assert!(
+            !permission.contains("get_app_status") && !permission.contains("settings"),
+            "settings/status command leaked: {permission}"
+        );
+    }
+    assert!(custom_permissions(&permissions).is_empty());
+}
+
+#[test]
+fn chat_capability_exposes_only_get_app_status() {
+    let (json, permissions) = capability_permissions("chat");
+    assert_eq!(json["windows"], serde_json::json!(["chat"]));
+    assert_eq!(custom_permissions(&permissions), ["allow-get-app-status"]);
+}
+
+#[test]
+fn settings_capability_exposes_get_app_status() {
+    let (json, permissions) = capability_permissions("settings");
+    assert_eq!(json["windows"], serde_json::json!(["settings"]));
+    assert!(permissions.iter().any(|p| p == "allow-get-app-status"));
+}
