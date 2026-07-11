@@ -3,7 +3,9 @@
 //! This layer only wires windows, IPC commands and lifecycle; all
 //! behaviour lives in the `pw-*` crates.
 
+pub mod bootstrap;
 pub mod commands;
+pub mod error;
 pub mod windows;
 
 /// Builds and runs the Tauri application.
@@ -17,6 +19,7 @@ pub fn run() {
             commands::app_status::get_app_status
         ])
         .setup(|app| {
+            bootstrap::initialize(app.handle())?;
             windows::create_missing_windows(app.handle())?;
             Ok(())
         })
