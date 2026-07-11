@@ -50,8 +50,15 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
             !permission.contains("get_app_status") && !permission.contains("settings"),
             "settings/status command leaked: {permission}"
         );
+        assert!(
+            !permission.contains("set-expression") && !permission.contains("start-motion"),
+            "state-changing character command leaked: {permission}"
+        );
     }
-    assert!(custom_permissions(&permissions).is_empty());
+    assert_eq!(
+        custom_permissions(&permissions),
+        ["allow-get-character-manifest", "allow-set-click-through"]
+    );
 }
 
 #[test]
@@ -62,8 +69,16 @@ fn chat_capability_exposes_only_get_app_status() {
 }
 
 #[test]
-fn settings_capability_exposes_get_app_status() {
+fn settings_capability_exposes_status_and_character_control() {
     let (json, permissions) = capability_permissions("settings");
     assert_eq!(json["windows"], serde_json::json!(["settings"]));
-    assert!(permissions.iter().any(|p| p == "allow-get-app-status"));
+    assert_eq!(
+        custom_permissions(&permissions),
+        [
+            "allow-get-app-status",
+            "allow-get-character-manifest",
+            "allow-set-expression",
+            "allow-start-motion"
+        ]
+    );
 }

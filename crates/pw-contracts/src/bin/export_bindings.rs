@@ -6,7 +6,10 @@
 use std::fs;
 use std::path::Path;
 
-use pw_contracts::{AppStatusDto, ConversationStateDto};
+use pw_contracts::{
+    AppStatusDto, CharacterCursorEventDto, CharacterManifestDto, ConversationStateDto,
+    MotionGroupDto,
+};
 use ts_rs::{Config, TS};
 
 fn main() {
@@ -16,6 +19,9 @@ fn main() {
     let config = Config::new().with_out_dir(out_dir);
     AppStatusDto::export_all(&config).expect("export AppStatusDto bindings");
     ConversationStateDto::export_all(&config).expect("export ConversationStateDto bindings");
+    CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
+    MotionGroupDto::export_all(&config).expect("export MotionGroupDto bindings");
+    CharacterCursorEventDto::export_all(&config).expect("export CharacterCursorEventDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

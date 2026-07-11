@@ -13,7 +13,9 @@ tauri-build = { workspace = true }
 pw-contracts = { workspace = true }
 pw-platform = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tauri = { workspace = true }
+tauri-plugin-window-state = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }

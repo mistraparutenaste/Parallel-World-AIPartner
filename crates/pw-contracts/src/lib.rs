@@ -6,4 +6,7 @@
 
 pub mod dto;
 
-pub use dto::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
+pub use dto::{
+    AppStatusDto, CharacterCursorEventDto, CharacterManifestDto, ConversationStateDto,
+    MotionGroupDto, SCHEMA_VERSION,
+};

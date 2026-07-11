@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-motion"
+description = "Enables the start_motion command without any pre-configured scope."
+commands.allow = ["start_motion"]
+
+[[permission]]
+identifier = "deny-start-motion"
+description = "Denies the start_motion command without any pre-configured scope."
+commands.deny = ["start_motion"]
