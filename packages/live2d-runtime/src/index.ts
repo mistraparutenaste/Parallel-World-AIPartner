@@ -7,3 +7,7 @@ export {
   type Live2DControllerState,
   type StateChangeListener,
 } from './controller/live2d-controller';
+export {
+  CubismFrameworkRuntime,
+  type CubismFrameworkRuntimeOptions,
+} from './runtime/cubism-framework-runtime';
