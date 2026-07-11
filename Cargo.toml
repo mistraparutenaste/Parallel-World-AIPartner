@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pw-domain"]
+members = ["crates/pw-contracts", "crates/pw-domain"]
 
 [workspace.package]
 edition = "2024"
@@ -9,9 +9,11 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+pw-contracts = { path = "crates/pw-contracts" }
 pw-domain = { path = "crates/pw-domain" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
+ts-rs = { version = "12.0.1", features = ["serde-compat"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
