@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    // vendor/framework は strict 以前のコードベースのため、この
+    // パッケージだけ検査を緩和する（他パッケージは strict を維持し、
+    // dist 経由で本パッケージを利用する）。
+    "strict": false,
+    "noImplicitAny": true,
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src", "vendor/core/live2dcubismcore.d.ts", "vendor/framework/src"]
+}

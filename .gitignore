@@ -10,6 +10,13 @@
 **/Live2DCubismCore.*
 **/CubismMotionSyncCore*
 
+# RedistributableFiles.txt で再配布が許可されたCore成果物だけを許可する
+!/apps/desktop/public/live2d/core/live2dcubismcore.min.js
+!/packages/live2d-runtime/vendor/core/live2dcubismcore.d.ts
+
+# 開発用モデル（Live2Dサンプルデータ規約によりコミット禁止）
+/apps/desktop/public/live2d/models/
+
 # Isolated implementation worktrees
 /.worktrees/
 
