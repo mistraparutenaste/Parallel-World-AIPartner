@@ -1,18 +1,21 @@
 import { useState, type FormEvent } from 'react';
-import type { ConversationStateDto } from '@parallel-world/contracts';
+import type { AppStatusDto } from '@parallel-world/contracts';
 import { ActionButton } from '../../shared/components/ActionButton';
 import { Icon } from '../../shared/components/Icons';
 import { StatusBadge } from '../../shared/components/StatusBadge';
 import { WindowFrame } from '../../shared/components/WindowFrame';
 import '../../shared/styles/global.css';
 
-const initialState: ConversationStateDto = 'idle';
+export const initialAppStatus = {
+  schema_version: 1,
+  conversation_state: 'idle',
+} satisfies AppStatusDto;
 
 export function ChatWindow() {
   const [message, setMessage] = useState('');
   const [messages, setMessages] = useState<string[]>([]);
-  const [conversationState, setConversationState] = useState<ConversationStateDto>(initialState);
-  const isProcessing = conversationState !== 'idle';
+  const [appStatus, setAppStatus] = useState<AppStatusDto>(initialAppStatus);
+  const isProcessing = appStatus.conversation_state !== 'idle';
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -20,11 +23,11 @@ export function ChatWindow() {
     if (!nextMessage) return;
     setMessages((current) => [...current, nextMessage]);
     setMessage('');
-    setConversationState('thinking');
+    setAppStatus((current) => ({ ...current, conversation_state: 'thinking' }));
   }
 
   function handleStop() {
-    setConversationState('idle');
+    setAppStatus((current) => ({ ...current, conversation_state: 'idle' }));
   }
 
   return (

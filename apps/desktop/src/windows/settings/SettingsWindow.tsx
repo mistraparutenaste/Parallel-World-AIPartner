@@ -32,28 +32,32 @@ export function SettingsWindow() {
             </button>
           ))}
         </nav>
-        <section className="settings-panel">
-          <h1 aria-label="設定">設定 — {selected}</h1>
-          <div className="settings-field">
-            <label htmlFor="microphone-device">マイクデバイス</label>
-            <select id="microphone-device" defaultValue="realtek">
-              <option value="realtek">マイク (Realtek(R) Audio)</option>
-            </select>
-          </div>
-          <div className="settings-field">
-            <span className="control-label">入力レベル</span>
-            <div className="input-level" role="img" aria-label="入力レベル">
-              {Array.from({ length: 32 }, (_, index) => <i key={index} className={index < 16 ? 'is-active' : ''} />)}
-            </div>
-          </div>
-          <div className="settings-field settings-test">
-            <span className="control-label">テスト</span>
-            <ActionButton type="button"><Icon name="microphone" />テストを開始</ActionButton>
-          </div>
-          <footer className="settings-actions">
-            <ActionButton type="button" variant="primary" disabled>適用</ActionButton>
-            <ActionButton type="button" onClick={handleCancel}>キャンセル</ActionButton>
-          </footer>
+        <section className="settings-panel" aria-labelledby="settings-heading">
+          <h1 id="settings-heading">設定</h1>
+          {selected === 'マイク' ? (
+            <>
+              <div className="settings-field">
+                <label htmlFor="microphone-device">マイクデバイス</label>
+                <select id="microphone-device" defaultValue="realtek">
+                  <option value="realtek">マイク (Realtek(R) Audio)</option>
+                </select>
+              </div>
+              <div className="settings-field">
+                <span className="control-label">入力レベル</span>
+                <div className="input-level" role="img" aria-label="入力レベル">
+                  {Array.from({ length: 32 }, (_, index) => <i key={index} className={index < 16 ? 'is-active' : ''} />)}
+                </div>
+              </div>
+              <div className="settings-field settings-test">
+                <span className="control-label">テスト</span>
+                <ActionButton type="button"><Icon name="microphone" />テストを開始</ActionButton>
+              </div>
+              <footer className="settings-actions">
+                <ActionButton type="button" variant="primary" disabled>適用</ActionButton>
+                <ActionButton type="button" onClick={handleCancel}>キャンセル</ActionButton>
+              </footer>
+            </>
+          ) : null}
         </section>
       </div>
     </WindowFrame>

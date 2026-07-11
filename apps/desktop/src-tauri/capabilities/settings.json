@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Settings window can read the current application status.",
+  "local": true,
+  "windows": ["settings"],
+  "permissions": ["allow-get-app-status"]
+}

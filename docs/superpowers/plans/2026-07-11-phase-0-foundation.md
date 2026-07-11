@@ -244,7 +244,7 @@ git commit -m "feat: generate typed ipc contracts"
 - Consumes: `@parallel-world/contracts`の`AppStatusDto`。
 - Produces: `character.html`, `chat.html`, `settings.html` の3つのVite entryと各React root。
 
-- [ ] **Step 1: 3画面のfailing component testを書く**
+- [x] **Step 1: 3画面のfailing component testを書く**
 
 ```tsx
 import { render, screen } from '@testing-library/react';
@@ -273,19 +273,19 @@ describe('desktop windows', () => {
 });
 ```
 
-- [ ] **Step 2: REDを確認する**
+- [x] **Step 2: REDを確認する**
 
 Run: `pnpm --filter @parallel-world/desktop test -- --run`
 
 Expected: window componentsが未定義のためtest compile failure。
 
-- [ ] **Step 3: accessibleな最小3画面を実装する**
+- [x] **Step 3: accessibleな最小3画面を実装する**
 
 Characterは透過canvas予約領域と`role="status"`の「準備中」を表示する。Chatは履歴用`aria-live="polite"`領域、`label`が「メッセージ」の入力、送信、停止buttonを持つ。Settingsはh1「設定」と「マイク」「音声認識」「LLM」「音声合成」「キャラクター」「データ」「診断」のnavを持つ。各entryは `createRoot` を使用し、対応するcomponentだけをmountする。
 
 Viteは3つのHTMLをRollup inputへ指定する。`server.fs.strict`は既定のまま緩和しない。React Effectは外部system同期にだけ使用し、cleanupを返す。
 
-- [ ] **Step 4: frontend品質ゲートを確認する**
+- [x] **Step 4: frontend品質ゲートを確認する**
 
 Run: `pnpm --filter @parallel-world/desktop test -- --run`
 
@@ -299,7 +299,7 @@ Run: `pnpm --filter @parallel-world/desktop build`
 
 Expected: `dist/character.html`, `dist/chat.html`, `dist/settings.html` が生成される。
 
-- [ ] **Step 5: 記録してコミットする**
+- [x] **Step 5: 記録してコミットする**
 
 `作業内容.md` に3画面の責務、テスト、build結果を追記する。
 
@@ -332,7 +332,7 @@ git commit -m "feat: add three-window frontend shell"
 - Consumes: `pw_contracts::AppStatusDto`。
 - Produces: window labels `character`, `chat`, `settings`、command `get_app_status`、3つのCapability。
 
-- [ ] **Step 1: window定義とCapabilityのfailing testを書く**
+- [x] **Step 1: window定義とCapabilityのfailing testを書く**
 
 ```rust
 #[test]
@@ -344,13 +344,13 @@ fn defines_exactly_three_unique_window_labels() {
 
 `tests/capabilities.rs` は3 JSONを読み、Character permissionsにshell、fs write、settings commandが含まれないこと、Chatに`get_app_status`だけが含まれること、Settingsに`get_app_status`が含まれることをassertする。
 
-- [ ] **Step 2: REDを確認する**
+- [x] **Step 2: REDを確認する**
 
 Run: `cargo test -p parallel-world-desktop`
 
 Expected: window定義とCapabilityが未定義のためcompile/test failure。
 
-- [ ] **Step 3: Tauri shellを実装する**
+- [x] **Step 3: Tauri shellを実装する**
 
 `WINDOWS`はlabel、title、url、transparent、decorationsを保持する定数とする。Characterはtransparent true/decorations false、ChatとSettingsはtransparent false/decorations trueとする。setupで不足windowだけを`WebviewWindowBuilder`から作成する。
 
@@ -358,7 +358,7 @@ Expected: window定義とCapabilityが未定義のためcompile/test failure。
 
 Capabilityはlabelで対象を限定する。Characterはcore windowのdragと通常表示に必要な最小権限だけ、Chatは`get_app_status`、Settingsは`get_app_status`を許可する。`tauri.conf.json`は3 Capabilityを明示列挙し、CSPを `default-src 'self'; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'` とする。
 
-- [ ] **Step 4: Rust testとTauri buildを確認する**
+- [x] **Step 4: Rust testとTauri buildを確認する**
 
 Run: `cargo test -p parallel-world-desktop`
 
@@ -368,7 +368,7 @@ Run: `pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle`
 
 Expected: exit 0、debug executable生成。
 
-- [ ] **Step 5: 記録してコミットする**
+- [x] **Step 5: 記録してコミットする**
 
 `作業内容.md` にwindow label、公開command、Capability拒否テスト、build結果を追記する。
 
@@ -397,7 +397,7 @@ git commit -m "feat: secure tauri three-window shell"
 - Consumes: Tauri `AppHandle::path().app_data_dir()`。
 - Produces: `AppDataLayout::under(root)`、必要directoryの初期化、tracing subscriber、Windows/macOS CI。
 
-- [ ] **Step 1: app data layoutのfailing testを書く**
+- [x] **Step 1: app data layoutのfailing testを書く**
 
 ```rust
 #[test]
@@ -415,13 +415,13 @@ fn derives_all_runtime_directories_from_one_root() {
 }
 ```
 
-- [ ] **Step 2: REDを確認する**
+- [x] **Step 2: REDを確認する**
 
 Run: `cargo test -p pw-platform`
 
 Expected: `AppDataLayout`未定義によるcompile failure。
 
-- [ ] **Step 3: layout、bootstrap、CIを実装する**
+- [x] **Step 3: layout、bootstrap、CIを実装する**
 
 `AppDataLayout`は上記9 pathを公開fieldとして保持し、`create_all`で全directoryを作成する。bootstrapはTauri app data dirからlayoutを作り、directory初期化後に日次rotationのtracing appenderをlogsへ設定する。API keyや環境変数値をログ出力しない。
 
@@ -429,7 +429,7 @@ CIは`windows-latest`と`macos-latest`のmatrixで、pnpm 11.11.0、Node 24.15.0
 
 READMEは製品概要、未実装Phase、開発起動コマンド、外部ライセンスゲートを記載する。getting-startedはWindows/macOSの前提、`pnpm install`、`cargo test --workspace`、`pnpm --filter @parallel-world/desktop tauri dev`を記載する。
 
-- [ ] **Step 4: Phase 0のfresh verificationを行う**
+- [x] **Step 4: Phase 0のfresh verificationを行う**
 
 Run: `cargo fmt --all --check`
 
@@ -459,7 +459,7 @@ Run: `pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle`
 
 Expected: exit 0、debug executable生成。
 
-- [ ] **Step 5: Phase 0を記録してコミットする**
+- [x] **Step 5: Phase 0を記録してコミットする**
 
 `作業内容.md` にPhase 0全要件、全verification command、件数、残る外部ゲート、次のPhase 1計画を追記する。
 

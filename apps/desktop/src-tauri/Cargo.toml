@@ -1,0 +1,31 @@
+[package]
+name = "parallel-world-desktop"
+autobins = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "parallel-world"
+path = "src/main.rs"
+
+[lib]
+name = "parallel_world_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+pw-contracts = { path = "../../../crates/pw-contracts" }
+pw-platform = { path = "../../../crates/pw-platform" }
+tauri.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
