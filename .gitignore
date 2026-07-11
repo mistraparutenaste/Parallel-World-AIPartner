@@ -12,3 +12,15 @@
 
 # Isolated implementation worktrees
 /.worktrees/
+
+# Build outputs
+target/
+node_modules/
+dist/
+
+# Local state
+.env
+*.log
+*.sqlite3
+.superpowers/
+.pnpm-store/
