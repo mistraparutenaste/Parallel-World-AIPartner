@@ -1,0 +1,16 @@
+:root {
+  color-scheme: light dark;
+  font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+body.transparent {
+  background: transparent;
+}
