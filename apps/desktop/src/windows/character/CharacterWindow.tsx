@@ -1,5 +1,6 @@
 import { StatusBadge } from '../../shared/components/StatusBadge';
 import '../../shared/styles/global.css';
+import { Live2DCharacterCanvas } from './Live2DCharacterCanvas';
 
 export function CharacterWindow() {
   return (
@@ -8,6 +9,7 @@ export function CharacterWindow() {
         {Array.from({ length: 9 }, (_, index) => <i key={index} />)}
       </div>
       <div className="character-stage__depth" aria-hidden="true" />
+      <Live2DCharacterCanvas />
       <svg
         className="character-stage__silhouette"
         aria-hidden="true"

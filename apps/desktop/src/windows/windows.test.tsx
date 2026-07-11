@@ -9,6 +9,7 @@ import { SettingsWindow } from './settings/SettingsWindow';
 describe('desktop windows', () => {
   it('renders the character surface', () => {
     const { container } = render(<CharacterWindow />);
+    expect(container.querySelector('canvas[aria-label="Live2D character"]')).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent('準備中');
     expect(container.querySelector('.character-stage__silhouette')).toHaveAttribute('aria-hidden', 'true');
     expect(container.querySelector('.character-stage__drag')).toHaveAttribute('data-tauri-drag-region');

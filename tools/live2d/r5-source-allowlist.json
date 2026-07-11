@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "sourceVersion": "5-r.5",
+  "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+  "files": {
+    "Samples/TypeScript/Demo/package.json": "3ddf870f58d244a01e3c4fa8e798cef8f89367ad83e14f670c2eb3bba85fbb6a",
+    "Samples/TypeScript/Demo/package-lock.json": "0d9ba357c1e3d6a33febf17bc72a9046cc408264e40f52df7b7578fb72c04f52",
+    "Samples/TypeScript/Demo/src/lappmodel.ts": "f8f351f4f2a4498dc6154edfeeb587ad6a2142080bd22bcc6f5e40008ccae9e8",
+    "Samples/TypeScript/Demo/src/lappsubdelegate.ts": "8a680c92d8106bc9d337a1f30e2c9e7edb000af1fcc69a8e94e54e4ed2629983",
+    "Samples/TypeScript/Demo/vite.config.mts": "8c4703a22f0e45b833e225d465d1754f043ee6583cb1fc34eea3b321271104e0"
+  }
+}

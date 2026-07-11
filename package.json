@@ -5,6 +5,10 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build && pnpm live2d:verify-bundle",
+    "live2d:test-assets": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File tools/live2d/tests/Live2DAssets.Tests.ps1",
+    "live2d:stage": "node tools/live2d/run-stage.cjs",
+    "live2d:build-r5-bridge": "node tools/live2d/build-r5-framework.cjs .dev-assets/live2d/sdk/CubismWebSamples",
+    "live2d:verify-bundle": "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File tools/live2d/tests/Test-Live2DBundle.ps1"
   }
 }

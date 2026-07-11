@@ -18,6 +18,11 @@ target/
 node_modules/
 dist/
 
+# Hash-verified local Live2D development staging (never copied by Vite)
+/.dev-assets/live2d/
+# Legacy Task 1 staging quarantine; Vite publicDir is disabled.
+/apps/desktop/public/static/live2d-dev/
+
 # Local configuration and runtime data
 .env
 *.log

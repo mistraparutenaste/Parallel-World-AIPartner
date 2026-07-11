@@ -1,0 +1,547 @@
+{
+  "schemaVersion": 1,
+  "sourceVersion": "5-r.5",
+  "sourceCommit": "ed1e0b714826d92469b9e51cacc3346f4e393f03",
+  "files": [
+    {
+      "path": "Framework/.editorconfig",
+      "size": 147,
+      "sha256": "0785fa0a8a7f4c327d6c57a2cc787cfdfd51671802ad35296c45ca694b900776"
+    },
+    {
+      "path": "Framework/.git",
+      "size": 34,
+      "sha256": "3cc4ef1134bfa5d7eb5b89f2ac3d239247ca08a0893d52323e975912a1809dfd"
+    },
+    {
+      "path": "Framework/.gitattributes",
+      "size": 19,
+      "sha256": "d60f352d0db1404c70afb4bb8b2ca3fd1c610572aa40720e8a0b7baa7885418c"
+    },
+    {
+      "path": "Framework/.gitignore",
+      "size": 210,
+      "sha256": "12989c21fa1a33b868932ce2a57316c45b16cc29db7e33fd7c51241cfab3d322"
+    },
+    {
+      "path": "Framework/.vscode/extensions.json",
+      "size": 63,
+      "sha256": "75b3cea122a2e2465848a92b1d867b708f39eabbfd54389ab7ab704c770a34bf"
+    },
+    {
+      "path": "Framework/.vscode/settings.json",
+      "size": 57,
+      "sha256": "e66ce61585ff5aaca7350ca7633224092a01b366607e32c5764d68a720090a22"
+    },
+    {
+      "path": "Framework/.vscode/tasks.json",
+      "size": 654,
+      "sha256": "774d8fae6d31de7067abf8a6ed659a68ca2b7040a8f7381c254c432e9e9c3133"
+    },
+    {
+      "path": "Framework/CHANGELOG.md",
+      "size": 18175,
+      "sha256": "653e57d95d1f63743178228bd61246c71bb8a921c9f19a90d66915aebe0e0938"
+    },
+    {
+      "path": "Framework/LICENSE.md",
+      "size": 2234,
+      "sha256": "7ed849bff1e6499aa7cd882e47d246ddbbe06817c1e84cb974df949488302614"
+    },
+    {
+      "path": "Framework/README.ja.md",
+      "size": 6272,
+      "sha256": "07e2a14ad34da16a9772427d0fb36dcc708e85247d1d94f438d692f62075b5bf"
+    },
+    {
+      "path": "Framework/README.md",
+      "size": 5036,
+      "sha256": "aa64939625fe8c0cfd77e95991c9e2ddbbddaf5e043c4851a2d9ac604be8fadd"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcalphablend.frag",
+      "size": 2189,
+      "sha256": "855b247f02042a808a41e282ee4d7de7cc4533abeb5032b4ab8fe84f7dec107f"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrccolorblend.frag",
+      "size": 7525,
+      "sha256": "01d4bf6a14b4a738976e9a538767a21da0defa8816f3845a7df08a7713327538"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrccopy.frag",
+      "size": 429,
+      "sha256": "15c67a4ec3adda4c849aff2a8319a3f6aceef8a84d5e5e1f3fb7fd9cd681193c"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcmaskinvertedpremultipliedalpha.frag",
+      "size": 1051,
+      "sha256": "1005cff8113de587cf1c0e295288d04d85f0f4ebc223684c8340e017fd8fc788"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcmaskpremultipliedalpha.frag",
+      "size": 1043,
+      "sha256": "f84ff615393d26ea6ab7c28747803db6472524c92567c0ad01e8225fbab36a3b"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcpremultipliedalpha.frag",
+      "size": 747,
+      "sha256": "c93abe215357cc782a25fc4ef20f5fe1f34e2cc193ee23d763b56b81fae5fce1"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcpremultipliedalphablend.frag",
+      "size": 2038,
+      "sha256": "2155076275199a2946959838391dfb856e9d1db91b6ca3abd19ed70d4ff27e15"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/fragshadersrcsetupmask.frag",
+      "size": 736,
+      "sha256": "3cccc0b68a56cfbf4bd4841b0a759431dd159812c38dc280981ba633fa0afe7a"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/vertshadersrc.vert",
+      "size": 465,
+      "sha256": "291ed3f35f71f1e71e6df33fb055f009a8a9b36ee664f74f24f6cefef0c4029b"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/vertshadersrcblend.vert",
+      "size": 738,
+      "sha256": "2589837bd7a6a550a1c3af41b4fa776011e6e71f2531320fa39afcb83b209bf4"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/vertshadersrccopy.vert",
+      "size": 392,
+      "sha256": "b7bc4ba7517f405af4812ac47d99bc2b633c99f463c1224029556b00e8dff3cf"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/vertshadersrcmasked.vert",
+      "size": 559,
+      "sha256": "6704a9df2e6d3ee5176c72fca4ba59358ba4827a07054b1e0a72a3c574e281fd"
+    },
+    {
+      "path": "Framework/Shaders/WebGL/vertshadersrcsetupmask.vert",
+      "size": 536,
+      "sha256": "649aad2f6c0af55a7a4adcf33dbf78937ef9d77ed6ba917fd716176adce25afe"
+    },
+    {
+      "path": "Framework/eslint.config.mjs",
+      "size": 4928,
+      "sha256": "ca5ef57b79d74e7210384d3c5b56670941ea511b546c79cec47f001d3ca8a643"
+    },
+    {
+      "path": "Framework/package-lock.json",
+      "size": 60502,
+      "sha256": "86fdd46b5a18804021464c23a6728f8233e28fdc3e9e4e73b64caf063ac8db2c"
+    },
+    {
+      "path": "Framework/package.json",
+      "size": 447,
+      "sha256": "3e7d34431ec5b50d0f0fc361de7ac3ad0ad4d2b5685e587971a6c7774ee9da9f"
+    },
+    {
+      "path": "Framework/src/cubismdefaultparameterid.ts",
+      "size": 5783,
+      "sha256": "f92e20db8145f06b73728fb6ba4215bbaed723e26959471f2e291962142c95b5"
+    },
+    {
+      "path": "Framework/src/cubismframeworkconfig.ts",
+      "size": 1111,
+      "sha256": "92399ad1a572ec6048ea351ce4363b357f6f86471f9edb4af84bb7e16790828b"
+    },
+    {
+      "path": "Framework/src/cubismmodelsettingjson.ts",
+      "size": 24382,
+      "sha256": "58ff868afbdab05f905782be3ae411c787ad0c9c3e79ad254fc596d08bbe0b6e"
+    },
+    {
+      "path": "Framework/src/effect/cubismbreath.ts",
+      "size": 3765,
+      "sha256": "06da2c2c10e91782fb99833c94842e6267dc996ddb35a1bfb99765f053c7729a"
+    },
+    {
+      "path": "Framework/src/effect/cubismeyeblink.ts",
+      "size": 7222,
+      "sha256": "a1c26cfcf2656424f370e17d4b4cb0f9642db2dd452af8f562c67ced26ba64de"
+    },
+    {
+      "path": "Framework/src/effect/cubismlook.ts",
+      "size": 3657,
+      "sha256": "3c7f7dbea7b34c524bcf36fb5a15f9264d4a8a7228f5b124fdaddb2c82193f21"
+    },
+    {
+      "path": "Framework/src/effect/cubismpose.ts",
+      "size": 11698,
+      "sha256": "8eba3f692c8cd267ca75664d035565c6f61ac38201c56e7e2aa04389b964f1c2"
+    },
+    {
+      "path": "Framework/src/icubismallcator.ts",
+      "size": 1932,
+      "sha256": "d0c3a178e6c6b86697117eac21cd7faa422bf180b4cc84adecfc3491c573055f"
+    },
+    {
+      "path": "Framework/src/icubismmodelsetting.ts",
+      "size": 6652,
+      "sha256": "87543afb93a5938211c08c2e5ae0116d0fd2bd813f92f3b5f48cf38105b1cf39"
+    },
+    {
+      "path": "Framework/src/id/cubismid.ts",
+      "size": 2281,
+      "sha256": "ff10538238bcda0a97756bf3e6017409acfdb901657174e7f6a027b965d34ee0"
+    },
+    {
+      "path": "Framework/src/id/cubismidmanager.ts",
+      "size": 2413,
+      "sha256": "1ae3c3b2de5462d1bf6a98b5878eb7228d228d67adc7426bf549702fe6a5551e"
+    },
+    {
+      "path": "Framework/src/live2dcubismframework.ts",
+      "size": 8900,
+      "sha256": "dc20093ded82ed6704d94a443fa28961ba23aefb64fb76b9be35c8de869bd934"
+    },
+    {
+      "path": "Framework/src/math/cubismmath.ts",
+      "size": 9603,
+      "sha256": "2e6816bfcecc459bb1c8bd7fcaa03f971b2545c90a9c75a7236cca9a0c282961"
+    },
+    {
+      "path": "Framework/src/math/cubismmatrix44.ts",
+      "size": 8038,
+      "sha256": "aa81745acf70315c536d0bada6cc422822765b2f44f8088a2ccea6cb6f9edc0d"
+    },
+    {
+      "path": "Framework/src/math/cubismmodelmatrix.ts",
+      "size": 4715,
+      "sha256": "31e8787385c4c26d78d2f627f373d7a446db1a72d38f247a442a9bc9de42ee0f"
+    },
+    {
+      "path": "Framework/src/math/cubismtargetpoint.ts",
+      "size": 5764,
+      "sha256": "b09812890e639d89f96e0b1774a4ccdc076d1174fcb3daa95b0acd8102285999"
+    },
+    {
+      "path": "Framework/src/math/cubismvector2.ts",
+      "size": 4153,
+      "sha256": "369b0c0b842432f7156827bf77047276fb23b10301d9f5d40762497b9f75372d"
+    },
+    {
+      "path": "Framework/src/math/cubismviewmatrix.ts",
+      "size": 8345,
+      "sha256": "3276768bd6efbe287a3384eb1960f6c1901f10137f38396096a9e8e84b9a65f5"
+    },
+    {
+      "path": "Framework/src/model/cubismmoc.ts",
+      "size": 3675,
+      "sha256": "99a80e2102af7b3ba10b15d684f965930707018b6b239a0ce6d14e3a867f266b"
+    },
+    {
+      "path": "Framework/src/model/cubismmodel.ts",
+      "size": 62659,
+      "sha256": "fa4c21a270b3d18ae9f550cebf181d54504cf4b4198f1eeba6d0f3c55d7055a5"
+    },
+    {
+      "path": "Framework/src/model/cubismmodelmultiplyandscreencolor.ts",
+      "size": 31866,
+      "sha256": "478b4fb805e6d4b5c450a58f29eaebcf75d176f87421797e218b0e3542a3b4b3"
+    },
+    {
+      "path": "Framework/src/model/cubismmodeluserdata.ts",
+      "size": 4248,
+      "sha256": "d4aaf59e04f834de345e0f9f1cced1062c28c9b1203bf09da17a0a8c2dddb6c4"
+    },
+    {
+      "path": "Framework/src/model/cubismmodeluserdatajson.ts",
+      "size": 3035,
+      "sha256": "4c8f546a393ac47bf8245dd8f7ae65e50eb61518578c33c3ad28ef23b2ffa4c1"
+    },
+    {
+      "path": "Framework/src/model/cubismusermodel.ts",
+      "size": 15104,
+      "sha256": "41707e75f0ab36808a3ba42d40a477d0b33e7c7da73cbce5a3de0771bd957a9c"
+    },
+    {
+      "path": "Framework/src/motion/acubismmotion.ts",
+      "size": 14092,
+      "sha256": "649524b171f1a3ab8588a16dcb707a4f0da848f7fb87ad2b34148e0eea45ee08"
+    },
+    {
+      "path": "Framework/src/motion/cubismbreathupdater.ts",
+      "size": 1698,
+      "sha256": "57acaadd41e6dac1ca31f69521166edf8366508e3dcf21ce9279687df72080df"
+    },
+    {
+      "path": "Framework/src/motion/cubismexpressionmotion.ts",
+      "size": 12157,
+      "sha256": "20a75e357391116974a589fe8a9e5da3234cd214a214df94407f29b0152e86c5"
+    },
+    {
+      "path": "Framework/src/motion/cubismexpressionmotionmanager.ts",
+      "size": 9079,
+      "sha256": "17a12b23cf811cf8c7794b67beef53d47b10070ebd1d05a87becafe4a03fc403"
+    },
+    {
+      "path": "Framework/src/motion/cubismexpressionupdater.ts",
+      "size": 1989,
+      "sha256": "75fcf716ce50acd81c4d5f3e1179c6557e32fa4b8960d373aa36fe2734ec0c1b"
+    },
+    {
+      "path": "Framework/src/motion/cubismeyeblinkupdater.ts",
+      "size": 2187,
+      "sha256": "a7e90b32cc8d47600ee0b2da44106efe4ea2a915556ccb28d6aa7f3ff93a5dcc"
+    },
+    {
+      "path": "Framework/src/motion/cubismlipsyncupdater.ts",
+      "size": 3003,
+      "sha256": "390bc6da44e9d2b38704b990cbbe31442b562eeb2b7d4bc1a17a1a94034958a3"
+    },
+    {
+      "path": "Framework/src/motion/cubismlookupdater.ts",
+      "size": 2155,
+      "sha256": "a8fc4734ae53fa0f1b65b38a5358e6e7a456429a2743fc20f5fad637659bae18"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotion.ts",
+      "size": 37913,
+      "sha256": "eb3e8862f60feedd12bc47300d8486b044c39a8af21e66f12613ce941c8fa5f6"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotioninternal.ts",
+      "size": 4928,
+      "sha256": "ede0f46ebdd0f4e0c25f5ba1825f6bccf658a463e08c0bc72a8af26230865805"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotionjson.ts",
+      "size": 12496,
+      "sha256": "92eb9dd6fbe6086e02952fec021cf0daa68a3fc335ae88dd19ee281591b34c64"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotionmanager.ts",
+      "size": 3821,
+      "sha256": "7e88b825f99e4cbc1fd13ae07a7f5063a20ef9d96bf86855e426fb221813e72d"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotionqueueentry.ts",
+      "size": 7248,
+      "sha256": "4619da4891829c7f8f5741a4b7f711a6cc2beb9fa06075a2b8caefec20b2ea19"
+    },
+    {
+      "path": "Framework/src/motion/cubismmotionqueuemanager.ts",
+      "size": 10707,
+      "sha256": "1aa0f6a39ffe9d83e0e06217a9cf6ebdf3a6e593242ff84d08684bbd2f4a01bb"
+    },
+    {
+      "path": "Framework/src/motion/cubismphysicsupdater.ts",
+      "size": 1719,
+      "sha256": "003fda6b8a6537b75fff8f0cd4894d9f7f9ee0a1f668197d91d497adab3dbdd9"
+    },
+    {
+      "path": "Framework/src/motion/cubismposeupdater.ts",
+      "size": 1644,
+      "sha256": "58658839ea9aab83da69b91d6e54b9825ddb80cca47ee5c1cef615715e58c28e"
+    },
+    {
+      "path": "Framework/src/motion/cubismupdatescheduler.ts",
+      "size": 5149,
+      "sha256": "ab59717783d79bf3675e55cf2037683cced648bca4a47dcb438c78184c9b1b5e"
+    },
+    {
+      "path": "Framework/src/motion/icubismupdater.ts",
+      "size": 3688,
+      "sha256": "ba937ffd59bc52f4de426aadac4269630e0267d36b5ba9acab788993f586feea"
+    },
+    {
+      "path": "Framework/src/motion/iparameterprovider.ts",
+      "size": 1156,
+      "sha256": "c0b8c01f855dcf4e25a08ad19afb5136d8f92f3d6536ba125194c649df140b0b"
+    },
+    {
+      "path": "Framework/src/physics/cubismphysics.ts",
+      "size": 44141,
+      "sha256": "41457e7486d380825f30936e34951c0de5362769e8229b99c28702a5a398d734"
+    },
+    {
+      "path": "Framework/src/physics/cubismphysicsinternal.ts",
+      "size": 8981,
+      "sha256": "db6ee02fe53f01f9575149d33ae44fc69876b32225da921b44bfc8a6d294082b"
+    },
+    {
+      "path": "Framework/src/physics/cubismphysicsjson.ts",
+      "size": 17868,
+      "sha256": "cc52bf67990131e322626729a044640b016e57b42dde80c0dfd4054af815d9b2"
+    },
+    {
+      "path": "Framework/src/rendering/cubismclippingmanager.ts",
+      "size": 38519,
+      "sha256": "b38ca529a5bedac4eaa0d0ff04ae4ccaaaf3173d04250dc01af4e88e72730ec9"
+    },
+    {
+      "path": "Framework/src/rendering/cubismoffscreenmanager.ts",
+      "size": 18723,
+      "sha256": "06c8d8c7c7fcdafd126f5f01881a023f8a4158c6222cf54e4672bd35a0609ebc"
+    },
+    {
+      "path": "Framework/src/rendering/cubismoffscreenrendertarget_webgl.ts",
+      "size": 7489,
+      "sha256": "04ae8ccfa59c8dc1f43528ec0ceccd06b4180e582c802d14e38a1eaf14c0694c"
+    },
+    {
+      "path": "Framework/src/rendering/cubismrenderer.ts",
+      "size": 13697,
+      "sha256": "42f6fa6343effdb9085cd1cd49b62f06f6e172483583c3cf325e0859aee8f9c8"
+    },
+    {
+      "path": "Framework/src/rendering/cubismrenderer_webgl.ts",
+      "size": 62458,
+      "sha256": "f054aa514bf1ee4d162698de62bc3565d8e18ef348dd9234d6dab1e78bc0e678"
+    },
+    {
+      "path": "Framework/src/rendering/cubismrendertarget_webgl.ts",
+      "size": 8511,
+      "sha256": "8948ac1fb66fd32a289d9e07929ef2d8e41c6deb103948e54faa6f45ebad8f21"
+    },
+    {
+      "path": "Framework/src/rendering/cubismshader_webgl.ts",
+      "size": 70603,
+      "sha256": "daf9bfcbed82f4763e401fbc1ccf740e1da0a99943dbec6afb3cdfb6c3d94a32"
+    },
+    {
+      "path": "Framework/src/type/csmrectf.ts",
+      "size": 2019,
+      "sha256": "c199fdc276d2d66ed3abd140b137a3e127fc52b5735869849d450eacd5f416d8"
+    },
+    {
+      "path": "Framework/src/utils/cubismarrayutils.ts",
+      "size": 1073,
+      "sha256": "0f63d3a9e6f25a097905503ccedfe21130b6b857238569341628f158d44afa60"
+    },
+    {
+      "path": "Framework/src/utils/cubismdebug.ts",
+      "size": 5369,
+      "sha256": "0a526141825d6a980d838e95fc6856a4362173674bb6469d8bd40d054e9e7520"
+    },
+    {
+      "path": "Framework/src/utils/cubismjson.ts",
+      "size": 29319,
+      "sha256": "39d9f1806b7a6909098e1b8e2b7a1af567bbd0d6800b25beeaba4cb857c7b9f0"
+    },
+    {
+      "path": "Framework/src/utils/cubismjsonextension.ts",
+      "size": 3691,
+      "sha256": "31e7a859c82c05e869651538077bb784737c459f6408a7aa3d460ba2697f3ddd"
+    },
+    {
+      "path": "Framework/src/utils/cubismstring.ts",
+      "size": 3356,
+      "sha256": "746c4da878164ecb6444addf2934e9086897b08f0fb68fb1a5f85132f5f76a7c"
+    },
+    {
+      "path": "Framework/tsconfig.json",
+      "size": 505,
+      "sha256": "69355fbc0d9ff9878a6b4ac2b27d0c12be72ccf1dabf9620fd5f565af0d59132"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/copy_resources.js",
+      "size": 654,
+      "sha256": "1b87683e6e549454f56c39532928c7f77e3b41d61cb52cf11c7e346ce6570b2c"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/eslint.config.mjs",
+      "size": 4483,
+      "sha256": "68aac9880fb3db6279acf245e1ac031d1b5da2b3f629f58ae80da85630a96f49"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/index.html",
+      "size": 666,
+      "sha256": "8d6ae4d58349416e5eed3ec270a6cbf5fbf66b5bca9c4dcf0c1cdbff831fbedd"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/package-lock.json",
+      "size": 169776,
+      "sha256": "0d9ba357c1e3d6a33febf17bc72a9046cc408264e40f52df7b7578fb72c04f52"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/package.json",
+      "size": 798,
+      "sha256": "3ddf870f58d244a01e3c4fa8e798cef8f89367ad83e14f670c2eb3bba85fbb6a"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/public/.gitignore",
+      "size": 31,
+      "sha256": "c32d0a5c5e6700086a3e54314a730429285533db5a026cc083afc21688230add"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappdefine.ts",
+      "size": 2816,
+      "sha256": "a8e2aa7da13fd547106bfd4a41e8db557c8b955312eb2edaaa35668bcc966d18"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappdelegate.ts",
+      "size": 8025,
+      "sha256": "a18e95e0afa09aaf0b2ad3b470a2fdef5e5249249575c7fc80647faf8b4c5114"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappglmanager.ts",
+      "size": 1078,
+      "sha256": "5a4dcee41f495d670c310b9fe2239f267a5d9f84c3aea49f8989ded350128fad"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lapplive2dmanager.ts",
+      "size": 6688,
+      "sha256": "0410de5f5d881390410d24129a9feeea86def8846f9d89a681855bf6ddb2dd1a"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappmodel.ts",
+      "size": 34097,
+      "sha256": "f8f351f4f2a4498dc6154edfeeb587ad6a2142080bd22bcc6f5e40008ccae9e8"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lapppal.ts",
+      "size": 1671,
+      "sha256": "b94648ba0cc8a6f34d3d5f6f26ee63616ee12a21a87eaf13c3ef5f23feeaee95"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappsprite.ts",
+      "size": 6298,
+      "sha256": "0653119084c92d2fe38fd7866f7c623661292343672bcbf655ea8435de8e0f87"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappsubdelegate.ts",
+      "size": 8744,
+      "sha256": "8a680c92d8106bc9d337a1f30e2c9e7edb000af1fcc69a8e94e54e4ed2629983"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lapptexturemanager.ts",
+      "size": 6101,
+      "sha256": "4807ed5f4d9de20b3199e71b44053f4685813ef3e1f9c1bd5dc58f7753a8c118"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappview.ts",
+      "size": 8777,
+      "sha256": "ac9ebaa1974b1eaca3549097deb413d462bc5362b8767cf691b83c474c0a3731"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/lappwavfilehandler.ts",
+      "size": 12772,
+      "sha256": "e2906ac21374779a36aa97861a297a7d04f3990c899903330d734deeb65a18d1"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/main.ts",
+      "size": 766,
+      "sha256": "169ea69512f3c01778fa9986f78b1b47cd0a0a079f92693bb4fb900a855dffee"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/src/touchmanager.ts",
+      "size": 4783,
+      "sha256": "8e50185935f1f998a0fca03630dc3aff9d79595c2ff7a0047a2cde02e0c4d207"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/tsconfig.json",
+      "size": 545,
+      "sha256": "e1b870a7584a48d5397e756638da1596f3b895a5835ae2bd85003ce766866626"
+    },
+    {
+      "path": "Samples/TypeScript/Demo/vite.config.mts",
+      "size": 625,
+      "sha256": "8c4703a22f0e45b833e225d465d1754f043ee6583cb1fc34eea3b321271104e0"
+    }
+  ]
+}
