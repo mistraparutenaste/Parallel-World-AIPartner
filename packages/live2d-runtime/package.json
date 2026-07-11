@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/src/index.d.ts",
       "default": "./dist/src/index.js"
+    },
+    "./cubism": {
+      "types": "./dist/src/runtime/cubism-framework-runtime.d.ts",
+      "default": "./dist/src/runtime/cubism-framework-runtime.js"
     }
   },
   "scripts": {

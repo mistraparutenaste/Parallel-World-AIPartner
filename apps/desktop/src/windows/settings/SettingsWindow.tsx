@@ -1,3 +1,5 @@
+import { CharacterPanel } from './CharacterPanel';
+
 const SETTINGS_SECTIONS = [
   'マイク',
   '音声認識',
@@ -23,6 +25,7 @@ export function SettingsWindow() {
           ))}
         </ul>
       </nav>
+      <CharacterPanel />
     </main>
   );
 }

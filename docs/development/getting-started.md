@@ -21,8 +21,21 @@
 
 ```powershell
 corepack pnpm install
+corepack pnpm build
 cargo test --workspace
 ```
+
+`corepack pnpm build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
+
+## 開発用Live2Dモデルの配置
+
+モデル（Live2Dサンプルデータ）はリポジトリにコミットされない。開発時は次でapp dataへコピーする。
+
+```powershell
+node tools/scripts/sync-live2d-dev-assets.mjs
+```
+
+既定モデルは `epsilon_free`（`project-input/live2d/selected/` が必要）。コピー先は `%APPDATA%/com.parallelworld.desktop/characters/`。
 
 ## 開発起動
 

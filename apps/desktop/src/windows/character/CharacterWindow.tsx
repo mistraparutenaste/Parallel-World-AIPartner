@@ -1,16 +1,160 @@
+import type {
+  CharacterCursorEventDto,
+  CharacterManifestDto,
+  ConversationStateDto,
+} from '@parallel-world/contracts';
+import {
+  Live2DController,
+  type Live2DControllerState,
+} from '@parallel-world/live2d-runtime';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { useEffect, useRef, useState } from 'react';
 import { StatusBadge } from '../../shared/components/StatusBadge';
+
+const SHADER_PATH = '/live2d/shaders/';
+
+function toBadgeState(state: Live2DControllerState): ConversationStateDto {
+  switch (state) {
+    case 'model-loaded':
+      return 'idle';
+    case 'unavailable':
+      return 'renderer_unavailable';
+    default:
+      return 'starting';
+  }
+}
 
 /**
  * Transparent always-on-top character surface.
  *
- * The canvas element is reserved for the Live2D renderer (Phase 1);
- * until a model is loaded only the status badge is visible.
+ * Owns one Live2DController per mount. The Cubism adapter is loaded
+ * dynamically only after the Core script global is detected, because
+ * the vendored framework cannot even be imported without it.
+ * Expression / motion commands arrive as Tauri events emitted by the
+ * Rust side after validation.
  */
 export function CharacterWindow() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [state, setState] = useState<Live2DControllerState>('idle');
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return undefined;
+    }
+    let disposed = false;
+    let controller: Live2DController | null = null;
+    const unlisteners: Array<() => void> = [];
+
+    const resize = () => {
+      controller?.resize(
+        canvas.clientWidth,
+        canvas.clientHeight,
+        window.devicePixelRatio,
+      );
+    };
+
+    const boot = async () => {
+      if (!('Live2DCubismCore' in globalThis)) {
+        setState('unavailable');
+        return;
+      }
+      const { CubismFrameworkRuntime } = await import(
+        '@parallel-world/live2d-runtime/cubism'
+      );
+      if (disposed) {
+        return;
+      }
+      const instance = new Live2DController(
+        new CubismFrameworkRuntime({ shaderPath: SHADER_PATH }),
+        setState,
+      );
+      controller = instance;
+      await instance.attach(canvas);
+      if (disposed || instance.state !== 'ready') {
+        return;
+      }
+      resize();
+      try {
+        const manifest = await invoke<CharacterManifestDto>(
+          'get_character_manifest',
+        );
+        if (disposed) {
+          return;
+        }
+        await instance.loadModel(convertFileSrc(manifest.model_path));
+      } catch (error) {
+        console.error('failed to load the character model', error);
+        return;
+      }
+      const stopExpression = await listen<string>(
+        'character-expression',
+        (event) => {
+          instance.setExpression(event.payload);
+        },
+      );
+      const stopMotion = await listen<string>('character-motion', (event) => {
+        instance.startMotion(event.payload);
+      });
+      // Click-through: the Rust cursor watcher streams positions even
+      // while mouse events are ignored; clicks pass through unless the
+      // cursor is over an opaque model pixel.
+      let interactive = true;
+      const stopCursor = await listen<CharacterCursorEventDto>(
+        'character-cursor',
+        (event) => {
+          const overModel =
+            instance.state === 'model-loaded'
+              ? instance.hitTest(event.payload.x, event.payload.y)
+              : true;
+          if (overModel !== interactive) {
+            interactive = overModel;
+            invoke('set_click_through', { enabled: !overModel }).catch(
+              (error: unknown) => {
+                console.error('failed to toggle click-through', error);
+              },
+            );
+          }
+        },
+      );
+      if (disposed) {
+        stopExpression();
+        stopMotion();
+        stopCursor();
+      } else {
+        unlisteners.push(stopExpression, stopMotion, stopCursor);
+      }
+    };
+    void boot();
+
+    window.addEventListener('resize', resize);
+    const observer =
+      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    observer?.observe(canvas);
+
+    return () => {
+      disposed = true;
+      observer?.disconnect();
+      window.removeEventListener('resize', resize);
+      for (const unlisten of unlisteners) {
+        unlisten();
+      }
+      controller?.dispose();
+    };
+  }, []);
+
   return (
     <main aria-label="キャラクター">
-      <canvas aria-hidden="true" data-live2d-surface />
-      <StatusBadge state="starting" />
+      <canvas
+        ref={canvasRef}
+        className="character-canvas"
+        data-tauri-drag-region
+        data-live2d-surface
+      />
+      <div className="character-status">
+        <StatusBadge state={toBadgeState(state)} />
+      </div>
     </main>
   );
 }

@@ -14,3 +14,24 @@ body {
 body.transparent {
   background: transparent;
 }
+
+.character-canvas {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+.character-status {
+  position: fixed;
+  inset-block-end: 8px;
+  inset-inline-start: 8px;
+  pointer-events: none;
+}
+
+.character-status output {
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgb(0 0 0 / 55%);
+  color: #fff;
+  font-size: 12px;
+}

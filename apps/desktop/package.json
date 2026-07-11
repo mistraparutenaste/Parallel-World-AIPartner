@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@parallel-world/contracts": "workspace:*",
+    "@parallel-world/live2d-runtime": "workspace:*",
+    "@tauri-apps/api": "^2",
     "react": "19.2.7",
     "react-dom": "19.2.7"
   },
