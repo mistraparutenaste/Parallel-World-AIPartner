@@ -72,6 +72,14 @@ cargo test -p pw-tts --test real_engine -- --ignored --nocapture
 corepack pnpm --filter @parallel-world/desktop tauri dev
 ```
 
+一括起動（AivisSpeech Engineの起動試行 + LLM疎通・アセット配置の確認 + tauri dev）:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
+```
+
+エンジンの場所が自動検出できない場合は `$env:PW_AIVIS_ENGINE` に実行ファイルを指定する。ポートは `PW_TTS_PORT` / `PW_LLM_PORT` で変更できる。
+
 Vite dev server（ポート5173）が起動し、character / chat / settings の3ウィンドウが開く。
 
 ## 品質ゲート
