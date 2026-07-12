@@ -9,6 +9,7 @@ members = [
     "crates/pw-llm",
     "crates/pw-platform",
     "crates/pw-stt-sherpa",
+    "crates/pw-tts",
 ]
 
 [workspace.package]
@@ -26,6 +27,7 @@ pw-domain = { path = "crates/pw-domain" }
 pw-llm = { path = "crates/pw-llm" }
 pw-platform = { path = "crates/pw-platform" }
 pw-stt-sherpa = { path = "crates/pw-stt-sherpa" }
+pw-tts = { path = "crates/pw-tts" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 rtrb = "0.3.4"
 # 4.0はaudioadapter前提のAPI刷新直後のため、実績のある0.16系を使用

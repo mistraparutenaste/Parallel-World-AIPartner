@@ -2623,18 +2623,22 @@ version = "0.1.0"
 dependencies = [
  "pw-application",
  "pw-domain",
+ "pw-platform",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tiny_http",
  "tracing",
- "url",
 ]
 
 [[package]]
 name = "pw-platform"
 version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "url",
+]
 
 [[package]]
 name = "pw-stt-sherpa"
@@ -2644,6 +2648,19 @@ dependencies = [
  "pw-domain",
  "sherpa-onnx",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "pw-tts"
+version = "0.1.0"
+dependencies = [
+ "pw-platform",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tiny_http",
  "tracing",
 ]
 

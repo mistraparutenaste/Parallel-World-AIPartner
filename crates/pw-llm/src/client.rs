@@ -9,7 +9,7 @@ use pw_application::conversation::{ChatMessage, ChatRole, LlmClient};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::endpoint::validate_base_url;
+use pw_platform::net::validate_base_url;
 
 /// Connection settings for one OpenAI-compatible server.
 #[derive(Debug, Clone)]

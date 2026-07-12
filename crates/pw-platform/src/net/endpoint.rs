@@ -6,7 +6,7 @@ use url::Url;
 pub enum EndpointError {
     #[error("invalid base url: {0}")]
     Invalid(String),
-    #[error("non-loopback llm endpoints require allow_remote: {0}")]
+    #[error("non-loopback endpoints require allow_remote: {0}")]
     RemoteNotAllowed(String),
 }
 
