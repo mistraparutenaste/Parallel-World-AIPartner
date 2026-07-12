@@ -36,7 +36,7 @@ impl ConversationHistory for SqliteConversationHistory {
         transaction
             .execute(
                 "INSERT INTO conversations (id, created_at, updated_at) VALUES (?1, ?2, ?3)
-                 ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at",
+                 ON CONFLICT(id) DO UPDATE SET updated_at = MAX(conversations.updated_at, excluded.updated_at)",
                 params![
                     conversation.id,
                     conversation.created_at,
@@ -112,16 +112,39 @@ impl ConversationHistory for SqliteConversationHistory {
         let rows = statement
             .query_map([conversation_id], |row| {
                 let role: String = row.get(3)?;
-                let role = if role == "user" {
-                    MessageRole::User
-                } else {
-                    MessageRole::Assistant
+                let role = match role.as_str() {
+                    "user" => MessageRole::User,
+                    "assistant" => MessageRole::Assistant,
+                    unknown => {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("unknown role: {unknown}"),
+                            )),
+                        ));
+                    }
                 };
                 let turn_id: Option<i64> = row.get(2)?;
+                let turn_id = turn_id
+                    .map(|value| {
+                        u64::try_from(value).map_err(|_| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                2,
+                                rusqlite::types::Type::Integer,
+                                Box::new(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!("negative turn_id: {value}"),
+                                )),
+                            )
+                        })
+                    })
+                    .transpose()?;
                 Ok(StoredMessage {
                     id: Some(row.get(0)?),
                     conversation_id: row.get(1)?,
-                    turn_id: turn_id.and_then(|value| u64::try_from(value).ok()),
+                    turn_id,
                     role,
                     content: row.get(4)?,
                     created_at: row.get(5)?,
@@ -250,6 +273,18 @@ mod tests {
             history
                 .append_message(&message("chat", Some(1), MessageRole::User, "saved", 30))
                 .unwrap();
+            history
+                .upsert_conversation(&conversation("kept", 11, 21))
+                .unwrap();
+            history
+                .append_message(&message(
+                    "kept",
+                    Some(2),
+                    MessageRole::Assistant,
+                    "retained",
+                    31,
+                ))
+                .unwrap();
         }
         {
             let database = Database::open(&path).expect("database reopens");
@@ -260,14 +295,94 @@ mod tests {
             let remaining: i64 = history
                 .database()
                 .connection()
-                .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+                .query_row(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id = 'chat'",
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
             assert_eq!(remaining, 0);
             assert!(!history.delete_conversation("chat").unwrap());
+        }
+        {
+            let database = Database::open(&path).expect("database reopens after deletion");
+            let history = SqliteConversationHistory::new(database);
+            assert!(history.list_messages("chat").unwrap().is_empty());
+            assert_eq!(
+                history.list_messages("kept").unwrap()[0].content,
+                "retained"
+            );
         }
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn rejects_invalid_roles_and_negative_turn_ids_read_from_the_database() {
+        let database = Database::open_in_memory().expect("database opens");
+        database
+            .connection()
+            .execute_batch("PRAGMA ignore_check_constraints = ON")
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations (id, created_at, updated_at) VALUES ('chat', 1, 1)",
+                [],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO messages (conversation_id, turn_id, role, content, created_at)
+                 VALUES ('chat', 1, 'system', 'bad-role', 1)",
+                [],
+            )
+            .unwrap();
+        let history = SqliteConversationHistory::new(database);
+        assert!(
+            history
+                .list_messages("chat")
+                .unwrap_err()
+                .0
+                .contains("unknown role")
+        );
+
+        history
+            .database()
+            .connection()
+            .execute("DELETE FROM messages", [])
+            .unwrap();
+        history
+            .database()
+            .connection()
+            .execute(
+                "INSERT INTO messages (conversation_id, turn_id, role, content, created_at)
+                 VALUES ('chat', -1, 'user', 'bad-turn', 1)",
+                [],
+            )
+            .unwrap();
+        assert!(
+            history
+                .list_messages("chat")
+                .unwrap_err()
+                .0
+                .contains("negative turn_id")
+        );
+    }
+
+    #[test]
+    fn upsert_never_moves_updated_at_backwards() {
+        let database = Database::open_in_memory().expect("database opens");
+        let mut history = SqliteConversationHistory::new(database);
+        history
+            .upsert_conversation(&conversation("chat", 10, 50))
+            .unwrap();
+        history
+            .upsert_conversation(&conversation("chat", 10, 20))
+            .unwrap();
+        assert_eq!(history.list_conversations().unwrap()[0].updated_at, 50);
     }
 }
