@@ -17,7 +17,7 @@ use pw_contracts::{
 use pw_domain::speech::RejectionReason;
 use pw_platform::paths::AppDataLayout;
 use pw_stt_sherpa::{ReazonSpeechRecognizer, RecognizerModelPaths, SherpaError, SileroVad};
-use tauri::{AppHandle, Emitter, EventTarget, Runtime};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 pub const TRANSCRIPT_EVENT: &str = "stt-transcript";
 pub const LEVEL_EVENT: &str = "stt-level";
@@ -283,6 +283,11 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
         };
         // Single broadcast; see emit_state for the rationale.
         let _ = self.app.emit(TRANSCRIPT_EVENT, payload);
+        // 音声からの応答生成: 確定発話を会話サービスへ投入する。
+        let chat = self.app.state::<crate::chat::ChatService>();
+        if let Err(error) = chat.submit(&self.app, text.to_owned()) {
+            tracing::warn!(%error, "failed to submit transcript to chat");
+        }
     }
 
     fn on_rejected(&self, reason: RejectionReason) {

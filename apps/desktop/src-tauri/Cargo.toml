@@ -14,6 +14,7 @@ pw-application = { workspace = true }
 pw-audio = { workspace = true }
 pw-contracts = { workspace = true }
 pw-domain = { workspace = true }
+pw-llm = { workspace = true }
 pw-platform = { workspace = true }
 pw-stt-sherpa = { workspace = true }
 serde = { workspace = true }

@@ -1,8 +1,15 @@
-import type { TranscriptEventDto } from '@parallel-world/contracts';
-import { act, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import type {
+  ChatMessageEventDto,
+  ConversationStateEventDto,
+} from '@parallel-world/contracts';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatWindow } from './ChatWindow';
 
+const invokeMock = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: invokeMock,
+}));
 const listenHandlers = vi.hoisted(
   () => new Map<string, (event: { payload: unknown }) => void>(),
 );
@@ -17,24 +24,76 @@ vi.mock('@tauri-apps/api/webviewWindow', () => ({
   }),
 }));
 
-describe('ChatWindow transcripts', () => {
-  it('appends recognized speech to the history', async () => {
-    render(<ChatWindow />);
-    expect(screen.getByText('まだメッセージはありません。')).toBeInTheDocument();
+function fireMessage(payload: ChatMessageEventDto) {
+  act(() => {
+    listenHandlers.get('chat-message')?.({ payload });
+  });
+}
 
-    // Wait for the subscription to be registered.
+describe('ChatWindow', () => {
+  beforeEach(() => {
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue(null);
+  });
+
+  it('shows user and streamed assistant messages', async () => {
+    render(<ChatWindow />);
     await act(async () => {});
-    const payload: TranscriptEventDto = {
+
+    fireMessage({
       schema_version: 1,
+      turn_id: 1,
+      role: 'user',
       text: 'こんにちは',
-    };
-    act(() => {
-      listenHandlers.get('stt-transcript')?.({ payload });
+    });
+    fireMessage({
+      schema_version: 1,
+      turn_id: 1,
+      role: 'assistant',
+      text: 'やあ、こんにちは。',
     });
 
-    expect(screen.getByText('こんにちは')).toBeInTheDocument();
-    expect(
-      screen.queryByText('まだメッセージはありません。'),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(/こんにちは$/)).toBeInTheDocument();
+    expect(screen.getByText('やあ、こんにちは。')).toBeInTheDocument();
+  });
+
+  it('sends the draft through send_chat_message', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText('メッセージ'), {
+      target: { value: '今日の予定は?' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+
+    expect(invokeMock).toHaveBeenCalledWith('send_chat_message', {
+      text: '今日の予定は?',
+    });
+    expect(screen.getByLabelText('メッセージ')).toHaveValue('');
+  });
+
+  it('cancels generation with the stop button', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole('button', { name: '停止' }));
+
+    expect(invokeMock).toHaveBeenCalledWith('cancel_turn');
+  });
+
+  it('shows thinking status from conversation-state events', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+
+    const payload: ConversationStateEventDto = {
+      schema_version: 1,
+      state: 'thinking',
+      message: null,
+    };
+    act(() => {
+      listenHandlers.get('conversation-state')?.({ payload });
+    });
+
+    expect(screen.getByRole('status')).toHaveTextContent('考え中…');
   });
 });

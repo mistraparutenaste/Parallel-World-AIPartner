@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-llm-settings"
+description = "Enables the get_llm_settings command without any pre-configured scope."
+commands.allow = ["get_llm_settings"]
+
+[[permission]]
+identifier = "deny-get-llm-settings"
+description = "Denies the get_llm_settings command without any pre-configured scope."
+commands.deny = ["get_llm_settings"]

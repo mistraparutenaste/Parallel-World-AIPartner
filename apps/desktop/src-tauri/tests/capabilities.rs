@@ -66,10 +66,23 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
 }
 
 #[test]
-fn chat_capability_exposes_only_get_app_status() {
+fn chat_capability_exposes_status_and_chat_commands_only() {
     let (json, permissions) = capability_permissions("chat");
     assert_eq!(json["windows"], serde_json::json!(["chat"]));
-    assert_eq!(custom_permissions(&permissions), ["allow-get-app-status"]);
+    assert_eq!(
+        custom_permissions(&permissions),
+        [
+            "allow-get-app-status",
+            "allow-send-chat-message",
+            "allow-cancel-turn"
+        ]
+    );
+    for permission in &permissions {
+        assert!(
+            !permission.contains("llm-settings"),
+            "llm settings command leaked into chat: {permission}"
+        );
+    }
 }
 
 #[test]
@@ -87,7 +100,9 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-start-listening",
             "allow-stop-listening",
             "allow-set-capture-enabled",
-            "allow-get-audio-diagnostics"
+            "allow-get-audio-diagnostics",
+            "allow-get-llm-settings",
+            "allow-set-llm-settings"
         ]
     );
 }

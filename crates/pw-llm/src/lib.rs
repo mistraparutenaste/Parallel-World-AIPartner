@@ -4,4 +4,4 @@ mod client;
 mod endpoint;
 
 pub use client::{LlmClientConfig, OpenAiCompatClient};
-pub use endpoint::EndpointError;
+pub use endpoint::{EndpointError, validate_base_url};

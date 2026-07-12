@@ -1,8 +1,10 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Settings window: diagnostics and configuration. Exposes app status, character control, microphone and STT control.",
-  "windows": ["settings"],
+  "description": "Settings window: diagnostics and configuration. Exposes app status, character control, microphone / STT control and LLM settings.",
+  "windows": [
+    "settings"
+  ],
   "permissions": [
     "core:default",
     "allow-get-app-status",
@@ -13,6 +15,8 @@
     "allow-start-listening",
     "allow-stop-listening",
     "allow-set-capture-enabled",
-    "allow-get-audio-diagnostics"
+    "allow-get-audio-diagnostics",
+    "allow-get-llm-settings",
+    "allow-set-llm-settings"
   ]
 }

@@ -3,3 +3,4 @@
 pub mod app_status;
 pub mod audio;
 pub mod character;
+pub mod chat;

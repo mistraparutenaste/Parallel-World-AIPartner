@@ -1,26 +1,75 @@
-import type { TranscriptEventDto } from '@parallel-world/contracts';
+import type {
+  ChatMessageEventDto,
+  ConversationStateEventDto,
+} from '@parallel-world/contracts';
+import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
+
+const STATE_LABELS: Partial<Record<ConversationStateEventDto['state'], string>> =
+  {
+    thinking: '考え中…',
+    speaking: '返答中…',
+    llm_unavailable: 'LLMに接続できません',
+  };
+
+type DisplayMessage = {
+  role: 'user' | 'assistant';
+  text: string;
+};
 
 /**
  * Conversation history and text input window.
  *
- * Recognized speech arrives as `stt-transcript` events and is
- * appended to the history. The history region is a polite live
- * region so appended messages are announced without stealing focus.
- * The stop button is always visible so speech can be interrupted at
- * any time.
+ * User messages (typed or recognized speech) and streamed assistant
+ * sentences arrive as `chat-message` events; generation status
+ * arrives as `conversation-state` events. The stop button cancels
+ * the in-flight turn.
  */
 export function ChatWindow() {
-  const [messages, setMessages] = useState<string[]>([]);
+  const [messages, setMessages] = useState<DisplayMessage[]>([]);
+  const [draft, setDraft] = useState('');
+  const [stateLabel, setStateLabel] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(
-    () =>
-      subscribeEvent<TranscriptEventDto>('stt-transcript', (payload) => {
-        setMessages((current) => [...current, payload.text]);
-      }),
-    [],
-  );
+  useEffect(() => {
+    const stopMessages = subscribeEvent<ChatMessageEventDto>(
+      'chat-message',
+      (payload) => {
+        setMessages((current) => [
+          ...current,
+          { role: payload.role, text: payload.text },
+        ]);
+      },
+    );
+    const stopState = subscribeEvent<ConversationStateEventDto>(
+      'conversation-state',
+      (payload) => {
+        setStateLabel(STATE_LABELS[payload.state] ?? null);
+        setError(payload.message ?? null);
+      },
+    );
+    return () => {
+      stopMessages();
+      stopState();
+    };
+  }, []);
+
+  const send = () => {
+    const text = draft.trim();
+    if (text === '') {
+      return;
+    }
+    setDraft('');
+    setError(null);
+    invoke('send_chat_message', { text }).catch((problem: unknown) => {
+      setError(String(problem));
+    });
+  };
+
+  const stop = () => {
+    invoke('cancel_turn').catch(() => {});
+  };
 
   return (
     <main aria-label="チャット">
@@ -32,16 +81,40 @@ export function ChatWindow() {
             {messages.map((message, index) => (
               // History is append-only, so the index is stable.
               // eslint-disable-next-line react/no-array-index-key
-              <li key={index}>{message}</li>
+              <li key={index} data-role={message.role}>
+                {message.role === 'user' ? 'あなた: ' : ''}
+                {message.text}
+              </li>
             ))}
           </ul>
         )}
+        {stateLabel !== null && <p role="status">{stateLabel}</p>}
+        {error !== null && <p role="alert">{error}</p>}
       </section>
-      <form>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          send();
+        }}
+      >
         <label htmlFor="chat-message">メッセージ</label>
-        <textarea id="chat-message" name="message" rows={2} />
+        <textarea
+          id="chat-message"
+          name="message"
+          rows={2}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.shiftKey) {
+              event.preventDefault();
+              send();
+            }
+          }}
+        />
         <button type="submit">送信</button>
-        <button type="button">停止</button>
+        <button type="button" onClick={stop}>
+          停止
+        </button>
       </form>
     </main>
   );

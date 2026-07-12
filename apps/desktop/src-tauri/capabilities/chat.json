@@ -1,7 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "chat",
-  "description": "Chat window: conversation history and text input. Only the get_app_status command is exposed.",
-  "windows": ["chat"],
-  "permissions": ["core:default", "allow-get-app-status"]
+  "description": "Chat window: conversation history and text input. Exposes app status, message submission and turn cancellation.",
+  "windows": [
+    "chat"
+  ],
+  "permissions": [
+    "core:default",
+    "allow-get-app-status",
+    "allow-send-chat-message",
+    "allow-cancel-turn"
+  ]
 }

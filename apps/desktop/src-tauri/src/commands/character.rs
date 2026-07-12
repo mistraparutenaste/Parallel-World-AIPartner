@@ -20,6 +20,24 @@ pub struct CharacterState {
     manifest: Mutex<Option<CharacterManifest>>,
 }
 
+impl CharacterState {
+    /// Expression and motion-group names of the loaded model, when a
+    /// manifest has been fetched.
+    #[must_use]
+    pub fn manifest_summary(&self) -> Option<(Vec<String>, Vec<String>)> {
+        let guard = self.manifest.lock().ok()?;
+        let manifest = guard.as_ref()?;
+        Some((
+            manifest.expressions.clone(),
+            manifest
+                .motion_groups
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+        ))
+    }
+}
+
 fn load_manifest(layout: &AppDataLayout) -> Result<CharacterManifest, String> {
     let model_path = find_first_model3(&layout.characters).ok_or_else(|| {
         format!(

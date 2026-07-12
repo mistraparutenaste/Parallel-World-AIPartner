@@ -8,6 +8,7 @@ pub mod dto;
 
 pub use dto::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, ConversationStateDto, MotionGroupDto, SCHEMA_VERSION, SttPhaseDto,
+    CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationStateDto,
+    ConversationStateEventDto, LlmSettingsDto, MotionGroupDto, SCHEMA_VERSION, SttPhaseDto,
     SttStateEventDto, TranscriptEventDto,
 };

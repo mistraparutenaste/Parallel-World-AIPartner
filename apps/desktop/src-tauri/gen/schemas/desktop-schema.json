@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the cancel_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-turn",
+          "markdownDescription": "Enables the cancel_turn command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_app_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-app-status",
@@ -195,10 +201,22 @@
           "markdownDescription": "Enables the get_character_manifest command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_llm_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-llm-settings",
+          "markdownDescription": "Enables the get_llm_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-microphones",
           "markdownDescription": "Enables the list_microphones command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the send_chat_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-send-chat-message",
+          "markdownDescription": "Enables the send_chat_message command without any pre-configured scope."
         },
         {
           "description": "Enables the set_capture_enabled command without any pre-configured scope.",
@@ -219,6 +237,12 @@
           "markdownDescription": "Enables the set_expression command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_llm_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-llm-settings",
+          "markdownDescription": "Enables the set_llm_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_listening command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-listening",
@@ -235,6 +259,12 @@
           "type": "string",
           "const": "allow-stop-listening",
           "markdownDescription": "Enables the stop_listening command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_turn command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-turn",
+          "markdownDescription": "Denies the cancel_turn command without any pre-configured scope."
         },
         {
           "description": "Denies the get_app_status command without any pre-configured scope.",
@@ -255,10 +285,22 @@
           "markdownDescription": "Denies the get_character_manifest command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_llm_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-llm-settings",
+          "markdownDescription": "Denies the get_llm_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-microphones",
           "markdownDescription": "Denies the list_microphones command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the send_chat_message command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-send-chat-message",
+          "markdownDescription": "Denies the send_chat_message command without any pre-configured scope."
         },
         {
           "description": "Denies the set_capture_enabled command without any pre-configured scope.",
@@ -277,6 +319,12 @@
           "type": "string",
           "const": "deny-set-expression",
           "markdownDescription": "Denies the set_expression command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_llm_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-llm-settings",
+          "markdownDescription": "Denies the set_llm_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the start_listening command without any pre-configured scope.",

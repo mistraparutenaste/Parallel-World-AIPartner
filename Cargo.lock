@@ -2339,6 +2339,7 @@ dependencies = [
  "pw-audio",
  "pw-contracts",
  "pw-domain",
+ "pw-llm",
  "pw-platform",
  "pw-stt-sherpa",
  "serde",

@@ -12,6 +12,11 @@ pub enum EndpointError {
 
 /// Parses and validates the base URL. Non-loopback hosts are only
 /// accepted when `allow_remote` is set (設計spec 5章).
+///
+/// # Errors
+///
+/// Returns [`EndpointError`] for unparsable URLs, non-HTTP schemes,
+/// or remote hosts without `allow_remote`.
 pub fn validate_base_url(base_url: &str, allow_remote: bool) -> Result<Url, EndpointError> {
     let url = Url::parse(base_url).map_err(|error| EndpointError::Invalid(error.to_string()))?;
     if !matches!(url.scheme(), "http" | "https") {
