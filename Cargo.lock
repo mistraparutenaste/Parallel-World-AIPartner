@@ -2606,6 +2606,7 @@ name = "pw-stt-sherpa"
 version = "0.1.0"
 dependencies = [
  "pw-application",
+ "pw-domain",
  "sherpa-onnx",
  "thiserror 2.0.18",
  "tracing",

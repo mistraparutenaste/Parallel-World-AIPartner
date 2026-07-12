@@ -37,6 +37,24 @@ node tools/scripts/sync-live2d-dev-assets.mjs
 
 既定モデルは `epsilon_free`（`project-input/live2d/selected/` が必要）。コピー先は `%APPDATA%/com.parallelworld.desktop/characters/`。
 
+## VAD / STTモデルの配置
+
+音声認識には Silero VAD（約2MB）と ReazonSpeech（約700MB）が必要。manifest（URL / SHA-256 / ライセンス）は `content/model-manifests/` にあり、次でapp dataへ配置する（SHA-256検証付き）。
+
+```powershell
+node tools/scripts/download-stt-models.mjs
+```
+
+未配置でもアプリは起動し、音声認識のみ「利用できません」へ縮退する（テキスト入力は影響なし）。
+
+実モデルの受け入れテスト（無音10分で送信0件、実音声認識）:
+
+```powershell
+$env:PW_VAD_MODEL=".models-dev/silero_vad.onnx"
+$env:PW_STT_MODEL_DIR=".models-dev/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01"
+cargo test -p pw-stt-sherpa --test e2e_pipeline -- --ignored
+```
+
 ## 開発起動
 
 ```powershell

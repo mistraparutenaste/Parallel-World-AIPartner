@@ -9,8 +9,8 @@ Phase 0（アプリケーション基盤）実装済み。
 | Phase | 内容 | 状態 |
 | --- | --- | --- |
 | 0 | workspace、3ウィンドウ、型付きIPC、Capability、ログ、CI | 実装済み |
-| 1 | Live2D表示 | 未着手 |
-| 2 | マイク入力、VAD、STT | 未着手 |
+| 1 | Live2D表示 | 実装済み |
+| 2 | マイク入力、VAD、STT | 実装済み（2時間安定性試験はPhase 6で実施） |
 | 3 | LLM、会話状態機械 | 未着手 |
 | 4 | TTS、リップシンク | 未着手 |
 | 5 | 履歴、記憶（SQLite） | 未着手 |
@@ -21,7 +21,10 @@ Phase 0（アプリケーション基盤）実装済み。
 
 pnpm + Cargo workspaceの段階的モジュラーモノリス。
 
-- `crates/pw-domain` — 外部I/O非依存の会話ドメイン
+- `crates/pw-domain` — 外部I/O非依存の会話・発話ドメイン
+- `crates/pw-application` — port定義とユースケース（音声パイプライン等）
+- `crates/pw-audio` — cpalマイク入力、有界リングバッファ、リサンプラ
+- `crates/pw-stt-sherpa` — sherpa-onnxアダプタ（Silero VAD / ReazonSpeech）
 - `crates/pw-contracts` — IPC契約（Rust DTO → ts-rsでTypeScript型を生成）
 - `crates/pw-platform` — アプリデータレイアウト、ログ
 - `packages/contracts` — 生成されたTypeScript契約（手編集禁止）
