@@ -3,6 +3,20 @@
  * never touch WebGL, the Core global or the vendored framework.
  */
 
+/**
+ * Where a model lives and how to reach its resources.
+ *
+ * URL-space resolution is impossible for Tauri asset URLs (the whole
+ * filesystem path is one encoded segment), so the embedder supplies a
+ * resolver that maps model3.json-relative paths to fetchable URLs.
+ */
+export interface ModelSource {
+  /** Fetchable URL of the model3.json itself. */
+  modelUrl: string;
+  /** Maps a path relative to the model3.json to a fetchable URL. */
+  resolveResource: (relativePath: string) => string;
+}
+
 /** A loaded, renderable character model. */
 export interface ModelHandle {
   /** Expression names declared by the model, in manifest order. */
@@ -34,7 +48,7 @@ export interface CubismRuntime {
    */
   start(canvas: HTMLCanvasElement): Promise<void>;
   /** Loads a model and makes it the rendered model. */
-  loadModel(modelUrl: string): Promise<ModelHandle>;
+  loadModel(source: ModelSource): Promise<ModelHandle>;
   /** Propagates a resize of the canvas backing store (physical px). */
   resize(width: number, height: number): void;
   /** Stops the render loop and releases runtime resources. */

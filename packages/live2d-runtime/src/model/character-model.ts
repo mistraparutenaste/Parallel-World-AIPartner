@@ -31,8 +31,8 @@ import { CubismLookUpdater } from '../../vendor/framework/src/motion/cubismlooku
 import { CubismPhysicsUpdater } from '../../vendor/framework/src/motion/cubismphysicsupdater';
 import { CubismPoseUpdater } from '../../vendor/framework/src/motion/cubismposeupdater';
 import { CubismUpdateScheduler } from '../../vendor/framework/src/motion/cubismupdatescheduler';
+import type { ModelSource } from '../runtime/cubism-runtime';
 import { resolveIdleGroup } from './idle-group';
-import { modelBaseUrl, resolveResourceUrl } from './model-url';
 
 const PRIORITY_IDLE = 1;
 const PRIORITY_NORMAL = 2;
@@ -51,7 +51,7 @@ export class CharacterModel extends CubismUserModel {
   #gl: GL;
   #canvas: HTMLCanvasElement;
   #shaderPath: string;
-  #baseUrl = '';
+  #source: ModelSource | null = null;
   #setting: ICubismModelSetting | null = null;
   #motions = new Map<string, CubismMotion>();
   #expressionMotions = new Map<string, ACubismMotion>();
@@ -80,10 +80,10 @@ export class CharacterModel extends CubismUserModel {
     return this.#motionGroupCounts;
   }
 
-  /** Loads every resource referenced by the model3.json at the URL. */
-  async load(modelUrl: string): Promise<void> {
-    this.#baseUrl = modelBaseUrl(modelUrl);
-    const settingBuffer = await fetchArrayBuffer(modelUrl);
+  /** Loads every resource referenced by the model3.json source. */
+  async load(source: ModelSource): Promise<void> {
+    this.#source = source;
+    const settingBuffer = await fetchArrayBuffer(source.modelUrl);
     const setting: ICubismModelSetting = new CubismModelSettingJson(
       settingBuffer,
       settingBuffer.byteLength,
@@ -191,13 +191,20 @@ export class CharacterModel extends CubismUserModel {
     super.release();
   }
 
+  #resolveResource(relativePath: string): string {
+    if (this.#source == null) {
+      throw new Error('model source is not set');
+    }
+    return this.#source.resolveResource(relativePath);
+  }
+
   async #loadMoc(setting: ICubismModelSetting): Promise<void> {
     const fileName = setting.getModelFileName();
     if (fileName === '') {
       throw new Error('model3.json does not reference a moc3 file');
     }
     const buffer = await fetchArrayBuffer(
-      resolveResourceUrl(this.#baseUrl, fileName),
+      this.#resolveResource(fileName),
     );
     this.loadModel(buffer, this._mocConsistency);
   }
@@ -208,7 +215,7 @@ export class CharacterModel extends CubismUserModel {
       const name = setting.getExpressionName(i);
       const file = setting.getExpressionFileName(i);
       const buffer = await fetchArrayBuffer(
-        resolveResourceUrl(this.#baseUrl, file),
+        this.#resolveResource(file),
       );
       const motion = this.loadExpression(buffer, buffer.byteLength, name);
       this.#expressionMotions.set(name, motion);
@@ -227,7 +234,7 @@ export class CharacterModel extends CubismUserModel {
       return;
     }
     const buffer = await fetchArrayBuffer(
-      resolveResourceUrl(this.#baseUrl, fileName),
+      this.#resolveResource(fileName),
     );
     this.loadPhysics(buffer, buffer.byteLength);
     if (this._physics) {
@@ -241,7 +248,7 @@ export class CharacterModel extends CubismUserModel {
       return;
     }
     const buffer = await fetchArrayBuffer(
-      resolveResourceUrl(this.#baseUrl, fileName),
+      this.#resolveResource(fileName),
     );
     this.loadPose(buffer, buffer.byteLength);
     if (this._pose) {
@@ -332,7 +339,7 @@ export class CharacterModel extends CubismUserModel {
       for (let no = 0; no < count; no++) {
         const file = setting.getMotionFileName(group, no);
         const buffer = await fetchArrayBuffer(
-          resolveResourceUrl(this.#baseUrl, file),
+          this.#resolveResource(file),
         );
         const motion = this.loadMotion(
           buffer,
@@ -370,7 +377,7 @@ export class CharacterModel extends CubismUserModel {
       if (file === '') {
         continue;
       }
-      const response = await fetch(resolveResourceUrl(this.#baseUrl, file));
+      const response = await fetch(this.#resolveResource(file));
       if (!response.ok) {
         throw new Error(`failed to fetch texture ${file}: ${response.status}`);
       }

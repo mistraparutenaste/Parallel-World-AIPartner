@@ -11,6 +11,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
 import { StatusBadge } from '../../shared/components/StatusBadge';
+import { createModelSource } from './model-source';
 
 const SHADER_PATH = '/live2d/shaders/';
 
@@ -85,7 +86,9 @@ export function CharacterWindow() {
         if (disposed) {
           return;
         }
-        await instance.loadModel(convertFileSrc(manifest.model_path));
+        await instance.loadModel(
+          createModelSource(manifest.model_path, convertFileSrc),
+        );
       } catch (error) {
         console.error('failed to load the character model', error);
         setLoadError(String(error));

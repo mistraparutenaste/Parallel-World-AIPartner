@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { CubismRuntime, ModelHandle } from '../runtime/cubism-runtime';
+import type {
+  CubismRuntime,
+  ModelHandle,
+  ModelSource,
+} from '../runtime/cubism-runtime';
 import { Live2DController } from './live2d-controller';
 
 function createModelHandle(): ModelHandle {
@@ -20,6 +24,13 @@ function createRuntime(overrides: Partial<CubismRuntime> = {}): CubismRuntime {
     resize: vi.fn(),
     stop: vi.fn(),
     ...overrides,
+  };
+}
+
+function createSource(): ModelSource {
+  return {
+    modelUrl: '/model.model3.json',
+    resolveResource: (relative) => `/${relative}`,
   };
 }
 
@@ -54,7 +65,7 @@ describe('Live2DController', () => {
   it('rejects loading a model before attach', async () => {
     const controller = new Live2DController(createRuntime());
 
-    await expect(controller.loadModel('/model.model3.json')).rejects.toThrow(
+    await expect(controller.loadModel(createSource())).rejects.toThrow(
       'not ready',
     );
   });
@@ -63,7 +74,7 @@ describe('Live2DController', () => {
     const controller = new Live2DController(createRuntime());
     await controller.attach(createCanvas());
 
-    await controller.loadModel('/model.model3.json');
+    await controller.loadModel(createSource());
 
     expect(controller.state).toBe('model-loaded');
     expect(controller.expressions).toEqual(['Normal', 'Smile']);
@@ -77,7 +88,7 @@ describe('Live2DController', () => {
     const controller = new Live2DController(runtime);
     await controller.attach(createCanvas());
 
-    await expect(controller.loadModel('/missing.model3.json')).rejects.toThrow(
+    await expect(controller.loadModel(createSource())).rejects.toThrow(
       '404',
     );
     expect(controller.state).toBe('unavailable');
@@ -98,7 +109,7 @@ describe('Live2DController', () => {
     });
     const controller = new Live2DController(runtime);
     await controller.attach(createCanvas());
-    await controller.loadModel('/model.model3.json');
+    await controller.loadModel(createSource());
 
     expect(controller.setExpression('Smile')).toBe(true);
     expect(handle.setExpression).toHaveBeenCalledWith('Smile');
@@ -126,7 +137,7 @@ describe('Live2DController', () => {
     });
     const controller = new Live2DController(runtime);
     await controller.attach(createCanvas());
-    await controller.loadModel('/model.model3.json');
+    await controller.loadModel(createSource());
 
     controller.dispose();
 

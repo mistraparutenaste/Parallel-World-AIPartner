@@ -11,7 +11,7 @@ import {
 } from '../../vendor/framework/src/live2dcubismframework';
 import { CubismMatrix44 } from '../../vendor/framework/src/math/cubismmatrix44';
 import { CharacterModel } from '../model/character-model';
-import type { CubismRuntime, ModelHandle } from './cubism-runtime';
+import type { CubismRuntime, ModelHandle, ModelSource } from './cubism-runtime';
 import { FrameTimer } from './frame-timer';
 
 export type CubismFrameworkRuntimeOptions = {
@@ -82,14 +82,14 @@ export class CubismFrameworkRuntime implements CubismRuntime {
     this.#scheduleFrame();
   }
 
-  async loadModel(modelUrl: string): Promise<ModelHandle> {
+  async loadModel(source: ModelSource): Promise<ModelHandle> {
     const gl = this.#gl;
     const canvas = this.#canvas;
     if (gl == null || canvas == null) {
       throw new Error('runtime is not started');
     }
     const model = new CharacterModel(gl, canvas, this.#options.shaderPath);
-    await model.load(modelUrl);
+    await model.load(source);
 
     this.#model?.release();
     this.#model = model;

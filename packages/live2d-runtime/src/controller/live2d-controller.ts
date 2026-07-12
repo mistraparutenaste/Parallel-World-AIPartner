@@ -1,4 +1,4 @@
-import type { CubismRuntime, ModelHandle } from '../runtime/cubism-runtime';
+import type { CubismRuntime, ModelHandle, ModelSource } from '../runtime/cubism-runtime';
 
 /** Observable lifecycle states of the controller. */
 export type Live2DControllerState =
@@ -70,12 +70,12 @@ export class Live2DController {
    * Loads a model. Rejects (and settles in `unavailable`) when the
    * model cannot be loaded.
    */
-  async loadModel(modelUrl: string): Promise<void> {
+  async loadModel(source: ModelSource): Promise<void> {
     if (this.#state !== 'ready' && this.#state !== 'model-loaded') {
       throw new Error(`loadModel() called while not ready (${this.#state})`);
     }
     try {
-      const model = await this.#runtime.loadModel(modelUrl);
+      const model = await this.#runtime.loadModel(source);
       this.#model?.release();
       this.#model = model;
       this.#setState('model-loaded');

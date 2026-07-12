@@ -1,6 +1,7 @@
 export type {
   CubismRuntime,
   ModelHandle,
+  ModelSource,
 } from './runtime/cubism-runtime';
 // NOTE: the Cubism framework adapter is intentionally NOT re-exported
 // here: its vendored framework modules reference the Live2DCubismCore
