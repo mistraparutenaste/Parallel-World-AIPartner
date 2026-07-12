@@ -86,6 +86,7 @@ export function CharacterWindow() {
         await instance.loadModel(convertFileSrc(manifest.model_path));
       } catch (error) {
         console.error('failed to load the character model', error);
+        setState('unavailable');
         return;
       }
       const stopExpression = await listen<string>(

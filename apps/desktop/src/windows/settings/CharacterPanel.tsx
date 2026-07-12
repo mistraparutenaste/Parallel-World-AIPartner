@@ -1,6 +1,6 @@
 import type { CharacterManifestDto } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 /**
  * Character section of the settings window: loads the active model's
@@ -11,12 +11,13 @@ export function CharacterPanel() {
   const [manifest, setManifest] = useState<CharacterManifestDto | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadManifest = useCallback(() => {
     let cancelled = false;
     invoke<CharacterManifestDto>('get_character_manifest')
       .then((loaded) => {
         if (!cancelled) {
           setManifest(loaded);
+          setMessage(null);
         }
       })
       .catch((error: unknown) => {
@@ -28,6 +29,8 @@ export function CharacterPanel() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => loadManifest(), [loadManifest]);
 
   const applyExpression = (name: string) => {
     if (name === '') {
@@ -48,6 +51,11 @@ export function CharacterPanel() {
     <section aria-label="キャラクター設定">
       <h2>キャラクター</h2>
       {message !== null && <p role="alert">{message}</p>}
+      {manifest === null && (
+        <button type="button" onClick={() => loadManifest()}>
+          再読み込み
+        </button>
+      )}
       {manifest !== null && (
         <>
           <div>

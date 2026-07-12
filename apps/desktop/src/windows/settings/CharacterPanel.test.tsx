@@ -65,4 +65,18 @@ describe('CharacterPanel', () => {
       'キャラクターモデルを読み込めません',
     );
   });
+
+  it('reloads the manifest when retry is clicked after a failure', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('no character model'));
+    invokeMock.mockResolvedValueOnce(MANIFEST);
+    render(<CharacterPanel />);
+    const retry = await screen.findByRole('button', { name: '再読み込み' });
+
+    fireEvent.click(retry);
+
+    expect(
+      await screen.findByRole('option', { name: 'Smile' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
 });
