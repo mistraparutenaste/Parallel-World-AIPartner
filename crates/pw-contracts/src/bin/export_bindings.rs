@@ -7,8 +7,9 @@ use std::fs;
 use std::path::Path;
 
 use pw_contracts::{
-    AppStatusDto, CharacterCursorEventDto, CharacterManifestDto, ConversationStateDto,
-    MotionGroupDto,
+    AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
+    CharacterManifestDto, ConversationStateDto, MotionGroupDto, SttPhaseDto, SttStateEventDto,
+    TranscriptEventDto,
 };
 use ts_rs::{Config, TS};
 
@@ -22,6 +23,12 @@ fn main() {
     CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
     MotionGroupDto::export_all(&config).expect("export MotionGroupDto bindings");
     CharacterCursorEventDto::export_all(&config).expect("export CharacterCursorEventDto bindings");
+    AudioDeviceDto::export_all(&config).expect("export AudioDeviceDto bindings");
+    AudioDiagnosticsDto::export_all(&config).expect("export AudioDiagnosticsDto bindings");
+    AudioLevelEventDto::export_all(&config).expect("export AudioLevelEventDto bindings");
+    SttPhaseDto::export_all(&config).expect("export SttPhaseDto bindings");
+    SttStateEventDto::export_all(&config).expect("export SttStateEventDto bindings");
+    TranscriptEventDto::export_all(&config).expect("export TranscriptEventDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

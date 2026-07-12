@@ -7,6 +7,7 @@ pub mod bootstrap;
 pub mod character;
 pub mod commands;
 pub mod error;
+pub mod speech;
 pub mod windows;
 
 use tauri::Manager;
@@ -20,12 +21,18 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(commands::character::CharacterState::default())
+        .manage(speech::SpeechService::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
             commands::character::set_expression,
             commands::character::start_motion,
-            commands::character::set_click_through
+            commands::character::set_click_through,
+            commands::audio::list_microphones,
+            commands::audio::start_listening,
+            commands::audio::stop_listening,
+            commands::audio::set_capture_enabled,
+            commands::audio::get_audio_diagnostics
         ])
         .setup(|app| {
             let layout = bootstrap::initialize(app.handle())?;

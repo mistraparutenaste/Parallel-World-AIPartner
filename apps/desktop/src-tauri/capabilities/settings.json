@@ -1,13 +1,18 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "settings",
-  "description": "Settings window: diagnostics and configuration. Exposes app status, character manifest and expression/motion control.",
+  "description": "Settings window: diagnostics and configuration. Exposes app status, character control, microphone and STT control.",
   "windows": ["settings"],
   "permissions": [
     "core:default",
     "allow-get-app-status",
     "allow-get-character-manifest",
     "allow-set-expression",
-    "allow-start-motion"
+    "allow-start-motion",
+    "allow-list-microphones",
+    "allow-start-listening",
+    "allow-stop-listening",
+    "allow-set-capture-enabled",
+    "allow-get-audio-diagnostics"
   ]
 }

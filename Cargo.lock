@@ -2316,8 +2316,12 @@ dependencies = [
 name = "parallel-world-desktop"
 version = "0.1.0"
 dependencies = [
+ "pw-application",
+ "pw-audio",
  "pw-contracts",
+ "pw-domain",
  "pw-platform",
+ "pw-stt-sherpa",
  "serde",
  "serde_json",
  "tauri",

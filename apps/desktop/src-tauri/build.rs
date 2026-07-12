@@ -8,6 +8,11 @@ fn main() {
             "set_expression",
             "start_motion",
             "set_click_through",
+            "list_microphones",
+            "start_listening",
+            "stop_listening",
+            "set_capture_enabled",
+            "get_audio_diagnostics",
         ]),
     ))
     .expect("failed to run tauri build script");

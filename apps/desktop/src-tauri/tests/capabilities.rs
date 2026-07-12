@@ -54,6 +54,10 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
             !permission.contains("set-expression") && !permission.contains("start-motion"),
             "state-changing character command leaked: {permission}"
         );
+        assert!(
+            !permission.contains("microphone") && !permission.contains("listening"),
+            "audio command leaked into character: {permission}"
+        );
     }
     assert_eq!(
         custom_permissions(&permissions),
@@ -69,7 +73,7 @@ fn chat_capability_exposes_only_get_app_status() {
 }
 
 #[test]
-fn settings_capability_exposes_status_and_character_control() {
+fn settings_capability_exposes_status_character_and_audio_control() {
     let (json, permissions) = capability_permissions("settings");
     assert_eq!(json["windows"], serde_json::json!(["settings"]));
     assert_eq!(
@@ -78,7 +82,23 @@ fn settings_capability_exposes_status_and_character_control() {
             "allow-get-app-status",
             "allow-get-character-manifest",
             "allow-set-expression",
-            "allow-start-motion"
+            "allow-start-motion",
+            "allow-list-microphones",
+            "allow-start-listening",
+            "allow-stop-listening",
+            "allow-set-capture-enabled",
+            "allow-get-audio-diagnostics"
         ]
     );
+}
+
+#[test]
+fn chat_capability_never_gains_microphone_control() {
+    let (_, permissions) = capability_permissions("chat");
+    for permission in &permissions {
+        assert!(
+            !permission.contains("microphone") && !permission.contains("listening"),
+            "audio command leaked into chat: {permission}"
+        );
+    }
 }

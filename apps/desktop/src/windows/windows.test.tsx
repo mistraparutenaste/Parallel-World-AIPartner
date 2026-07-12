@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { CharacterWindow } from './character/CharacterWindow';
 import { ChatWindow } from './chat/ChatWindow';
@@ -30,6 +30,7 @@ describe('desktop windows', () => {
   it('renders settings navigation', () => {
     render(<SettingsWindow />);
     expect(screen.getByRole('heading', { name: '設定' })).toBeInTheDocument();
-    expect(screen.getByText('マイク')).toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: '設定メニュー' });
+    expect(within(nav).getByText('マイク')).toBeInTheDocument();
   });
 });
