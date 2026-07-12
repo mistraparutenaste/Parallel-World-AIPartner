@@ -16,6 +16,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+pw-domain = { workspace = true }
 tiny_http = { workspace = true }
 
 [lints]
