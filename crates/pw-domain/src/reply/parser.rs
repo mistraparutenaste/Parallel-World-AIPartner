@@ -63,6 +63,14 @@ impl ReplyParser {
             }
             State::Prelude => {
                 self.buffer.push_str(chunk);
+                // Only a first line starting with `{` can be a control
+                // prelude; anything else streams as speech right away.
+                let trimmed = self.buffer.trim_start();
+                if !trimmed.is_empty() && !trimmed.starts_with('{') {
+                    self.state = State::Speech;
+                    let original = std::mem::take(&mut self.buffer);
+                    return vec![ReplyEvent::Speech(original)];
+                }
                 let Some(newline) = self.buffer.find('\n') else {
                     return Vec::new();
                 };

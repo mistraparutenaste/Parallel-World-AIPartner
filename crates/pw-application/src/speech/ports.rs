@@ -2,10 +2,7 @@
 
 use pw_domain::speech::RejectionReason;
 
-/// Failure inside an adapter. Messages must not contain secrets.
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct PortError(pub String);
+pub use crate::port_error::PortError;
 
 /// Result of one frame read from the audio source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

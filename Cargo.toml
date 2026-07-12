@@ -6,6 +6,7 @@ members = [
     "crates/pw-audio",
     "crates/pw-contracts",
     "crates/pw-domain",
+    "crates/pw-llm",
     "crates/pw-platform",
     "crates/pw-stt-sherpa",
 ]
@@ -22,8 +23,10 @@ pw-application = { path = "crates/pw-application" }
 pw-audio = { path = "crates/pw-audio" }
 pw-contracts = { path = "crates/pw-contracts" }
 pw-domain = { path = "crates/pw-domain" }
+pw-llm = { path = "crates/pw-llm" }
 pw-platform = { path = "crates/pw-platform" }
 pw-stt-sherpa = { path = "crates/pw-stt-sherpa" }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
 rtrb = "0.3.4"
 # 4.0はaudioadapter前提のAPI刷新直後のため、実績のある0.16系を使用
 rubato = "0.16"
@@ -33,11 +36,13 @@ sherpa-onnx = "1.13.4"
 tauri = { version = "2.11.5", features = ["macos-private-api", "protocol-asset"] }
 tauri-build = { version = "2.6.3", features = [] }
 tauri-plugin-window-state = "2"
+tiny_http = "0.12"
 thiserror = "2.0"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ts-rs = { version = "12.0.1", features = ["serde-compat"] }
+url = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
