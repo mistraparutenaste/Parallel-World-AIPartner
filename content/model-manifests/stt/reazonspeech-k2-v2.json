@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "reazonspeech-k2-v2",
+  "kind": "stt",
+  "name": "ReazonSpeech k2 v2 (sherpa-onnx zipformer, 日本語)",
+  "file": "sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2",
+  "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-zipformer-ja-reazonspeech-2024-08-01.tar.bz2",
+  "size_bytes": 713097333,
+  "sha256": "e0981d0d5d7b446d41010831b59091ebf57d2aa7b79980f67ca37af460b5842d",
+  "license": "Apache-2.0",
+  "license_url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2",
+  "install_dir": "models/stt/reazonspeech-k2-v2",
+  "files": [
+    "encoder-epoch-99-avg-1.onnx",
+    "decoder-epoch-99-avg-1.onnx",
+    "joiner-epoch-99-avg-1.onnx",
+    "tokens.txt"
+  ]
+}

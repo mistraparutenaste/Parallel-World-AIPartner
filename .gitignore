@@ -17,6 +17,9 @@
 # 開発用モデル（Live2Dサンプルデータ規約によりコミット禁止）
 /apps/desktop/public/live2d/models/
 
+# VAD/STTモデルのローカルキャッシュ（manifestで管理、本体はコミット禁止）
+/.models-dev/
+
 # Isolated implementation worktrees
 /.worktrees/
 
