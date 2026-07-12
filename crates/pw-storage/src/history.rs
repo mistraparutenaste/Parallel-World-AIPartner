@@ -104,10 +104,18 @@ impl ConversationHistory for SqliteConversationHistory {
             "INSERT INTO conversations (id, created_at, updated_at, next_turn_id) VALUES (?1, ?2, ?2, 1)
              ON CONFLICT(id) DO NOTHING", params![conversation_id, created_at],
         ).map_err(adapter_error)?;
-        let reserved: i64 = transaction.query_row(
-            "UPDATE conversations SET next_turn_id = next_turn_id + 1, updated_at = MAX(updated_at, ?2)
-             WHERE id = ?1 RETURNING next_turn_id - 1", params![conversation_id, created_at], |row| row.get(0),
+        transaction.execute(
+            "INSERT INTO conversation_turn_sequences (conversation_id, next_turn_id) VALUES (?1, 1)
+             ON CONFLICT(conversation_id) DO NOTHING", [conversation_id],
         ).map_err(adapter_error)?;
+        let reserved: i64 = transaction
+            .query_row(
+                "UPDATE conversation_turn_sequences SET next_turn_id = next_turn_id + 1
+             WHERE conversation_id = ?1 RETURNING next_turn_id - 1",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .map_err(adapter_error)?;
         transaction.commit().map_err(adapter_error)?;
         u64::try_from(reserved).map_err(adapter_error)
     }
@@ -532,5 +540,13 @@ mod tests {
         let mut reopened = SqliteConversationHistory::new(Database::open(&path).unwrap());
         assert_eq!(reopened.reserve_turn_id("chat", 3).unwrap(), 3);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleting_and_recreating_conversation_does_not_reset_sequence() {
+        let mut history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
+        assert_eq!(history.reserve_turn_id("chat", 1).unwrap(), 1);
+        assert!(history.delete_conversation("chat").unwrap());
+        assert_eq!(history.reserve_turn_id("chat", 2).unwrap(), 2);
     }
 }

@@ -2,7 +2,8 @@
 //! maps control JSON onto the character.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -193,10 +194,20 @@ impl Worker {
 }
 
 /// Managed state: at most one conversation worker.
-#[derive(Default)]
 pub struct ChatService {
     worker: Mutex<Option<Worker>>,
     cancel: Arc<AtomicBool>,
+    fallback_turn_id: AtomicU64,
+}
+
+impl Default for ChatService {
+    fn default() -> Self {
+        Self {
+            worker: Mutex::new(None),
+            cancel: Arc::new(AtomicBool::new(false)),
+            fallback_turn_id: AtomicU64::new(1_u64 << 63),
+        }
+    }
 }
 
 fn fingerprint(settings: &LlmSettingsDto) -> String {
@@ -212,6 +223,23 @@ fn fingerprint(settings: &LlmSettingsDto) -> String {
 }
 
 impl ChatService {
+    fn reserve_turn_id(&self, database_path: &Path) -> u64 {
+        let durable = Database::open(database_path)
+            .map_err(|error| error.to_string())
+            .and_then(|database| {
+                SqliteConversationHistory::new(database)
+                    .reserve_turn_id(DEFAULT_CONVERSATION_ID, unix_timestamp())
+                    .map_err(|error| error.to_string())
+            });
+        match durable {
+            Ok(id) => id,
+            Err(error) => {
+                let id = self.fallback_turn_id.fetch_add(1, Ordering::SeqCst);
+                tracing::warn!(%error, turn_id = id, "durable turn allocator unavailable; using process fallback range");
+                id
+            }
+        }
+    }
     fn lock(&self) -> MutexGuard<'_, Option<Worker>> {
         self.worker
             .lock()
@@ -244,12 +272,7 @@ impl ChatService {
             return Err("conversation worker is not available".to_owned());
         };
         let database_path = layout.data.join("parallel-world.sqlite3");
-        let mut allocator = SqliteConversationHistory::new(
-            Database::open(&database_path).map_err(|error| error.to_string())?,
-        );
-        let turn_id = allocator
-            .reserve_turn_id(DEFAULT_CONVERSATION_ID, unix_timestamp())
-            .map_err(|error| error.to_string())?;
+        let turn_id = self.reserve_turn_id(&database_path);
         worker
             .tx
             .send(Command::Submit(text, turn_id))
@@ -551,5 +574,26 @@ mod tests {
             persisted.load(Ordering::SeqCst),
             "new worker would have seeded too early"
         );
+    }
+
+    #[test]
+    fn allocator_falls_back_on_database_failure_and_never_collides_after_recovery() {
+        let service = ChatService::default();
+        let invalid = std::env::temp_dir()
+            .join("missing-parent")
+            .join("db.sqlite3");
+        let first = service.reserve_turn_id(&invalid);
+        let second = service.reserve_turn_id(&invalid);
+        assert!(first >= (1_u64 << 63));
+        assert_eq!(second, first + 1);
+
+        let path = std::env::temp_dir().join(format!(
+            "pw-allocator-recovery-{}.sqlite3",
+            std::process::id()
+        ));
+        let recovered = service.reserve_turn_id(&path);
+        assert!(recovered < (1_u64 << 63));
+        assert_ne!(recovered, first);
+        let _ = std::fs::remove_file(path);
     }
 }
