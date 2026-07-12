@@ -45,6 +45,13 @@ pub trait ConversationHistory: Send {
     /// # Errors
     /// Returns an adapter error when history cannot be queried.
     fn max_turn_id(&self, conversation_id: &str) -> Result<Option<u64>, PortError>;
+
+    /// Transactionally reserves and returns a never-reused turn id.
+    ///
+    /// # Errors
+    /// Returns an adapter error when the sequence cannot be advanced.
+    fn reserve_turn_id(&mut self, conversation_id: &str, created_at: i64)
+    -> Result<u64, PortError>;
     /// Creates a conversation or updates its latest activity timestamp.
     ///
     /// # Errors

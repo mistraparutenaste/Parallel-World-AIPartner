@@ -42,6 +42,14 @@ impl TurnTracker {
         id
     }
 
+    /// Adopts an id reserved by durable storage.
+    pub fn begin_reserved(&mut self, value: u64) -> TurnId {
+        self.next = self.next.max(value);
+        let id = TurnId(value);
+        self.current = Some(id);
+        id
+    }
+
     /// True when the id belongs to the active turn.
     #[must_use]
     pub fn is_current(&self, id: TurnId) -> bool {

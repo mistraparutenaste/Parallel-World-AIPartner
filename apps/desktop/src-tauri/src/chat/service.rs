@@ -171,7 +171,7 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
 }
 
 enum Command {
-    Submit(String),
+    Submit(String, u64),
     Shutdown,
 }
 
@@ -243,9 +243,16 @@ impl ChatService {
         let Some(worker) = guard.as_ref() else {
             return Err("conversation worker is not available".to_owned());
         };
+        let database_path = layout.data.join("parallel-world.sqlite3");
+        let mut allocator = SqliteConversationHistory::new(
+            Database::open(&database_path).map_err(|error| error.to_string())?,
+        );
+        let turn_id = allocator
+            .reserve_turn_id(DEFAULT_CONVERSATION_ID, unix_timestamp())
+            .map_err(|error| error.to_string())?;
         worker
             .tx
-            .send(Command::Submit(text))
+            .send(Command::Submit(text, turn_id))
             .map_err(|_| "conversation worker is not available".to_owned())
     }
 
@@ -315,9 +322,9 @@ impl ChatService {
                 );
                 while let Ok(command) = rx.recv() {
                     match command {
-                        Command::Submit(text) => {
+                        Command::Submit(text, turn_id) => {
                             orchestrator.recover();
-                            orchestrator.submit_user_text(&text);
+                            orchestrator.submit_user_text_with_id(&text, turn_id);
                         }
                         Command::Shutdown => break,
                     }
@@ -526,7 +533,7 @@ mod tests {
         let thread = std::thread::spawn(move || {
             while let Ok(command) = rx.recv() {
                 match command {
-                    Command::Submit(_) => worker_persisted.store(true, Ordering::SeqCst),
+                    Command::Submit(_, _) => worker_persisted.store(true, Ordering::SeqCst),
                     Command::Shutdown => break,
                 }
             }
@@ -536,7 +543,7 @@ mod tests {
             settings_fingerprint: "old".into(),
             thread: Some(thread),
         };
-        worker.tx.send(Command::Submit("turn".into())).unwrap();
+        worker.tx.send(Command::Submit("turn".into(), 1)).unwrap();
 
         worker.shutdown().unwrap();
 

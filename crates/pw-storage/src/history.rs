@@ -34,6 +34,31 @@ impl ConversationHistory for SqliteConversationHistory {
             .connection_mut()
             .transaction()
             .map_err(adapter_error)?;
+        let existing: Vec<(String, String)> = {
+            let mut statement = transaction.prepare(
+                "SELECT role, content FROM messages WHERE conversation_id = ?1 AND turn_id = ?2 ORDER BY role"
+            ).map_err(adapter_error)?;
+            statement
+                .query_map(params![turn.conversation_id, turn_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+                .map_err(adapter_error)?
+                .collect::<Result<_, _>>()
+                .map_err(adapter_error)?
+        };
+        if !existing.is_empty() {
+            let expected = vec![
+                ("assistant".to_owned(), turn.assistant_content.clone()),
+                ("user".to_owned(), turn.user_content.clone()),
+            ];
+            if existing == expected {
+                return Ok(());
+            }
+            return Err(PortError(
+                "conversation history storage failed: turn id already contains different content"
+                    .into(),
+            ));
+        }
         transaction.execute(
             "INSERT INTO conversations (id, created_at, updated_at) VALUES (?1, ?2, ?2)
              ON CONFLICT(id) DO UPDATE SET updated_at = MAX(conversations.updated_at, excluded.updated_at)",
@@ -63,6 +88,28 @@ impl ConversationHistory for SqliteConversationHistory {
             )
             .map_err(adapter_error)?;
         value.map(u64::try_from).transpose().map_err(adapter_error)
+    }
+
+    fn reserve_turn_id(
+        &mut self,
+        conversation_id: &str,
+        created_at: i64,
+    ) -> Result<u64, PortError> {
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(adapter_error)?;
+        transaction.execute(
+            "INSERT INTO conversations (id, created_at, updated_at, next_turn_id) VALUES (?1, ?2, ?2, 1)
+             ON CONFLICT(id) DO NOTHING", params![conversation_id, created_at],
+        ).map_err(adapter_error)?;
+        let reserved: i64 = transaction.query_row(
+            "UPDATE conversations SET next_turn_id = next_turn_id + 1, updated_at = MAX(updated_at, ?2)
+             WHERE id = ?1 RETURNING next_turn_id - 1", params![conversation_id, created_at], |row| row.get(0),
+        ).map_err(adapter_error)?;
+        transaction.commit().map_err(adapter_error)?;
+        u64::try_from(reserved).map_err(adapter_error)
     }
     fn upsert_conversation(&mut self, conversation: &StoredConversation) -> Result<(), PortError> {
         let transaction = self
@@ -219,7 +266,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use pw_application::history::{
-        ConversationHistory, MessageRole, StoredConversation, StoredMessage,
+        ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn,
     };
 
     use crate::{Database, SqliteConversationHistory};
@@ -452,5 +499,38 @@ mod tests {
         history.store_completed_turn(&turn).unwrap();
         assert_eq!(history.list_messages("chat").unwrap().len(), 2);
         assert_eq!(history.max_turn_id("chat").unwrap(), Some(9));
+        let different = StoredTurn {
+            assistant_content: "different".into(),
+            ..turn
+        };
+        assert!(
+            history
+                .store_completed_turn(&different)
+                .unwrap_err()
+                .0
+                .contains("different content")
+        );
+    }
+
+    #[test]
+    fn reserved_turn_ids_are_never_reused_without_messages() {
+        let mut history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
+        assert_eq!(history.reserve_turn_id("chat", 1).unwrap(), 1);
+        assert_eq!(history.reserve_turn_id("chat", 2).unwrap(), 2);
+        assert!(history.list_messages("chat").unwrap().is_empty());
+    }
+
+    #[test]
+    fn reserved_ids_survive_restart_even_when_turns_are_cancelled_or_fail() {
+        let path =
+            std::env::temp_dir().join(format!("pw-turn-sequence-{}.sqlite3", std::process::id()));
+        {
+            let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+            assert_eq!(history.reserve_turn_id("chat", 1).unwrap(), 1);
+            assert_eq!(history.reserve_turn_id("chat", 2).unwrap(), 2);
+        }
+        let mut reopened = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        assert_eq!(reopened.reserve_turn_id("chat", 3).unwrap(), 3);
+        let _ = std::fs::remove_file(path);
     }
 }

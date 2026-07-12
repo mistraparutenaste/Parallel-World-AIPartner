@@ -6,6 +6,7 @@ use thiserror::Error;
 
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_initial.sql");
 const TURN_IDENTITY_MIGRATION: &str = include_str!("../migrations/0002_turn_identity.sql");
+const TURN_SEQUENCE_MIGRATION: &str = include_str!("../migrations/0003_turn_sequence.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -66,6 +67,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 2)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 3 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(TURN_SEQUENCE_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -83,7 +91,7 @@ impl Database {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::Database;
+    use super::{Database, INITIAL_MIGRATION};
 
     #[test]
     fn in_memory_database_applies_connection_pragmas_and_schema() {
@@ -106,7 +114,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
 
         for table in [
@@ -148,12 +156,50 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            2
+            3
         );
 
         drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn upgrades_v1_database_with_duplicate_turn_roles_deterministically() {
+        let path =
+            std::env::temp_dir().join(format!("pw-v1-upgrade-{}.sqlite3", std::process::id()));
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.execute_batch(INITIAL_MIGRATION).unwrap();
+        connection.execute_batch(
+            "INSERT INTO conversations VALUES ('chat',1,1);
+             INSERT INTO messages (conversation_id,turn_id,role,content,created_at) VALUES
+             ('chat',1,'user','first',1),('chat',1,'user','duplicate',2),('chat',1,'assistant','reply',3);
+             PRAGMA user_version=1;"
+        ).unwrap();
+        drop(connection);
+        let database = Database::open(&path).unwrap();
+        let turns: Vec<i64> = {
+            let mut statement = database
+                .connection()
+                .prepare("SELECT turn_id FROM messages ORDER BY id")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(turns[0], 1);
+        assert_ne!(turns[1], 1);
+        assert_eq!(
+            database
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        drop(database);
+        let _ = std::fs::remove_file(path);
     }
 }

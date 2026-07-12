@@ -95,6 +95,16 @@ where
     /// Runs one full turn for the given user utterance.
     pub fn submit_user_text(&mut self, text: &str) -> TurnId {
         let turn = self.tracker.begin_turn();
+        self.submit_user_text_for_turn(text, turn)
+    }
+
+    /// Runs a turn using an id already reserved by durable storage.
+    pub fn submit_user_text_with_id(&mut self, text: &str, turn_id: u64) -> TurnId {
+        let turn = self.tracker.begin_reserved(turn_id);
+        self.submit_user_text_for_turn(text, turn)
+    }
+
+    fn submit_user_text_for_turn(&mut self, text: &str, turn: TurnId) -> TurnId {
         self.cancel.store(false, Ordering::Relaxed);
         self.events.on_user_message(turn, text);
         self.set_state(ConversationState::Thinking);
