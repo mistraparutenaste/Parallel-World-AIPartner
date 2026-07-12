@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-speech-playback"
+description = "Enables the set_speech_playback command without any pre-configured scope."
+commands.allow = ["set_speech_playback"]
+
+[[permission]]
+identifier = "deny-set-speech-playback"
+description = "Denies the set_speech_playback command without any pre-configured scope."
+commands.deny = ["set_speech_playback"]

@@ -9,6 +9,7 @@ pub mod chat;
 pub mod commands;
 pub mod error;
 pub mod speech;
+pub mod tts;
 pub mod windows;
 
 use tauri::Manager;
@@ -24,6 +25,7 @@ pub fn run() {
         .manage(commands::character::CharacterState::default())
         .manage(speech::SpeechService::default())
         .manage(chat::ChatService::default())
+        .manage(tts::TtsService::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
@@ -34,11 +36,18 @@ pub fn run() {
             commands::audio::start_listening,
             commands::audio::stop_listening,
             commands::audio::set_capture_enabled,
+            commands::audio::set_speech_playback,
             commands::audio::get_audio_diagnostics,
             commands::chat::send_chat_message,
             commands::chat::cancel_turn,
             commands::chat::get_llm_settings,
-            commands::chat::set_llm_settings
+            commands::chat::set_llm_settings,
+            commands::tts::get_tts_settings,
+            commands::tts::set_tts_settings,
+            commands::tts::list_tts_speakers,
+            commands::tts::list_user_dict,
+            commands::tts::add_user_dict_word,
+            commands::tts::delete_user_dict_word
         ])
         .setup(|app| {
             let layout = bootstrap::initialize(app.handle())?;

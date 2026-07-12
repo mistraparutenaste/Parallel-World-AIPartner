@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-user-dict"
+description = "Enables the list_user_dict command without any pre-configured scope."
+commands.allow = ["list_user_dict"]
+
+[[permission]]
+identifier = "deny-list-user-dict"
+description = "Denies the list_user_dict command without any pre-configured scope."
+commands.deny = ["list_user_dict"]

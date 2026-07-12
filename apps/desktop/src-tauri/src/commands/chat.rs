@@ -27,11 +27,17 @@ pub fn send_chat_message<R: Runtime>(
     service.submit(&app, text)
 }
 
-/// Stops the in-flight generation (生成途中で停止).
+/// Stops the in-flight generation and speech playback immediately
+/// (生成途中で停止・発話割り込み).
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn cancel_turn(service: State<'_, ChatService>) {
+pub fn cancel_turn<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, ChatService>,
+    tts: State<'_, crate::tts::TtsService>,
+) {
     service.cancel();
+    tts.stop(&app);
 }
 
 /// Returns the persisted LLM settings (defaults when unset).

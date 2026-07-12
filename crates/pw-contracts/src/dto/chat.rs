@@ -21,6 +21,8 @@ pub enum ChatRoleDto {
 pub struct ChatMessageEventDto {
     pub schema_version: u16,
     /// Turn the message belongs to; stale turns can be dropped.
+    /// (JSON payloads carry plain numbers, so the TS type is number.)
+    #[ts(type = "number")]
     pub turn_id: u64,
     pub role: ChatRoleDto,
     pub text: String,

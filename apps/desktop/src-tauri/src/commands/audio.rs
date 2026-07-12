@@ -55,6 +55,15 @@ pub fn set_capture_enabled(service: State<'_, SpeechService>, enabled: bool) {
     service.set_capture_enabled(enabled);
 }
 
+/// Reported by the character window around speech playback: capture
+/// is muted while TTS audio is playing so the assistant does not hear
+/// itself (基本設計 Phase 2完了条件).
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
+pub fn set_speech_playback(service: State<'_, SpeechService>, active: bool) {
+    service.set_capture_enabled(!active);
+}
+
 /// Returns the pipeline counters for the diagnostics panel.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args

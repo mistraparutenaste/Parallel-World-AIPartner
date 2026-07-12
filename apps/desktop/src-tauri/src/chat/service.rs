@@ -236,6 +236,11 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
 
     fn on_sentence(&self, turn: TurnId, sentence: &str) {
         self.emit_message(turn, ChatRoleDto::Assistant, sentence);
+        // Sentence-level read-ahead: synthesis of this sentence runs
+        // while earlier ones are still playing (基本設計 8章).
+        self.app
+            .state::<crate::tts::TtsService>()
+            .enqueue(&self.app, turn, sentence);
     }
 
     fn on_reply_complete(&self, _turn: TurnId, _speech_text: &str) {}

@@ -9,8 +9,9 @@ use std::path::Path;
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationStateDto,
-    ConversationStateEventDto, LlmSettingsDto, MotionGroupDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto,
+    ConversationStateEventDto, LlmSettingsDto, MotionGroupDto, SpeechAudioEventDto,
+    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
+    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -35,6 +36,12 @@ fn main() {
     ConversationStateEventDto::export_all(&config)
         .expect("export ConversationStateEventDto bindings");
     LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");
+    TtsSettingsDto::export_all(&config).expect("export TtsSettingsDto bindings");
+    TtsSpeakerDto::export_all(&config).expect("export TtsSpeakerDto bindings");
+    SpeechAudioEventDto::export_all(&config).expect("export SpeechAudioEventDto bindings");
+    SpeechStopEventDto::export_all(&config).expect("export SpeechStopEventDto bindings");
+    TtsStateEventDto::export_all(&config).expect("export TtsStateEventDto bindings");
+    UserDictWordDto::export_all(&config).expect("export UserDictWordDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

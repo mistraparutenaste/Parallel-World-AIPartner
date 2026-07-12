@@ -61,7 +61,11 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
     }
     assert_eq!(
         custom_permissions(&permissions),
-        ["allow-get-character-manifest", "allow-set-click-through"]
+        [
+            "allow-get-character-manifest",
+            "allow-set-click-through",
+            "allow-set-speech-playback"
+        ]
     );
 }
 
@@ -102,7 +106,13 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-set-capture-enabled",
             "allow-get-audio-diagnostics",
             "allow-get-llm-settings",
-            "allow-set-llm-settings"
+            "allow-set-llm-settings",
+            "allow-get-tts-settings",
+            "allow-set-tts-settings",
+            "allow-list-tts-speakers",
+            "allow-list-user-dict",
+            "allow-add-user-dict-word",
+            "allow-delete-user-dict-word"
         ]
     );
 }

@@ -8,5 +8,6 @@ import type { ChatRoleDto } from "./ChatRoleDto";
 export type ChatMessageEventDto = { schema_version: number, 
 /**
  * Turn the message belongs to; stale turns can be dropped.
+ * (JSON payloads carry plain numbers, so the TS type is number.)
  */
-turn_id: bigint, role: ChatRoleDto, text: string, };
+turn_id: number, role: ChatRoleDto, text: string, };

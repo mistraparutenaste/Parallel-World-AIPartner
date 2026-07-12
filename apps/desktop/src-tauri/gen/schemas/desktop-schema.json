@@ -177,10 +177,22 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the add_user_dict_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-user-dict-word",
+          "markdownDescription": "Enables the add_user_dict_word command without any pre-configured scope."
+        },
+        {
           "description": "Enables the cancel_turn command without any pre-configured scope.",
           "type": "string",
           "const": "allow-cancel-turn",
           "markdownDescription": "Enables the cancel_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_user_dict_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-user-dict-word",
+          "markdownDescription": "Enables the delete_user_dict_word command without any pre-configured scope."
         },
         {
           "description": "Enables the get_app_status command without any pre-configured scope.",
@@ -207,10 +219,28 @@
           "markdownDescription": "Enables the get_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_tts_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-tts-settings",
+          "markdownDescription": "Enables the get_tts_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-microphones",
           "markdownDescription": "Enables the list_microphones command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_tts_speakers command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-tts-speakers",
+          "markdownDescription": "Enables the list_tts_speakers command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_user_dict command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-user-dict",
+          "markdownDescription": "Enables the list_user_dict command without any pre-configured scope."
         },
         {
           "description": "Enables the send_chat_message command without any pre-configured scope.",
@@ -243,6 +273,18 @@
           "markdownDescription": "Enables the set_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_speech_playback command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-speech-playback",
+          "markdownDescription": "Enables the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_tts_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-tts-settings",
+          "markdownDescription": "Enables the set_tts_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the start_listening command without any pre-configured scope.",
           "type": "string",
           "const": "allow-start-listening",
@@ -261,10 +303,22 @@
           "markdownDescription": "Enables the stop_listening command without any pre-configured scope."
         },
         {
+          "description": "Denies the add_user_dict_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-user-dict-word",
+          "markdownDescription": "Denies the add_user_dict_word command without any pre-configured scope."
+        },
+        {
           "description": "Denies the cancel_turn command without any pre-configured scope.",
           "type": "string",
           "const": "deny-cancel-turn",
           "markdownDescription": "Denies the cancel_turn command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_user_dict_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-user-dict-word",
+          "markdownDescription": "Denies the delete_user_dict_word command without any pre-configured scope."
         },
         {
           "description": "Denies the get_app_status command without any pre-configured scope.",
@@ -291,10 +345,28 @@
           "markdownDescription": "Denies the get_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_tts_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-tts-settings",
+          "markdownDescription": "Denies the get_tts_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-microphones",
           "markdownDescription": "Denies the list_microphones command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_tts_speakers command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-tts-speakers",
+          "markdownDescription": "Denies the list_tts_speakers command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_user_dict command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-user-dict",
+          "markdownDescription": "Denies the list_user_dict command without any pre-configured scope."
         },
         {
           "description": "Denies the send_chat_message command without any pre-configured scope.",
@@ -325,6 +397,18 @@
           "type": "string",
           "const": "deny-set-llm-settings",
           "markdownDescription": "Denies the set_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_speech_playback command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-speech-playback",
+          "markdownDescription": "Denies the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_tts_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-tts-settings",
+          "markdownDescription": "Denies the set_tts_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the start_listening command without any pre-configured scope.",

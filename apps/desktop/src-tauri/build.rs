@@ -17,6 +17,13 @@ fn main() {
             "cancel_turn",
             "get_llm_settings",
             "set_llm_settings",
+            "set_speech_playback",
+            "get_tts_settings",
+            "set_tts_settings",
+            "list_tts_speakers",
+            "list_user_dict",
+            "add_user_dict_word",
+            "delete_user_dict_word",
         ]),
     ))
     .expect("failed to run tauri build script");

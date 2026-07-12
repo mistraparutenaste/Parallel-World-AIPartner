@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-add-user-dict-word"
+description = "Enables the add_user_dict_word command without any pre-configured scope."
+commands.allow = ["add_user_dict_word"]
+
+[[permission]]
+identifier = "deny-add-user-dict-word"
+description = "Denies the add_user_dict_word command without any pre-configured scope."
+commands.deny = ["add_user_dict_word"]
