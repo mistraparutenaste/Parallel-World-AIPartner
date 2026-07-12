@@ -10,6 +10,7 @@ const TURN_SEQUENCE_MIGRATION: &str = include_str!("../migrations/0003_turn_sequ
 const DETACHED_TURN_SEQUENCE_MIGRATION: &str =
     include_str!("../migrations/0004_detached_turn_sequence.sql");
 const MEMORY_FTS_MIGRATION: &str = include_str!("../migrations/0005_memory_fts.sql");
+const MEMORY_UNIQUE_MIGRATION: &str = include_str!("../migrations/0006_memory_content_unique.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -91,6 +92,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 5)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 6 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_UNIQUE_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 6)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -131,7 +139,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
 
         for table in [
@@ -173,7 +181,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
 
         drop(reopened);
@@ -214,7 +222,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            5
+            6
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -228,7 +236,7 @@ mod tests {
         {
             let database = Database::open(&path).unwrap();
             database.connection().execute("INSERT INTO memories(content,created_at,updated_at) VALUES('既存の猫記憶',1,1)", []).unwrap();
-            database.connection().execute_batch("DROP TRIGGER memories_fts_insert; DROP TRIGGER memories_fts_delete; DROP TRIGGER memories_fts_update; DROP TABLE memories_fts; PRAGMA user_version=4;").unwrap();
+            database.connection().execute_batch("DROP INDEX memories_source_content_unique; DROP TRIGGER memories_fts_insert; DROP TRIGGER memories_fts_delete; DROP TRIGGER memories_fts_update; DROP TABLE memories_fts; PRAGMA user_version=4;").unwrap();
         }
         let database = Database::open(&path).unwrap();
         let count: i64 = database

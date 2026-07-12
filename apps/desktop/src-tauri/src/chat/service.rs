@@ -15,7 +15,7 @@ use pw_application::conversation::{
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
     DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryStore,
-    PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator,
+    PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator, is_safe_persistent_content,
 };
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
@@ -56,59 +56,90 @@ fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext
     }
 }
 
-#[allow(clippy::needless_pass_by_value, clippy::collapsible_if)]
-fn run_enrichment(database_path: &Path, rx: std::sync::mpsc::Receiver<String>) {
-    let Ok(database) = Database::open(database_path) else {
-        return;
-    };
-    let history = SqliteConversationHistory::new(database);
-    let Ok(database) = Database::open(database_path) else {
-        return;
-    };
-    let mut memory = SqliteMemoryStore::new(database);
+const SUMMARY_RECENT_MESSAGES: usize = 4;
+const SUMMARY_BATCH_MESSAGES: usize = 8;
+const SUMMARY_MAX_CHARS: usize = 2_000;
+
+fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), String> {
+    let history = SqliteConversationHistory::new(
+        Database::open(database_path).map_err(|error| error.to_string())?,
+    );
+    let mut memory =
+        SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
     let mut facts = JapanesePersistentFactGenerator;
-    let mut summary = RollingSummaryGenerator;
+    for fact in facts
+        .extract(user_text)
+        .map_err(|error| error.to_string())?
+    {
+        memory
+            .upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
+            .map_err(|error| error.to_string())?;
+    }
+    let messages = history
+        .list_messages(DEFAULT_CONVERSATION_ID)
+        .map_err(|error| error.to_string())?;
+    let stable_len = messages.len().saturating_sub(SUMMARY_RECENT_MESSAGES);
+    let existing = memory
+        .load_summary(DEFAULT_CONVERSATION_ID)
+        .map_err(|error| error.to_string())?;
+    let through = existing.as_ref().map_or(0, |item| item.through_message_id);
+    let pending = messages[..stable_len]
+        .iter()
+        .filter(|item| item.id.is_some_and(|id| id > through))
+        .take(SUMMARY_BATCH_MESSAGES)
+        .collect::<Vec<_>>();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let prompt_messages = pending
+        .iter()
+        .filter(|item| is_safe_persistent_content(&item.content))
+        .map(|item| {
+            ChatMessage::new(
+                match item.role {
+                    MessageRole::User => ChatRole::User,
+                    MessageRole::Assistant => ChatRole::Assistant,
+                },
+                item.content.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let delta = RollingSummaryGenerator
+        .summarize(&prompt_messages)
+        .map_err(|error| error.to_string())?;
+    let merged = [
+        existing.map(|item| item.content),
+        (!delta.is_empty()).then_some(delta),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" / ");
+    let bounded = merged
+        .chars()
+        .rev()
+        .take(SUMMARY_MAX_CHARS)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+    let through = pending
+        .last()
+        .and_then(|item| item.id)
+        .ok_or_else(|| "pending summary message lacks id".to_owned())?;
+    if !bounded.is_empty() {
+        memory
+            .upsert_summary(DEFAULT_CONVERSATION_ID, &bounded, through, unix_timestamp())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_enrichment(database_path: &Path, rx: std::sync::mpsc::Receiver<String>) {
     while let Ok(user_text) = rx.recv() {
-        if let Ok(items) = facts.extract(&user_text) {
-            for fact in items {
-                if let Err(error) =
-                    memory.upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
-                {
-                    tracing::warn!(%error, "persistent fact enrichment failed");
-                }
-            }
-        }
-        match history.list_messages(DEFAULT_CONVERSATION_ID) {
-            Ok(messages) if messages.len() > 4 => {
-                let old = &messages[..messages.len() - 4];
-                let prompt_messages = old
-                    .iter()
-                    .map(|item| {
-                        ChatMessage::new(
-                            match item.role {
-                                MessageRole::User => ChatRole::User,
-                                MessageRole::Assistant => ChatRole::Assistant,
-                            },
-                            item.content.clone(),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                if let (Some(through), Ok(content)) = (
-                    old.last().and_then(|item| item.id),
-                    summary.summarize(&prompt_messages),
-                ) {
-                    if let Err(error) = memory.upsert_summary(
-                        DEFAULT_CONVERSATION_ID,
-                        &content,
-                        through,
-                        unix_timestamp(),
-                    ) {
-                        tracing::warn!(%error, "conversation summary enrichment failed");
-                    }
-                }
-            }
-            Ok(_) => {}
-            Err(error) => tracing::warn!(%error, "conversation enrichment history read failed"),
+        if let Err(error) = process_enrichment_job(database_path, &user_text) {
+            tracing::warn!(%error, "memory enrichment job failed; worker remains available");
         }
     }
 }
@@ -276,8 +307,10 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
         ) {
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
-            if let Some(enrichment) = &self.enrichment {
-                let _ = enrichment.send(user_text.clone());
+            if let Some(enrichment) = &self.enrichment
+                && let Err(error) = enrichment.send(user_text.clone())
+            {
+                tracing::warn!(%error, "memory enrichment worker unavailable; conversation remains available");
             }
             pending.remove(&turn);
         }
@@ -792,6 +825,42 @@ mod tests {
         assert_eq!(context.memories, ["私は猫が好きです"]);
         assert!(context.summary.unwrap().contains("古い質問"));
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn enrichment_recovers_after_open_failure_and_rolls_summary_forward_by_message_id() {
+        let root =
+            std::env::temp_dir().join(format!("pw-enrichment-recovery-{}", std::process::id()));
+        let path = root.join("db.sqlite3");
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(process_enrichment_job(&path, "私は猫が好きです").is_err());
+        std::fs::create_dir_all(&root).unwrap();
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        for i in 0..7 {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                &format!("私は項目{i}が好きです"),
+                "了解",
+            )
+            .unwrap();
+        }
+        drop(history);
+        process_enrichment_job(&path, "私は猫が好きです").unwrap();
+        let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        process_enrichment_job(&path, "私は犬が好きです").unwrap();
+        let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert!(second.through_message_id >= first.through_message_id);
+        assert!(second.content.chars().count() <= SUMMARY_MAX_CHARS);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

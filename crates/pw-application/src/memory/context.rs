@@ -94,15 +94,64 @@ pub struct JapanesePersistentFactGenerator;
 impl PersistentFactGenerator for JapanesePersistentFactGenerator {
     fn extract(&mut self, user_message: &str) -> Result<Vec<String>, PortError> {
         let durable = ["好き", "嫌い", "住んで", "名前は", "仕事は", "誕生日"];
+        let rejected = [
+            "ない",
+            "ません",
+            "もし",
+            "なら",
+            "たら",
+            "と言",
+            "って言",
+            "？",
+            "?",
+        ];
         Ok(user_message
             .split(['。', '！', '？', '\n'])
             .map(str::trim)
             .filter(|sentence| {
-                !sentence.is_empty() && durable.iter().any(|word| sentence.contains(word))
+                !sentence.is_empty()
+                    && (sentence.starts_with("私は") || sentence.starts_with("私の"))
+                    && durable.iter().any(|word| sentence.contains(word))
+                    && !rejected.iter().any(|word| sentence.contains(word))
+                    && !sentence.contains(['「', '」', '“', '”', '"'])
             })
             .map(str::to_owned)
             .collect())
     }
+}
+
+#[must_use]
+pub fn is_safe_persistent_content(content: &str) -> bool {
+    let lower = content.to_ascii_lowercase();
+    let labels = [
+        "api_key",
+        "apikey",
+        "api key",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "authorization",
+        "bearer ",
+    ];
+    if labels.iter().any(|label| lower.contains(label)) {
+        return false;
+    }
+    !content
+        .split(|character: char| {
+            character.is_whitespace() || matches!(character, '=' | ':' | ',' | ';')
+        })
+        .any(|part| {
+            let len = part.chars().count();
+            len >= 24
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+                && part.chars().any(|c| c.is_ascii_lowercase())
+                && part
+                    .chars()
+                    .any(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+        })
 }
 
 #[derive(Default)]
@@ -172,5 +221,40 @@ mod tests {
             Some("summary".into())
         );
         assert_eq!(worker.generator.0, ["3", "4", "5", "6"]);
+    }
+    #[test]
+    fn fact_generator_accepts_only_explicit_first_person_affirmative_facts() {
+        let mut generator = JapanesePersistentFactGenerator;
+        assert_eq!(
+            generator.extract("私は猫が好きです").unwrap(),
+            ["私は猫が好きです"]
+        );
+        for rejected in [
+            "猫が好きですか？",
+            "私は猫が好きではない",
+            "彼は猫が好き",
+            "もし私は猫が好きなら",
+            "私は「猫が好き」と言った",
+            "私は\"猫が好き\"と引用した",
+        ] {
+            assert!(
+                generator.extract(rejected).unwrap().is_empty(),
+                "{rejected}"
+            );
+        }
+    }
+    #[test]
+    fn secret_classifier_rejects_labels_and_credential_shapes() {
+        for secret in [
+            "API_KEY=abc",
+            "password: hello",
+            "Authorization: Bearer abc",
+            "token=abc",
+            "secret value",
+            "AbCdEf0123456789AbCdEf012345",
+        ] {
+            assert!(!is_safe_persistent_content(secret), "{secret}");
+        }
+        assert!(is_safe_persistent_content("私は猫が好きです"));
     }
 }

@@ -1,6 +1,8 @@
 use crate::Database;
 use pw_application::PortError;
-use pw_application::memory::{MemoryRecord, MemoryStore, StoredSummary};
+use pw_application::memory::{
+    MemoryRecord, MemoryStore, StoredSummary, is_safe_persistent_content,
+};
 use rusqlite::{OptionalExtension, params};
 
 pub struct SqliteMemoryStore {
@@ -24,6 +26,11 @@ impl MemoryStore for SqliteMemoryStore {
         through_message_id: i64,
         updated_at: i64,
     ) -> Result<(), PortError> {
+        if !is_safe_persistent_content(content) {
+            return Err(PortError(
+                "refusing to persist secret-shaped summary content".into(),
+            ));
+        }
         self.database.connection().execute("INSERT INTO conversation_summaries(conversation_id,content,through_message_id,updated_at) VALUES(?1,?2,?3,?4) ON CONFLICT(conversation_id) DO UPDATE SET content=excluded.content,through_message_id=excluded.through_message_id,updated_at=excluded.updated_at", params![conversation_id,content,through_message_id,updated_at]).map(|_| ()).map_err(|e| PortError(e.to_string()))
     }
     fn upsert_memory(
@@ -32,6 +39,11 @@ impl MemoryStore for SqliteMemoryStore {
         content: &str,
         updated_at: i64,
     ) -> Result<i64, PortError> {
+        if !is_safe_persistent_content(content) {
+            return Err(PortError(
+                "refusing to persist secret-shaped memory content".into(),
+            ));
+        }
         if let Some(id) = self.database.connection().query_row("SELECT id FROM memories WHERE content=?1 AND source_conversation_id IS ?2 ORDER BY id LIMIT 1", params![content, source], |row| row.get(0)).optional().map_err(|e| PortError(e.to_string()))? {
             self.database.connection().execute("UPDATE memories SET updated_at=?1 WHERE id=?2", params![updated_at,id]).map_err(|e| PortError(e.to_string()))?;
             return Ok(id);
@@ -164,5 +176,16 @@ mod tests {
         let second = store.upsert_memory(None, "猫が好き", 2).unwrap();
         assert_eq!(first, second);
         assert_eq!(store.search("猫", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn secret_shaped_content_is_rejected_before_persistence() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        assert!(
+            store
+                .upsert_memory(None, "Authorization: Bearer abc", 1)
+                .is_err()
+        );
+        assert!(store.search("Authorization", 10).unwrap().is_empty());
     }
 }
