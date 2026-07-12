@@ -46,7 +46,11 @@ export function ChatWindow() {
       'conversation-state',
       (payload) => {
         setStateLabel(STATE_LABELS[payload.state] ?? null);
-        setError(payload.message ?? null);
+        // Keep the last error detail visible; state-only events
+        // (message: null) must not wipe it.
+        if (payload.message != null) {
+          setError(payload.message);
+        }
       },
     );
     return () => {
