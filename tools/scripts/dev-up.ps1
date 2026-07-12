@@ -47,8 +47,10 @@ if (Test-Port $ttsPort) {
     if ([string]::IsNullOrWhiteSpace($engine)) {
         # 一般的なインストール先を探す（アプリ同梱エンジン → 単体エンジン）。
         $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\AivisSpeech\AivisSpeech-Engine\run.exe'),
             (Join-Path $env:LOCALAPPDATA 'Programs\AivisSpeech\vv-engine\run.exe'),
             (Join-Path $env:LOCALAPPDATA 'Programs\AivisSpeech-Engine\run.exe'),
+            (Join-Path $env:ProgramFiles 'AivisSpeech\AivisSpeech-Engine\run.exe'),
             (Join-Path $env:ProgramFiles 'AivisSpeech\vv-engine\run.exe')
         )
         foreach ($candidate in $candidates) {
