@@ -12,6 +12,7 @@ function createModelHandle(): ModelHandle {
     motionGroups: new Map([['Idle', 1]]),
     setExpression: vi.fn().mockReturnValue(true),
     startMotion: vi.fn().mockReturnValue(true),
+    setLipSyncValue: vi.fn(),
     hitTest: vi.fn().mockReturnValue(false),
     release: vi.fn(),
   };

@@ -27,10 +27,12 @@ import type { CubismMotion } from '../../vendor/framework/src/motion/cubismmotio
 import { CubismBreathUpdater } from '../../vendor/framework/src/motion/cubismbreathupdater';
 import { CubismExpressionUpdater } from '../../vendor/framework/src/motion/cubismexpressionupdater';
 import { CubismEyeBlinkUpdater } from '../../vendor/framework/src/motion/cubismeyeblinkupdater';
+import { CubismLipSyncUpdater } from '../../vendor/framework/src/motion/cubismlipsyncupdater';
 import { CubismLookUpdater } from '../../vendor/framework/src/motion/cubismlookupdater';
 import { CubismPhysicsUpdater } from '../../vendor/framework/src/motion/cubismphysicsupdater';
 import { CubismPoseUpdater } from '../../vendor/framework/src/motion/cubismposeupdater';
 import { CubismUpdateScheduler } from '../../vendor/framework/src/motion/cubismupdatescheduler';
+import { ExternalLipSyncProvider } from '../lip-sync/external-lip-sync-provider';
 import type { ModelSource } from '../runtime/cubism-runtime';
 import { resolveIdleGroup } from './idle-group';
 
@@ -60,6 +62,7 @@ export class CharacterModel extends CubismUserModel {
   #idleGroup: string | null = null;
   #eyeBlinkIds: CubismIdHandle[] = [];
   #lipSyncIds: CubismIdHandle[] = [];
+  #lipSyncProvider = new ExternalLipSyncProvider();
   #textures: WebGLTexture[] = [];
   #scheduler = new CubismUpdateScheduler();
   #motionUpdated = false;
@@ -181,6 +184,14 @@ export class CharacterModel extends CubismUserModel {
     return true;
   }
 
+  /**
+   * Sets the mouth-open value (0..1) computed from the playing audio.
+   * Applied to the model's LipSync parameters every frame.
+   */
+  setLipSyncValue(value: number): void {
+    this.#lipSyncProvider.setValue(value);
+  }
+
   /** Releases GL textures and framework resources. */
   override release(): void {
     for (const texture of this.#textures) {
@@ -271,6 +282,16 @@ export class CharacterModel extends CubismUserModel {
     for (let i = 0; i < setting.getLipSyncParameterCount(); ++i) {
       this.#lipSyncIds.push(setting.getLipSyncParameterId(i));
     }
+    // Models without a LipSync group still get audio lip sync through
+    // the standard mouth parameter.
+    if (this.#lipSyncIds.length === 0) {
+      this.#lipSyncIds.push(
+        idManager.getId(CubismDefaultParameterId.ParamMouthOpenY),
+      );
+    }
+    this.#scheduler.addUpdatableList(
+      new CubismLipSyncUpdater(this.#lipSyncIds, this.#lipSyncProvider),
+    );
 
     const angleX = idManager.getId(CubismDefaultParameterId.ParamAngleX);
     const angleY = idManager.getId(CubismDefaultParameterId.ParamAngleY);

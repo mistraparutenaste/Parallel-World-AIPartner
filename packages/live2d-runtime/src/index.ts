@@ -13,3 +13,12 @@ export {
   type Live2DControllerState,
   type StateChangeListener,
 } from './controller/live2d-controller';
+export {
+  SpeechAudioPlayer,
+  type AudioSink,
+  type PlaybackHandle,
+  type PlaybackRequest,
+  type SpeechAudioItem,
+  type SpeechAudioPlayerOptions,
+} from './audio/speech-audio-player';
+export { WebAudioSink } from './audio/web-audio-sink';

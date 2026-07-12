@@ -105,6 +105,7 @@ export class CubismFrameworkRuntime implements CubismRuntime {
       setExpression: (name: string) => model.setExpressionByName(name),
       startMotion: (group: string, index?: number) =>
         model.startMotionIn(group, index),
+      setLipSyncValue: (value: number) => model.setLipSyncValue(value),
       hitTest: (x: number, y: number) => runtime.#hitTestAlpha(x, y),
       release: () => {
         if (runtime.#model === model) {

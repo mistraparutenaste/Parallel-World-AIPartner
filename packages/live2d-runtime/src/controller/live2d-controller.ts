@@ -95,6 +95,18 @@ export class Live2DController {
     return this.#model?.startMotion(group, index) ?? false;
   }
 
+  /**
+   * Sets the mouth-open value (0..1) from the playing audio.
+   * False when no model is loaded.
+   */
+  setLipSyncValue(value: number): boolean {
+    if (this.#model == null) {
+      return false;
+    }
+    this.#model.setLipSyncValue(value);
+    return true;
+  }
+
   /** Hit-tests canvas-relative CSS coordinates against the model. */
   hitTest(x: number, y: number): boolean {
     return this.#model?.hitTest(x, y) ?? false;

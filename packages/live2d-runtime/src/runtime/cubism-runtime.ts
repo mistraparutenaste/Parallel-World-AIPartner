@@ -31,6 +31,11 @@ export interface ModelHandle {
    */
   startMotion(group: string, index?: number): boolean;
   /**
+   * Sets the mouth-open value (0..1) computed from the playing audio
+   * (Live2Dリップシンク).
+   */
+  setLipSyncValue(value: number): void;
+  /**
    * True when the model pixel at canvas-relative CSS coordinates is
    * opaque enough to count as a hit.
    */
