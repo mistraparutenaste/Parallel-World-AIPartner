@@ -4,4 +4,5 @@
 //! sherpa-onnx. It only models conversation concepts and rules.
 
 pub mod conversation;
+pub mod reply;
 pub mod speech;
