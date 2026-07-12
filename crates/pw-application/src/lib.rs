@@ -3,6 +3,7 @@
 
 pub mod conversation;
 pub mod history;
+pub mod memory;
 mod port_error;
 pub mod speech;
 pub mod speech_synthesis;

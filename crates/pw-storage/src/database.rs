@@ -9,6 +9,7 @@ const TURN_IDENTITY_MIGRATION: &str = include_str!("../migrations/0002_turn_iden
 const TURN_SEQUENCE_MIGRATION: &str = include_str!("../migrations/0003_turn_sequence.sql");
 const DETACHED_TURN_SEQUENCE_MIGRATION: &str =
     include_str!("../migrations/0004_detached_turn_sequence.sql");
+const MEMORY_FTS_MIGRATION: &str = include_str!("../migrations/0005_memory_fts.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -83,6 +84,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 4)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 5 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_FTS_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 5)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -123,7 +131,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
 
         for table in [
@@ -165,7 +173,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
 
         drop(reopened);
@@ -206,7 +214,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            4
+            5
         );
         drop(database);
         let _ = std::fs::remove_file(path);

@@ -13,6 +13,7 @@ use pw_application::conversation::{
     PromptBuilder,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
+use pw_application::memory::{DEFAULT_MEMORY_LIMIT, MemoryContext, MemoryStore};
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
 };
@@ -20,7 +21,7 @@ use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, TurnId};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
-use pw_storage::{Database, SqliteConversationHistory};
+use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::commands::character::CharacterState;
@@ -31,6 +32,26 @@ pub const STATE_EVENT: &str = "conversation-state";
 /// Kept messages of context (user + assistant combined).
 const MAX_HISTORY_MESSAGES: usize = 20;
 const DEFAULT_CONVERSATION_ID: &str = "default";
+
+fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
+    let memories = memory
+        .search(query, DEFAULT_MEMORY_LIMIT)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "memory search failed; continuing without long-term memory");
+            Vec::new()
+        });
+    let summary = memory
+        .load_summary(DEFAULT_CONVERSATION_ID)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "summary restore failed; continuing without summary");
+            None
+        });
+    MemoryContext {
+        user_settings: None,
+        memories: memories.into_iter().map(|item| item.content).collect(),
+        summary: summary.map(|item| item.content),
+    }
+}
 
 fn unix_timestamp() -> i64 {
     SystemTime::now()
@@ -317,6 +338,9 @@ impl ChatService {
             Database::open_in_memory()
         }).map_err(|error| format!("failed to initialize conversation history: {error}"))?;
         let history = SqliteConversationHistory::new(database);
+        let memory = Database::open(&database_path)
+            .map(SqliteMemoryStore::new)
+            .map_err(|error| format!("failed to initialize memory search: {error}"))?;
         let seed = load_recent_history(&history, DEFAULT_CONVERSATION_ID, MAX_HISTORY_MESSAGES)
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "conversation history restore failed; continuing without restored history");
@@ -335,6 +359,7 @@ impl ChatService {
         let thread = std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
+                let memory = memory;
                 let mut orchestrator = ConversationOrchestrator::new_with_history_after(
                     config,
                     llm,
@@ -347,7 +372,8 @@ impl ChatService {
                     match command {
                         Command::Submit(text, turn_id) => {
                             orchestrator.recover();
-                            orchestrator.submit_user_text_with_id(&text, turn_id);
+                            let context = load_memory_context(&memory, &text);
+                            orchestrator.submit_user_text_with_context(&text, turn_id, &context);
                         }
                         Command::Shutdown => break,
                     }
@@ -474,6 +500,7 @@ mod tests {
     use std::sync::Mutex;
 
     use pw_application::history::ConversationHistory;
+    use pw_application::memory::{MemoryRecord, StoredSummary};
     use pw_domain::reply::TurnTracker;
     use pw_storage::{Database, SqliteConversationHistory};
 
@@ -494,6 +521,62 @@ mod tests {
         fn on_error(&self, _: TurnId, message: &str) {
             self.errors.lock().unwrap().push(message.to_owned());
         }
+    }
+
+    struct FailingMemory;
+    impl MemoryStore for FailingMemory {
+        fn load_summary(
+            &self,
+            _: &str,
+        ) -> Result<Option<StoredSummary>, pw_application::PortError> {
+            Err(pw_application::PortError("failed".into()))
+        }
+        fn upsert_summary(
+            &mut self,
+            _: &str,
+            _: &str,
+            _: i64,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn upsert_memory(
+            &mut self,
+            _: Option<&str>,
+            _: &str,
+            _: i64,
+        ) -> Result<i64, pw_application::PortError> {
+            unreachable!()
+        }
+        fn update_memory(
+            &mut self,
+            _: i64,
+            _: &str,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn delete_memory(&mut self, _: i64) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn delete_summary(&mut self, _: &str) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn search(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> Result<Vec<MemoryRecord>, pw_application::PortError> {
+            Err(pw_application::PortError("failed".into()))
+        }
+    }
+
+    #[test]
+    fn memory_lookup_failure_keeps_the_conversation_path_available() {
+        assert_eq!(
+            load_memory_context(&FailingMemory, "hello"),
+            MemoryContext::default()
+        );
     }
 
     #[test]

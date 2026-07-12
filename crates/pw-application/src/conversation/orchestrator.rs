@@ -11,6 +11,7 @@ use pw_domain::reply::{
 
 use super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 use super::prompt::PromptBuilder;
+use crate::memory::MemoryContext;
 
 /// Tuning for [`ConversationOrchestrator`].
 #[derive(Debug, Clone)]
@@ -95,22 +96,40 @@ where
     /// Runs one full turn for the given user utterance.
     pub fn submit_user_text(&mut self, text: &str) -> TurnId {
         let turn = self.tracker.begin_turn();
-        self.submit_user_text_for_turn(text, turn)
+        self.submit_user_text_for_turn(text, turn, &MemoryContext::default())
     }
 
     /// Runs a turn using an id already reserved by durable storage.
     pub fn submit_user_text_with_id(&mut self, text: &str, turn_id: u64) -> TurnId {
         let turn = self.tracker.begin_reserved(turn_id);
-        self.submit_user_text_for_turn(text, turn)
+        self.submit_user_text_for_turn(text, turn, &MemoryContext::default())
     }
 
-    fn submit_user_text_for_turn(&mut self, text: &str, turn: TurnId) -> TurnId {
+    pub fn submit_user_text_with_context(
+        &mut self,
+        text: &str,
+        turn_id: u64,
+        context: &MemoryContext,
+    ) -> TurnId {
+        let turn = self.tracker.begin_reserved(turn_id);
+        self.submit_user_text_for_turn(text, turn, context)
+    }
+
+    fn submit_user_text_for_turn(
+        &mut self,
+        text: &str,
+        turn: TurnId,
+        context: &MemoryContext,
+    ) -> TurnId {
         self.cancel.store(false, Ordering::Relaxed);
         self.events.on_user_message(turn, text);
         self.set_state(ConversationState::Thinking);
 
         let history: Vec<ChatMessage> = self.history.iter().cloned().collect();
-        let messages = self.config.prompt.build(&history, text);
+        let messages = self
+            .config
+            .prompt
+            .build_with_context(&history, text, context);
 
         let mut parser = ReplyParser::new();
         let mut splitter = SentenceSplitter::new();
