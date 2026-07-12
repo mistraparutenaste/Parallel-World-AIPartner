@@ -2,4 +2,4 @@
 
 mod ports;
 
-pub use ports::{ConversationHistory, MessageRole, StoredConversation, StoredMessage};
+pub use ports::{ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn};

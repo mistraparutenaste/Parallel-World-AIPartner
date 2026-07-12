@@ -1,6 +1,6 @@
 use pw_application::{
     PortError,
-    history::{ConversationHistory, MessageRole, StoredConversation, StoredMessage},
+    history::{ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn},
 };
 use rusqlite::{OptionalExtension, params};
 
@@ -27,6 +27,43 @@ fn adapter_error(error: impl std::fmt::Display) -> PortError {
 }
 
 impl ConversationHistory for SqliteConversationHistory {
+    fn store_completed_turn(&mut self, turn: &StoredTurn) -> Result<(), PortError> {
+        let turn_id = i64::try_from(turn.turn_id).map_err(adapter_error)?;
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(adapter_error)?;
+        transaction.execute(
+            "INSERT INTO conversations (id, created_at, updated_at) VALUES (?1, ?2, ?2)
+             ON CONFLICT(id) DO UPDATE SET updated_at = MAX(conversations.updated_at, excluded.updated_at)",
+            params![turn.conversation_id, turn.created_at],
+        ).map_err(adapter_error)?;
+        for (role, content) in [
+            ("user", &turn.user_content),
+            ("assistant", &turn.assistant_content),
+        ] {
+            transaction.execute(
+                "INSERT INTO messages (conversation_id, turn_id, role, content, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(conversation_id, turn_id, role) WHERE turn_id IS NOT NULL DO NOTHING",
+                params![turn.conversation_id, turn_id, role, content, turn.created_at],
+            ).map_err(adapter_error)?;
+        }
+        transaction.commit().map_err(adapter_error)
+    }
+
+    fn max_turn_id(&self, conversation_id: &str) -> Result<Option<u64>, PortError> {
+        let value: Option<i64> = self
+            .database
+            .connection()
+            .query_row(
+                "SELECT MAX(turn_id) FROM messages WHERE conversation_id = ?1",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .map_err(adapter_error)?;
+        value.map(u64::try_from).transpose().map_err(adapter_error)
+    }
     fn upsert_conversation(&mut self, conversation: &StoredConversation) -> Result<(), PortError> {
         let transaction = self
             .database
@@ -384,5 +421,36 @@ mod tests {
             .upsert_conversation(&conversation("chat", 10, 20))
             .unwrap();
         assert_eq!(history.list_conversations().unwrap()[0].updated_at, 50);
+    }
+
+    #[test]
+    fn completed_turn_is_atomic_retryable_and_not_duplicated() {
+        let database = Database::open_in_memory().expect("database opens");
+        database
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_assistant BEFORE INSERT ON messages
+             WHEN NEW.role = 'assistant' BEGIN SELECT RAISE(ABORT, 'forced'); END;",
+            )
+            .unwrap();
+        let mut history = SqliteConversationHistory::new(database);
+        let turn = pw_application::history::StoredTurn {
+            conversation_id: "chat".into(),
+            turn_id: 9,
+            user_content: "user".into(),
+            assistant_content: "assistant".into(),
+            created_at: 10,
+        };
+        assert!(history.store_completed_turn(&turn).is_err());
+        assert!(history.list_messages("chat").unwrap().is_empty());
+        history
+            .database()
+            .connection()
+            .execute_batch("DROP TRIGGER fail_assistant")
+            .unwrap();
+        history.store_completed_turn(&turn).unwrap();
+        history.store_completed_turn(&turn).unwrap();
+        assert_eq!(history.list_messages("chat").unwrap().len(), 2);
+        assert_eq!(history.max_turn_id("chat").unwrap(), Some(9));
     }
 }

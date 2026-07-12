@@ -58,12 +58,28 @@ where
         while history.len() > config.max_history_messages {
             history.pop_front();
         }
+        Self::new_with_history_after(config, llm, events, cancel, history.into(), 0)
+    }
+
+    /// Builds with restored prompt history and the largest persisted turn id.
+    pub fn new_with_history_after(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        history: Vec<ChatMessage>,
+        last_turn_id: u64,
+    ) -> Self {
+        let mut history: VecDeque<_> = history.into();
+        while history.len() > config.max_history_messages {
+            history.pop_front();
+        }
         let orchestrator = Self {
             config,
             llm,
             events,
             cancel,
-            tracker: TurnTracker::new(),
+            tracker: TurnTracker::after(last_turn_id),
             state: ConversationState::Idle,
             history,
         };
@@ -429,6 +445,24 @@ mod tests {
                 "new user"
             ]
         );
+    }
+
+    #[test]
+    fn restored_orchestrator_continues_after_persisted_turn_id() {
+        let llm = ScriptedLlm {
+            chunks: vec!["reply"],
+            received_prompts: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new_with_history_after(
+            config(),
+            llm,
+            Events(Arc::new(Recording::default())),
+            Arc::new(AtomicBool::new(false)),
+            Vec::new(),
+            41,
+        );
+        assert_eq!(orchestrator.submit_user_text("next").value(), 42);
     }
 
     #[test]

@@ -11,9 +11,7 @@ use pw_application::conversation::{
     ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
     PromptBuilder,
 };
-use pw_application::history::{
-    ConversationHistory, MessageRole, StoredConversation, StoredMessage,
-};
+use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
 };
@@ -48,26 +46,13 @@ fn persist_completed_turn<H: ConversationHistory>(
     user_text: &str,
     assistant_text: &str,
 ) -> Result<(), pw_application::PortError> {
-    let now = unix_timestamp();
-    history.upsert_conversation(&StoredConversation {
-        id: conversation_id.to_owned(),
-        created_at: now,
-        updated_at: now,
-    })?;
-    for (role, content) in [
-        (MessageRole::User, user_text),
-        (MessageRole::Assistant, assistant_text),
-    ] {
-        history.append_message(&StoredMessage {
-            id: None,
-            conversation_id: conversation_id.to_owned(),
-            turn_id: Some(turn.value()),
-            role,
-            content: content.to_owned(),
-            created_at: now,
-        })?;
-    }
-    Ok(())
+    history.store_completed_turn(&StoredTurn {
+        conversation_id: conversation_id.to_owned(),
+        turn_id: turn.value(),
+        user_content: user_text.to_owned(),
+        assistant_content: assistant_text.to_owned(),
+        created_at: unix_timestamp(),
+    })
 }
 
 fn load_recent_history<H: ConversationHistory>(
@@ -99,7 +84,7 @@ struct PersistentConversationEvents<E, H> {
     inner: E,
     history: Mutex<H>,
     conversation_id: String,
-    pending_users: Mutex<HashMap<TurnId, String>>,
+    pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
@@ -125,10 +110,29 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
         self.inner.on_state(state);
     }
     fn on_user_message(&self, turn: TurnId, text: &str) {
-        self.pending_users
-            .lock()
-            .unwrap()
-            .insert(turn, text.to_owned());
+        let mut pending = self.pending_users.lock().unwrap();
+        let retries: Vec<_> = pending
+            .iter()
+            .filter_map(|(id, (user, assistant))| {
+                assistant
+                    .as_ref()
+                    .map(|assistant| (*id, user.clone(), assistant.clone()))
+            })
+            .collect();
+        for (retry_turn, user, assistant) in retries {
+            if persist_completed_turn(
+                &mut *self.history.lock().unwrap(),
+                &self.conversation_id,
+                retry_turn,
+                &user,
+                &assistant,
+            )
+            .is_ok()
+            {
+                pending.remove(&retry_turn);
+            }
+        }
+        pending.insert(turn, (text.to_owned(), None));
         self.inner.on_user_message(turn, text);
     }
     fn on_control(&self, turn: TurnId, control: &ReplyControl) {
@@ -139,17 +143,21 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
     }
     fn on_reply_complete(&self, turn: TurnId, speech_text: &str) {
         self.inner.on_reply_complete(turn, speech_text);
-        let Some(user_text) = self.pending_users.lock().unwrap().remove(&turn) else {
+        let mut pending = self.pending_users.lock().unwrap();
+        let Some((user_text, assistant)) = pending.get_mut(&turn) else {
             return;
         };
+        *assistant = Some(speech_text.to_owned());
         if let Err(error) = persist_completed_turn(
             &mut *self.history.lock().unwrap(),
             &self.conversation_id,
             turn,
-            &user_text,
+            user_text,
             speech_text,
         ) {
             tracing::warn!(%error, "conversation history persistence degraded to memory");
+        } else {
+            pending.remove(&turn);
         }
     }
     fn on_cancelled(&self, turn: TurnId) {
@@ -170,6 +178,18 @@ enum Command {
 struct Worker {
     tx: Sender<Command>,
     settings_fingerprint: String,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn shutdown(mut self) -> Result<(), String> {
+        let _ = self.tx.send(Command::Shutdown);
+        self.thread.take().map_or(Ok(()), |thread| {
+            thread
+                .join()
+                .map_err(|_| "conversation worker panicked during shutdown".to_owned())
+        })
+    }
 }
 
 /// Managed state: at most one conversation worker.
@@ -216,7 +236,7 @@ impl ChatService {
         };
         if restart {
             if let Some(worker) = guard.take() {
-                let _ = worker.tx.send(Command::Shutdown);
+                worker.shutdown()?;
             }
             *guard = Some(self.start_worker(app.clone(), &settings)?);
         }
@@ -272,17 +292,27 @@ impl ChatService {
                 tracing::warn!(%error, "conversation history restore failed; continuing without restored history");
                 Vec::new()
             });
+        let last_turn_id = history.max_turn_id(DEFAULT_CONVERSATION_ID).unwrap_or_else(|error| {
+            tracing::warn!(%error, "failed to restore turn sequence; starting from temporary sequence");
+            None
+        }).unwrap_or(0);
         let events = PersistentConversationEvents::new(
             TauriConversationEvents { app },
             history,
             DEFAULT_CONVERSATION_ID,
         );
 
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
-                let mut orchestrator =
-                    ConversationOrchestrator::new_with_history(config, llm, events, cancel, seed);
+                let mut orchestrator = ConversationOrchestrator::new_with_history_after(
+                    config,
+                    llm,
+                    events,
+                    cancel,
+                    seed,
+                    last_turn_id,
+                );
                 while let Ok(command) = rx.recv() {
                     match command {
                         Command::Submit(text) => {
@@ -298,6 +328,7 @@ impl ChatService {
         Ok(Worker {
             tx,
             settings_fingerprint: fingerprint(settings),
+            thread: Some(thread),
         })
     }
 }
@@ -484,6 +515,34 @@ mod tests {
                 .map(|message| message.content.as_str())
                 .collect::<Vec<_>>(),
             ["new", "new reply"]
+        );
+    }
+
+    #[test]
+    fn worker_restart_waits_for_queued_turn_before_history_is_read() {
+        let (tx, rx) = channel();
+        let persisted = Arc::new(AtomicBool::new(false));
+        let worker_persisted = Arc::clone(&persisted);
+        let thread = std::thread::spawn(move || {
+            while let Ok(command) = rx.recv() {
+                match command {
+                    Command::Submit(_) => worker_persisted.store(true, Ordering::SeqCst),
+                    Command::Shutdown => break,
+                }
+            }
+        });
+        let worker = Worker {
+            tx,
+            settings_fingerprint: "old".into(),
+            thread: Some(thread),
+        };
+        worker.tx.send(Command::Submit("turn".into())).unwrap();
+
+        worker.shutdown().unwrap();
+
+        assert!(
+            persisted.load(Ordering::SeqCst),
+            "new worker would have seeded too early"
         );
     }
 }

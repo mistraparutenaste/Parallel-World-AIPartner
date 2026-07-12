@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use thiserror::Error;
 
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_initial.sql");
+const TURN_IDENTITY_MIGRATION: &str = include_str!("../migrations/0002_turn_identity.sql");
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -58,6 +59,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 1)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 2 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(TURN_IDENTITY_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 2)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -98,7 +106,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            1
+            2
         );
 
         for table in [
@@ -140,7 +148,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            1
+            2
         );
 
         drop(reopened);

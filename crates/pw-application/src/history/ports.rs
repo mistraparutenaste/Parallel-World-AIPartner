@@ -23,7 +23,28 @@ pub struct StoredMessage {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredTurn {
+    pub conversation_id: String,
+    pub turn_id: u64,
+    pub user_content: String,
+    pub assistant_content: String,
+    pub created_at: i64,
+}
+
 pub trait ConversationHistory: Send {
+    /// Atomically stores one completed user/assistant turn. Repeating the same
+    /// conversation and turn id is idempotent.
+    ///
+    /// # Errors
+    /// Returns an adapter error and stores none of the turn on failure.
+    fn store_completed_turn(&mut self, turn: &StoredTurn) -> Result<(), PortError>;
+
+    /// Returns the largest persisted turn id for resuming allocation.
+    ///
+    /// # Errors
+    /// Returns an adapter error when history cannot be queried.
+    fn max_turn_id(&self, conversation_id: &str) -> Result<Option<u64>, PortError>;
     /// Creates a conversation or updates its latest activity timestamp.
     ///
     /// # Errors
