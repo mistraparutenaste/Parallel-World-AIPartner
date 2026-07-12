@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use pw_contracts::{CharacterManifestDto, MotionGroupDto, SCHEMA_VERSION};
 use pw_platform::paths::AppDataLayout;
-use tauri::{AppHandle, Emitter, Manager, Runtime, State};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
 
 use crate::character::{CharacterManifest, find_first_model3, parse_model3_json};
 
@@ -109,8 +109,12 @@ pub fn set_expression<R: Runtime>(
         .as_ref()
         .ok_or_else(|| "character manifest is not loaded".to_owned())?;
     validate_expression(manifest, &name)?;
-    app.emit_to("character", EXPRESSION_EVENT, &name)
-        .map_err(|error| error.to_string())
+    app.emit_to(
+        EventTarget::webview_window("character"),
+        EXPRESSION_EVENT,
+        &name,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Validates and forwards a motion request to the character window.
@@ -134,8 +138,12 @@ pub fn start_motion<R: Runtime>(
         .as_ref()
         .ok_or_else(|| "character manifest is not loaded".to_owned())?;
     validate_motion_group(manifest, &group)?;
-    app.emit_to("character", MOTION_EVENT, &group)
-        .map_err(|error| error.to_string())
+    app.emit_to(
+        EventTarget::webview_window("character"),
+        MOTION_EVENT,
+        &group,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Lets clicks pass through the character window (or restores input).

@@ -17,7 +17,7 @@ use pw_contracts::{
 use pw_domain::speech::RejectionReason;
 use pw_platform::paths::AppDataLayout;
 use pw_stt_sherpa::{ReazonSpeechRecognizer, RecognizerModelPaths, SherpaError, SileroVad};
-use tauri::{AppHandle, Emitter, Runtime};
+use tauri::{AppHandle, Emitter, EventTarget, Runtime};
 
 pub const TRANSCRIPT_EVENT: &str = "stt-transcript";
 pub const LEVEL_EVENT: &str = "stt-level";
@@ -245,7 +245,11 @@ fn emit_state<R: Runtime>(app: &AppHandle<R>, phase: SttPhaseDto, message: Optio
         message,
     };
     for window in ["chat", "settings"] {
-        if let Err(error) = app.emit_to(window, STATE_EVENT, payload.clone()) {
+        if let Err(error) = app.emit_to(
+            EventTarget::webview_window(window),
+            STATE_EVENT,
+            payload.clone(),
+        ) {
             tracing::warn!(%error, window, "failed to emit stt state");
         }
     }
@@ -266,7 +270,11 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
             schema_version: SCHEMA_VERSION,
             rms,
         };
-        let _ = self.app.emit_to("settings", LEVEL_EVENT, payload);
+        let _ = self.app.emit_to(
+            EventTarget::webview_window("settings"),
+            LEVEL_EVENT,
+            payload,
+        );
     }
 
     fn on_speech_started(&self) {}
@@ -277,7 +285,11 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
             text: text.to_owned(),
         };
         for window in ["chat", "settings"] {
-            let _ = self.app.emit_to(window, TRANSCRIPT_EVENT, payload.clone());
+            let _ = self.app.emit_to(
+                EventTarget::webview_window(window),
+                TRANSCRIPT_EVENT,
+                payload.clone(),
+            );
         }
     }
 

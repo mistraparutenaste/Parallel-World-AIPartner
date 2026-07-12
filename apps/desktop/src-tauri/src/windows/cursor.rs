@@ -8,7 +8,7 @@
 use std::time::Duration;
 
 use pw_contracts::{CharacterCursorEventDto, SCHEMA_VERSION};
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Runtime};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, PhysicalPosition, PhysicalSize, Runtime};
 
 /// Event carrying [`CharacterCursorEventDto`] payloads.
 pub const CURSOR_EVENT: &str = "character-cursor";
@@ -60,7 +60,11 @@ pub fn spawn_cursor_watcher<R: Runtime>(app: AppHandle<R>) {
                     x,
                     y,
                 };
-                if let Err(error) = window.emit_to("character", CURSOR_EVENT, payload) {
+                if let Err(error) = window.emit_to(
+                    EventTarget::webview_window("character"),
+                    CURSOR_EVENT,
+                    payload,
+                ) {
                     tracing::warn!(%error, "failed to emit cursor event");
                 }
             }
