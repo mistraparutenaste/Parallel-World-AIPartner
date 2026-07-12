@@ -23,6 +23,15 @@ pub fn strip_emoji(text: &str) -> String {
     text.chars().filter(|ch| !is_emoji_component(*ch)).collect()
 }
 
+/// True when the sentence contains something worth synthesizing:
+/// at least one letter or digit (kana / kanji are alphabetic).
+/// Punctuation-only or whitespace-only fragments are skipped by the
+/// TTS queue.
+#[must_use]
+pub fn is_speakable(text: &str) -> bool {
+    text.chars().any(char::is_alphanumeric)
+}
+
 #[cfg(test)]
 mod tests {
     use super::strip_emoji;
@@ -50,5 +59,17 @@ mod tests {
     fn keeps_ascii_and_numbers() {
         let text = "OpenAI互換APIはport 1234で動作中です。";
         assert_eq!(strip_emoji(text), text);
+    }
+
+    #[test]
+    fn speakable_requires_letters_or_digits() {
+        use super::is_speakable;
+        assert!(is_speakable("こんにちは。"));
+        assert!(is_speakable("OK!"));
+        assert!(is_speakable("3件です"));
+        assert!(!is_speakable("。"));
+        assert!(!is_speakable("…！？"));
+        assert!(!is_speakable("  \n"));
+        assert!(!is_speakable(""));
     }
 }

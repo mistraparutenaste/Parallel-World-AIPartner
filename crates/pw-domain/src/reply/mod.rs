@@ -6,7 +6,7 @@ mod parser;
 mod sentences;
 mod turn;
 
-pub use normalize::strip_emoji;
+pub use normalize::{is_speakable, strip_emoji};
 pub use parser::{ReplyControl, ReplyEvent, ReplyParser};
 pub use sentences::SentenceSplitter;
 pub use turn::{TurnId, TurnTracker};
