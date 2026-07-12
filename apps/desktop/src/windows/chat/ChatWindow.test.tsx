@@ -1,6 +1,6 @@
 import type { TranscriptEventDto } from '@parallel-world/contracts';
 import { act, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ChatWindow } from './ChatWindow';
 
 const listenHandlers = vi.hoisted(
@@ -16,10 +16,6 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 describe('ChatWindow transcripts', () => {
-  beforeEach(() => {
-    listenHandlers.clear();
-  });
-
   it('appends recognized speech to the history', async () => {
     render(<ChatWindow />);
     expect(screen.getByText('まだメッセージはありません。')).toBeInTheDocument();

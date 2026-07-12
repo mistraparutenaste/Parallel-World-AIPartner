@@ -8,8 +8,8 @@ import {
   type Live2DControllerState,
 } from '@parallel-world/live2d-runtime';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
 import { StatusBadge } from '../../shared/components/StatusBadge';
 import { createModelSource } from './model-source';
 
@@ -95,25 +95,25 @@ export function CharacterWindow() {
         setState('unavailable');
         return;
       }
-      const stopExpression = await listen<string>(
+      const stopExpression = subscribeEvent<string>(
         'character-expression',
-        (event) => {
-          instance.setExpression(event.payload);
+        (payload) => {
+          instance.setExpression(payload);
         },
       );
-      const stopMotion = await listen<string>('character-motion', (event) => {
-        instance.startMotion(event.payload);
+      const stopMotion = subscribeEvent<string>('character-motion', (payload) => {
+        instance.startMotion(payload);
       });
       // Click-through: the Rust cursor watcher streams positions even
       // while mouse events are ignored; clicks pass through unless the
       // cursor is over an opaque model pixel.
       let interactive = true;
-      const stopCursor = await listen<CharacterCursorEventDto>(
+      const stopCursor = subscribeEvent<CharacterCursorEventDto>(
         'character-cursor',
-        (event) => {
+        (payload) => {
           const overModel =
             instance.state === 'model-loaded'
-              ? instance.hitTest(event.payload.x, event.payload.y)
+              ? instance.hitTest(payload.x, payload.y)
               : true;
           if (overModel !== interactive) {
             interactive = overModel;

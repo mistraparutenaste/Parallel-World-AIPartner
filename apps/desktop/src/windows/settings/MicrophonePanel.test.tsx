@@ -27,7 +27,6 @@ const DEVICES: AudioDeviceDto[] = [
 describe('MicrophonePanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
-    listenHandlers.clear();
     invokeMock.mockImplementation((command: string) => {
       if (command === 'list_microphones') {
         return Promise.resolve(DEVICES);

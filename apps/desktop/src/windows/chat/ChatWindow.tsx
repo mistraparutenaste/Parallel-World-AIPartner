@@ -1,6 +1,6 @@
 import type { TranscriptEventDto } from '@parallel-world/contracts';
-import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
 
 /**
  * Conversation history and text input window.
@@ -14,27 +14,13 @@ import { useEffect, useState } from 'react';
 export function ChatWindow() {
   const [messages, setMessages] = useState<string[]>([]);
 
-  useEffect(() => {
-    let disposed = false;
-    let unlisten: (() => void) | null = null;
-    listen<TranscriptEventDto>('stt-transcript', (event) => {
-      setMessages((current) => [...current, event.payload.text]);
-    })
-      .then((stop) => {
-        if (disposed) {
-          stop();
-        } else {
-          unlisten = stop;
-        }
-      })
-      .catch((error: unknown) => {
-        console.error('failed to subscribe to transcripts', error);
-      });
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribeEvent<TranscriptEventDto>('stt-transcript', (payload) => {
+        setMessages((current) => [...current, payload.text]);
+      }),
+    [],
+  );
 
   return (
     <main aria-label="チャット">

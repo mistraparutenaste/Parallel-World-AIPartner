@@ -5,8 +5,8 @@ import type {
   SttStateEventDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
 
 const PHASE_LABELS: Record<SttStateEventDto['phase'], string> = {
   starting: '起動中',
@@ -34,7 +34,6 @@ export function MicrophonePanel() {
 
   useEffect(() => {
     let disposed = false;
-    const unlisteners: Array<() => void> = [];
 
     invoke<AudioDeviceDto[]>('list_microphones')
       .then((list) => {
@@ -49,25 +48,13 @@ export function MicrophonePanel() {
         }
       });
 
-    const subscribe = async () => {
-      const stopState = await listen<SttStateEventDto>('stt-state', (event) => {
-        setPhase(event.payload.phase);
-        setMessage(event.payload.message ?? null);
-      });
-      const stopLevel = await listen<AudioLevelEventDto>(
-        'stt-level',
-        (event) => {
-          setLevel(event.payload.rms);
-        },
-      );
-      if (disposed) {
-        stopState();
-        stopLevel();
-      } else {
-        unlisteners.push(stopState, stopLevel);
-      }
-    };
-    void subscribe();
+    const stopState = subscribeEvent<SttStateEventDto>('stt-state', (payload) => {
+      setPhase(payload.phase);
+      setMessage(payload.message ?? null);
+    });
+    const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
+      setLevel(payload.rms);
+    });
 
     const timer = setInterval(() => {
       if (phaseRef.current === 'listening') {
@@ -84,9 +71,8 @@ export function MicrophonePanel() {
     return () => {
       disposed = true;
       clearInterval(timer);
-      for (const unlisten of unlisteners) {
-        unlisten();
-      }
+      stopState();
+      stopLevel();
     };
   }, []);
 
