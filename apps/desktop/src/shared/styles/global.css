@@ -35,3 +35,14 @@ body.transparent {
   color: #fff;
   font-size: 12px;
 }
+
+.character-error {
+  max-width: 420px;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgb(128 0 0 / 70%);
+  color: #fff;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}

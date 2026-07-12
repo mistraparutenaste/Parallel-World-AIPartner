@@ -37,6 +37,7 @@ function toBadgeState(state: Live2DControllerState): ConversationStateDto {
 export function CharacterWindow() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<Live2DControllerState>('idle');
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -57,6 +58,7 @@ export function CharacterWindow() {
 
     const boot = async () => {
       if (!('Live2DCubismCore' in globalThis)) {
+        setLoadError('Cubism Core script is not loaded');
         setState('unavailable');
         return;
       }
@@ -86,6 +88,7 @@ export function CharacterWindow() {
         await instance.loadModel(convertFileSrc(manifest.model_path));
       } catch (error) {
         console.error('failed to load the character model', error);
+        setLoadError(String(error));
         setState('unavailable');
         return;
       }
@@ -155,6 +158,9 @@ export function CharacterWindow() {
       />
       <div className="character-status">
         <StatusBadge state={toBadgeState(state)} />
+        {loadError !== null && (
+          <p className="character-error">{loadError}</p>
+        )}
       </div>
     </main>
   );
