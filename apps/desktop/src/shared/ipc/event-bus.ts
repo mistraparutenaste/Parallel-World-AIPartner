@@ -1,4 +1,4 @@
-import { listen } from '@tauri-apps/api/event';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 
 /**
  * Window-scoped event subscriptions with synchronous unsubscribe.
@@ -24,14 +24,19 @@ export function subscribeEvent<T>(
     const created = new Set<Handler>();
     channels.set(eventName, created);
     handlers = created;
-    listen<T>(eventName, (event) => {
-      for (const registered of created) {
-        registered(event.payload);
-      }
-    }).catch((error: unknown) => {
-      console.error(`failed to subscribe to ${eventName}`, error);
-      channels.delete(eventName);
-    });
+    // Scope the listener to this window: default listeners use the
+    // `Any` target and would also receive copies of events emitted
+    // to *other* windows under the same event name.
+    getCurrentWebviewWindow()
+      .listen<T>(eventName, (event) => {
+        for (const registered of created) {
+          registered(event.payload);
+        }
+      })
+      .catch((error: unknown) => {
+        console.error(`failed to subscribe to ${eventName}`, error);
+        channels.delete(eventName);
+      });
   }
   const entry = handler as Handler;
   handlers.add(entry);

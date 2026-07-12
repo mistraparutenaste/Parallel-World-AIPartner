@@ -10,12 +10,14 @@ const listenHandlers = vi.hoisted(
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
 }));
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
-    listenHandlers.set(name, handler);
-    return Promise.resolve(() => {
-      listenHandlers.delete(name);
-    });
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+      listenHandlers.set(name, handler);
+      return Promise.resolve(() => {
+        listenHandlers.delete(name);
+      });
+    },
   }),
 }));
 

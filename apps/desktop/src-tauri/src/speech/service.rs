@@ -244,14 +244,11 @@ fn emit_state<R: Runtime>(app: &AppHandle<R>, phase: SttPhaseDto, message: Optio
         phase,
         message,
     };
-    for window in ["chat", "settings"] {
-        if let Err(error) = app.emit_to(
-            EventTarget::webview_window(window),
-            STATE_EVENT,
-            payload.clone(),
-        ) {
-            tracing::warn!(%error, window, "failed to emit stt state");
-        }
+    // Broadcast exactly once: every window-scoped listener receives
+    // one copy. Emitting per window would deliver duplicates to
+    // listeners registered with the default `Any` target.
+    if let Err(error) = app.emit(STATE_EVENT, payload) {
+        tracing::warn!(%error, "failed to emit stt state");
     }
 }
 
@@ -284,13 +281,8 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
             schema_version: SCHEMA_VERSION,
             text: text.to_owned(),
         };
-        for window in ["chat", "settings"] {
-            let _ = self.app.emit_to(
-                EventTarget::webview_window(window),
-                TRANSCRIPT_EVENT,
-                payload.clone(),
-            );
-        }
+        // Single broadcast; see emit_state for the rationale.
+        let _ = self.app.emit(TRANSCRIPT_EVENT, payload);
     }
 
     fn on_rejected(&self, reason: RejectionReason) {

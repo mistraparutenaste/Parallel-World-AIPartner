@@ -8,8 +8,10 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockRejectedValue(new Error('tauri is not available')),
   convertFileSrc: (path: string) => path,
 }));
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn().mockResolvedValue(() => {}),
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: vi.fn().mockResolvedValue(() => {}),
+  }),
 }));
 
 describe('desktop windows', () => {

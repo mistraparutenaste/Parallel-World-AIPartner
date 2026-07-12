@@ -6,12 +6,14 @@ import { ChatWindow } from './ChatWindow';
 const listenHandlers = vi.hoisted(
   () => new Map<string, (event: { payload: unknown }) => void>(),
 );
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
-    listenHandlers.set(name, handler);
-    return Promise.resolve(() => {
-      listenHandlers.delete(name);
-    });
+vi.mock('@tauri-apps/api/webviewWindow', () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: (name: string, handler: (event: { payload: unknown }) => void) => {
+      listenHandlers.set(name, handler);
+      return Promise.resolve(() => {
+        listenHandlers.delete(name);
+      });
+    },
   }),
 }));
 
