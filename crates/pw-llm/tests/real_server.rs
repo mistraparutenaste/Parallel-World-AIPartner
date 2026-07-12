@@ -76,6 +76,7 @@ fn full_turn_against_the_real_server() {
                 .into(),
         },
         max_history_messages: 20,
+        strip_emoji: true,
     };
 
     let log = Arc::new(Log::default());

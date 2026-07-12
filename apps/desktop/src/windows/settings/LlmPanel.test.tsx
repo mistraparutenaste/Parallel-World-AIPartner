@@ -15,6 +15,7 @@ const SETTINGS: LlmSettingsDto = {
   allow_remote: false,
   system_prompt: '規則',
   character_prompt: 'キャラ',
+  strip_emoji: true,
 };
 
 describe('LlmPanel', () => {

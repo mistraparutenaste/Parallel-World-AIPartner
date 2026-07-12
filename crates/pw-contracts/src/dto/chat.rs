@@ -48,6 +48,14 @@ pub struct LlmSettingsDto {
     pub allow_remote: bool,
     pub system_prompt: String,
     pub character_prompt: String,
+    /// Remove emoji from replies (display and TTS safety).
+    #[serde(default = "default_strip_emoji")]
+    #[ts(optional = false)]
+    pub strip_emoji: bool,
+}
+
+fn default_strip_emoji() -> bool {
+    true
 }
 
 #[cfg(test)]

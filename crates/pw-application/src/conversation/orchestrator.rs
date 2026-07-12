@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pw_domain::conversation::ConversationState;
-use pw_domain::reply::{ReplyEvent, ReplyParser, SentenceSplitter, TurnId, TurnTracker};
+use pw_domain::reply::{
+    ReplyEvent, ReplyParser, SentenceSplitter, TurnId, TurnTracker, strip_emoji,
+};
 
 use super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 use super::prompt::PromptBuilder;
@@ -16,6 +18,8 @@ pub struct OrchestratorConfig {
     pub prompt: PromptBuilder,
     /// Maximum number of past messages kept for context.
     pub max_history_messages: usize,
+    /// Remove emoji from spoken text (display and TTS safety).
+    pub strip_emoji: bool,
 }
 
 /// Runs conversation turns synchronously; the Tauri layer provides
@@ -75,6 +79,7 @@ where
         let cancel = Arc::clone(&self.cancel);
         let events = &self.events;
         let state_cell = &mut self.state;
+        let strip = self.config.strip_emoji;
         let result = {
             let mut on_delta = |delta: &str| {
                 if cancel.load(Ordering::Relaxed) {
@@ -86,6 +91,7 @@ where
                             events.on_control(turn, &control);
                         }
                         ReplyEvent::Speech(chunk) => {
+                            let chunk = if strip { strip_emoji(&chunk) } else { chunk };
                             speech_text.push_str(&chunk);
                             for sentence in splitter.push(&chunk) {
                                 if cancel.load(Ordering::Relaxed) {
@@ -114,6 +120,11 @@ where
                 let mut trailing = Vec::new();
                 for event in parser.finish() {
                     if let ReplyEvent::Speech(chunk) = event {
+                        let chunk = if self.config.strip_emoji {
+                            strip_emoji(&chunk)
+                        } else {
+                            chunk
+                        };
                         speech_text.push_str(&chunk);
                         trailing.extend(splitter.push(&chunk));
                     }
@@ -274,6 +285,7 @@ mod tests {
                 character_prompt: "キャラ".into(),
             },
             max_history_messages: 4,
+            strip_emoji: true,
         }
     }
 
@@ -420,6 +432,37 @@ mod tests {
         let prompts = prompts.lock().unwrap();
         let second: Vec<_> = prompts[1].iter().map(|m| m.content.as_str()).collect();
         assert_eq!(second, ["規則", "キャラ", "聞こえてる？", "再挑戦"]);
+    }
+
+    #[test]
+    fn emoji_are_stripped_from_spoken_sentences() {
+        let recording = Arc::new(Recording::default());
+        let llm = ScriptedLlm {
+            chunks: vec!["こんにちは😊。", "今日も🎉がんばろう👍🏻。"],
+            received_prompts: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config(),
+            llm,
+            Events(Arc::clone(&recording)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("やあ");
+
+        let sentences: Vec<_> = recording
+            .sentences
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, s)| s.clone())
+            .collect();
+        assert_eq!(sentences, ["こんにちは。", "今日もがんばろう。"]);
+        assert_eq!(
+            recording.completions.lock().unwrap()[0],
+            "こんにちは。今日もがんばろう。"
+        );
     }
 
     #[test]

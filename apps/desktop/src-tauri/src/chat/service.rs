@@ -44,12 +44,13 @@ pub struct ChatService {
 
 fn fingerprint(settings: &LlmSettingsDto) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}|{}",
         settings.base_url,
         settings.model,
         settings.allow_remote,
         settings.system_prompt,
-        settings.character_prompt
+        settings.character_prompt,
+        settings.strip_emoji
     )
 }
 
@@ -116,6 +117,7 @@ impl ChatService {
                 character_prompt,
             },
             max_history_messages: MAX_HISTORY_MESSAGES,
+            strip_emoji: settings.strip_emoji,
         };
         let cancel = Arc::clone(&self.cancel);
         let (tx, rx) = channel::<Command>();

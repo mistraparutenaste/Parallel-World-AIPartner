@@ -84,6 +84,18 @@ export function LlmPanel() {
             </label>
           </div>
           <div>
+            <label>
+              <input
+                type="checkbox"
+                checked={settings.strip_emoji}
+                onChange={(event) =>
+                  update({ strip_emoji: event.target.checked })
+                }
+              />
+              応答から絵文字を除去する
+            </label>
+          </div>
+          <div>
             <label htmlFor="llm-character-prompt">キャラクター設定</label>
             <textarea
               id="llm-character-prompt"

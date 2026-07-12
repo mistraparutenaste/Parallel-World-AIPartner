@@ -2622,6 +2622,7 @@ name = "pw-llm"
 version = "0.1.0"
 dependencies = [
  "pw-application",
+ "pw-domain",
  "reqwest 0.12.28",
  "serde",
  "serde_json",

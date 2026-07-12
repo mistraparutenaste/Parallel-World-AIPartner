@@ -11,4 +11,8 @@ base_url: string, model: string,
 /**
  * Permit non-loopback endpoints.
  */
-allow_remote: boolean, system_prompt: string, character_prompt: string, };
+allow_remote: boolean, system_prompt: string, character_prompt: string, 
+/**
+ * Remove emoji from replies (display and TTS safety).
+ */
+strip_emoji: boolean, };
