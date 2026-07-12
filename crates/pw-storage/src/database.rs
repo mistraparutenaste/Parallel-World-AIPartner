@@ -65,6 +65,10 @@ impl Database {
     pub const fn connection(&self) -> &Connection {
         &self.connection
     }
+
+    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+        &mut self.connection
+    }
 }
 
 #[cfg(test)]

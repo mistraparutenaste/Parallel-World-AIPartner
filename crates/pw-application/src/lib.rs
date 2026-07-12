@@ -2,6 +2,7 @@
 //! with all external capabilities abstracted behind ports.
 
 pub mod conversation;
+pub mod history;
 mod port_error;
 pub mod speech;
 pub mod speech_synthesis;
