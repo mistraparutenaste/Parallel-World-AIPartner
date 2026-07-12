@@ -1,6 +1,7 @@
 import type {
   ChatMessageEventDto,
   ConversationStateEventDto,
+  TtsStateEventDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
@@ -53,9 +54,17 @@ export function ChatWindow() {
         }
       },
     );
+    // TTS failures degrade to text-only; surface the reason without
+    // interrupting the conversation (TTS障害 → テキスト表示).
+    const stopTts = subscribeEvent<TtsStateEventDto>('tts-state', (payload) => {
+      if (!payload.available) {
+        setError(`音声合成に接続できません: ${payload.message ?? ''}`);
+      }
+    });
     return () => {
       stopMessages();
       stopState();
+      stopTts();
     };
   }, []);
 

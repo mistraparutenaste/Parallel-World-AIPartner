@@ -1,6 +1,7 @@
 import { CharacterPanel } from './CharacterPanel';
 import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
+import { TtsPanel } from './TtsPanel';
 
 const SETTINGS_SECTIONS = [
   'マイク',
@@ -29,6 +30,7 @@ export function SettingsWindow() {
       </nav>
       <MicrophonePanel />
       <LlmPanel />
+      <TtsPanel />
       <CharacterPanel />
     </main>
   );

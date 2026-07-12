@@ -1,6 +1,7 @@
 import type {
   ChatMessageEventDto,
   ConversationStateEventDto,
+  TtsStateEventDto,
 } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -95,5 +96,23 @@ describe('ChatWindow', () => {
     });
 
     expect(screen.getByRole('status')).toHaveTextContent('考え中…');
+  });
+
+  it('surfaces tts degradation without touching the history', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+
+    const payload: TtsStateEventDto = {
+      schema_version: 1,
+      available: false,
+      message: 'tts request failed',
+    };
+    act(() => {
+      listenHandlers.get('tts-state')?.({ payload });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '音声合成に接続できません: tts request failed',
+    );
   });
 });

@@ -2,10 +2,14 @@ import type {
   CharacterCursorEventDto,
   CharacterManifestDto,
   ConversationStateDto,
+  SpeechAudioEventDto,
+  SpeechStopEventDto,
 } from '@parallel-world/contracts';
 import {
   Live2DController,
   type Live2DControllerState,
+  SpeechAudioPlayer,
+  WebAudioSink,
 } from '@parallel-world/live2d-runtime';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
@@ -47,6 +51,7 @@ export function CharacterWindow() {
     }
     let disposed = false;
     let controller: Live2DController | null = null;
+    let player: SpeechAudioPlayer | null = null;
     const unlisteners: Array<() => void> = [];
 
     const resize = () => {
@@ -104,6 +109,37 @@ export function CharacterWindow() {
       const stopMotion = subscribeEvent<string>('character-motion', (payload) => {
         instance.startMotion(payload);
       });
+      // Speech playback: synthesized sentences arrive as WAV paths and
+      // play in order; the measured level drives the mouth parameters.
+      // While audio is active the microphone capture is muted so the
+      // assistant does not hear itself.
+      const audioPlayer = new SpeechAudioPlayer(new WebAudioSink(), {
+        onLevel: (level) => {
+          instance.setLipSyncValue(level);
+        },
+        onActiveChange: (active) => {
+          invoke('set_speech_playback', { active }).catch((error: unknown) => {
+            console.error('failed to report speech playback', error);
+          });
+        },
+      });
+      player = audioPlayer;
+      const stopAudio = subscribeEvent<SpeechAudioEventDto>(
+        'speech-audio',
+        (payload) => {
+          audioPlayer.enqueue({
+            turnId: payload.turn_id,
+            seq: payload.seq,
+            url: convertFileSrc(payload.wav_path),
+          });
+        },
+      );
+      const stopSpeech = subscribeEvent<SpeechStopEventDto>(
+        'speech-stop',
+        () => {
+          audioPlayer.stop();
+        },
+      );
       // Click-through: the Rust cursor watcher streams positions even
       // while mouse events are ignored; clicks pass through unless the
       // cursor is over an opaque model pixel.
@@ -128,9 +164,12 @@ export function CharacterWindow() {
       if (disposed) {
         stopExpression();
         stopMotion();
+        stopAudio();
+        stopSpeech();
         stopCursor();
+        audioPlayer.dispose();
       } else {
-        unlisteners.push(stopExpression, stopMotion, stopCursor);
+        unlisteners.push(stopExpression, stopMotion, stopAudio, stopSpeech, stopCursor);
       }
     };
     void boot();
@@ -147,6 +186,7 @@ export function CharacterWindow() {
       for (const unlisten of unlisteners) {
         unlisten();
       }
+      player?.dispose();
       controller?.dispose();
     };
   }, []);
