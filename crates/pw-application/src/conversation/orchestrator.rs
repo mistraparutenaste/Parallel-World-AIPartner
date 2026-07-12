@@ -43,6 +43,21 @@ where
     E: ConversationEvents,
 {
     pub fn new(config: OrchestratorConfig, llm: L, events: E, cancel: Arc<AtomicBool>) -> Self {
+        Self::new_with_history(config, llm, events, cancel, Vec::new())
+    }
+
+    /// Builds an orchestrator with previously confirmed messages as prompt context.
+    pub fn new_with_history(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        history: Vec<ChatMessage>,
+    ) -> Self {
+        let mut history: VecDeque<_> = history.into();
+        while history.len() > config.max_history_messages {
+            history.pop_front();
+        }
         let orchestrator = Self {
             config,
             llm,
@@ -50,7 +65,7 @@ where
             cancel,
             tracker: TurnTracker::new(),
             state: ConversationState::Idle,
-            history: VecDeque::new(),
+            history,
         };
         orchestrator.events.on_state(orchestrator.state);
         orchestrator
@@ -158,7 +173,8 @@ where
         self.tracker.invalidate();
         self.events.on_cancelled(turn);
         self.set_state(ConversationState::Cancelled);
-        self.record_turn(user_text, partial);
+        let _ = partial;
+        self.record_turn(user_text, "");
         self.set_state(ConversationState::Idle);
         turn
     }
@@ -375,6 +391,69 @@ mod tests {
                 "三つ目"
             ]
         );
+    }
+
+    #[test]
+    fn seeded_history_survives_orchestrator_reconstruction() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["new reply"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new_with_history(
+            config(),
+            llm,
+            Events(Arc::new(Recording::default())),
+            Arc::new(AtomicBool::new(false)),
+            vec![
+                ChatMessage::new(super::super::ports::ChatRole::User, "saved user"),
+                ChatMessage::new(super::super::ports::ChatRole::Assistant, "saved assistant"),
+            ],
+        );
+
+        orchestrator.submit_user_text("new user");
+
+        let prompt = &prompts.lock().unwrap()[0];
+        let contents: Vec<_> = prompt
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            [
+                "規則",
+                "キャラ",
+                "saved user",
+                "saved assistant",
+                "new user"
+            ]
+        );
+    }
+
+    #[test]
+    fn cancelled_assistant_fragment_is_not_kept_in_later_prompts() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let recording = Arc::new(Recording {
+            cancel_after_sentences: Some((1, Arc::clone(&cancel))),
+            ..Recording::default()
+        });
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["partial。", "discarded。"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator =
+            ConversationOrchestrator::new(config(), llm, Events(recording), Arc::clone(&cancel));
+
+        orchestrator.submit_user_text("cancel me");
+        cancel.store(false, Ordering::Relaxed);
+        orchestrator.recover();
+        orchestrator.submit_user_text("next");
+
+        let second = &prompts.lock().unwrap()[1];
+        assert!(second.iter().all(|message| message.content != "partial。"));
     }
 
     #[test]

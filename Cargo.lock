@@ -2385,6 +2385,7 @@ dependencies = [
  "pw-domain",
  "pw-llm",
  "pw-platform",
+ "pw-storage",
  "pw-stt-sherpa",
  "pw-tts",
  "serde",

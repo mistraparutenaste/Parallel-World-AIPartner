@@ -1,12 +1,18 @@
 //! Conversation worker: owns the orchestrator, emits UI events and
 //! maps control JSON onto the character.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use pw_application::conversation::{
-    ConversationEvents, ConversationOrchestrator, OrchestratorConfig, PromptBuilder,
+    ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
+    PromptBuilder,
+};
+use pw_application::history::{
+    ConversationHistory, MessageRole, StoredConversation, StoredMessage,
 };
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
@@ -15,6 +21,7 @@ use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, TurnId};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
+use pw_storage::{Database, SqliteConversationHistory};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::commands::character::CharacterState;
@@ -24,6 +31,136 @@ pub const STATE_EVENT: &str = "conversation-state";
 
 /// Kept messages of context (user + assistant combined).
 const MAX_HISTORY_MESSAGES: usize = 20;
+const DEFAULT_CONVERSATION_ID: &str = "default";
+
+fn unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            i64::try_from(duration.as_secs()).unwrap_or(i64::MAX)
+        })
+}
+
+fn persist_completed_turn<H: ConversationHistory>(
+    history: &mut H,
+    conversation_id: &str,
+    turn: TurnId,
+    user_text: &str,
+    assistant_text: &str,
+) -> Result<(), pw_application::PortError> {
+    let now = unix_timestamp();
+    history.upsert_conversation(&StoredConversation {
+        id: conversation_id.to_owned(),
+        created_at: now,
+        updated_at: now,
+    })?;
+    for (role, content) in [
+        (MessageRole::User, user_text),
+        (MessageRole::Assistant, assistant_text),
+    ] {
+        history.append_message(&StoredMessage {
+            id: None,
+            conversation_id: conversation_id.to_owned(),
+            turn_id: Some(turn.value()),
+            role,
+            content: content.to_owned(),
+            created_at: now,
+        })?;
+    }
+    Ok(())
+}
+
+fn load_recent_history<H: ConversationHistory>(
+    history: &H,
+    conversation_id: &str,
+    limit: usize,
+) -> Result<Vec<ChatMessage>, pw_application::PortError> {
+    let messages = history.list_messages(conversation_id)?;
+    Ok(messages
+        .into_iter()
+        .rev()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .map(|message| {
+            ChatMessage::new(
+                match message.role {
+                    MessageRole::User => ChatRole::User,
+                    MessageRole::Assistant => ChatRole::Assistant,
+                },
+                message.content,
+            )
+        })
+        .collect())
+}
+
+struct PersistentConversationEvents<E, H> {
+    inner: E,
+    history: Mutex<H>,
+    conversation_id: String,
+    pending_users: Mutex<HashMap<TurnId, String>>,
+}
+
+impl<E, H> PersistentConversationEvents<E, H> {
+    fn new(inner: E, history: H, conversation_id: impl Into<String>) -> Self {
+        Self {
+            inner,
+            history: Mutex::new(history),
+            conversation_id: conversation_id.into(),
+            pending_users: Mutex::new(HashMap::new()),
+        }
+    }
+
+    #[cfg(test)]
+    fn history(&self) -> MutexGuard<'_, H> {
+        self.history.lock().unwrap()
+    }
+}
+
+impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
+    for PersistentConversationEvents<E, H>
+{
+    fn on_state(&self, state: ConversationState) {
+        self.inner.on_state(state);
+    }
+    fn on_user_message(&self, turn: TurnId, text: &str) {
+        self.pending_users
+            .lock()
+            .unwrap()
+            .insert(turn, text.to_owned());
+        self.inner.on_user_message(turn, text);
+    }
+    fn on_control(&self, turn: TurnId, control: &ReplyControl) {
+        self.inner.on_control(turn, control);
+    }
+    fn on_sentence(&self, turn: TurnId, sentence: &str) {
+        self.inner.on_sentence(turn, sentence);
+    }
+    fn on_reply_complete(&self, turn: TurnId, speech_text: &str) {
+        self.inner.on_reply_complete(turn, speech_text);
+        let Some(user_text) = self.pending_users.lock().unwrap().remove(&turn) else {
+            return;
+        };
+        if let Err(error) = persist_completed_turn(
+            &mut *self.history.lock().unwrap(),
+            &self.conversation_id,
+            turn,
+            &user_text,
+            speech_text,
+        ) {
+            tracing::warn!(%error, "conversation history persistence degraded to memory");
+        }
+    }
+    fn on_cancelled(&self, turn: TurnId) {
+        self.pending_users.lock().unwrap().remove(&turn);
+        self.inner.on_cancelled(turn);
+    }
+    fn on_error(&self, turn: TurnId, message: &str) {
+        self.pending_users.lock().unwrap().remove(&turn);
+        self.inner.on_error(turn, message);
+    }
+}
 
 enum Command {
     Submit(String),
@@ -121,12 +258,31 @@ impl ChatService {
         };
         let cancel = Arc::clone(&self.cancel);
         let (tx, rx) = channel::<Command>();
-        let events = TauriConversationEvents { app };
+        let database_path = app
+            .state::<AppDataLayout>()
+            .data
+            .join("parallel-world.sqlite3");
+        let database = Database::open(&database_path).or_else(|error| {
+            tracing::warn!(%error, path = %database_path.display(), "conversation history unavailable; using temporary history");
+            Database::open_in_memory()
+        }).map_err(|error| format!("failed to initialize conversation history: {error}"))?;
+        let history = SqliteConversationHistory::new(database);
+        let seed = load_recent_history(&history, DEFAULT_CONVERSATION_ID, MAX_HISTORY_MESSAGES)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "conversation history restore failed; continuing without restored history");
+                Vec::new()
+            });
+        let events = PersistentConversationEvents::new(
+            TauriConversationEvents { app },
+            history,
+            DEFAULT_CONVERSATION_ID,
+        );
 
         std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
-                let mut orchestrator = ConversationOrchestrator::new(config, llm, events, cancel);
+                let mut orchestrator =
+                    ConversationOrchestrator::new_with_history(config, llm, events, cancel, seed);
                 while let Ok(command) = rx.recv() {
                     match command {
                         Command::Submit(text) => {
@@ -249,5 +405,85 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
 
     fn on_error(&self, _turn: TurnId, message: &str) {
         self.emit_state(ConversationState::LlmUnavailable, Some(message.to_owned()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Mutex;
+
+    use pw_application::history::ConversationHistory;
+    use pw_domain::reply::TurnTracker;
+    use pw_storage::{Database, SqliteConversationHistory};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct NoopEvents {
+        errors: Mutex<Vec<String>>,
+    }
+
+    impl ConversationEvents for NoopEvents {
+        fn on_state(&self, _: ConversationState) {}
+        fn on_user_message(&self, _: TurnId, _: &str) {}
+        fn on_control(&self, _: TurnId, _: &ReplyControl) {}
+        fn on_sentence(&self, _: TurnId, _: &str) {}
+        fn on_reply_complete(&self, _: TurnId, _: &str) {}
+        fn on_cancelled(&self, _: TurnId) {}
+        fn on_error(&self, _: TurnId, message: &str) {
+            self.errors.lock().unwrap().push(message.to_owned());
+        }
+    }
+
+    #[test]
+    fn persists_only_completed_user_and_assistant_messages() {
+        let history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
+        let events = PersistentConversationEvents::new(NoopEvents::default(), history, "chat");
+        let mut tracker = TurnTracker::new();
+        let completed = tracker.begin_turn();
+        events.on_user_message(completed, "kept user");
+        events.on_reply_complete(completed, "kept assistant");
+        let cancelled = tracker.begin_turn();
+        events.on_user_message(cancelled, "cancelled user");
+        events.on_sentence(cancelled, "partial");
+        events.on_cancelled(cancelled);
+
+        let messages = events.history().list_messages("chat").unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].content, "kept user");
+        assert_eq!(messages[1].content, "kept assistant");
+        assert!(messages.iter().all(|message| message.id.is_some()));
+    }
+
+    #[test]
+    fn restored_messages_are_limited_to_recent_prompt_history() {
+        let mut history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
+        let mut tracker = TurnTracker::new();
+        persist_completed_turn(
+            &mut history,
+            "chat",
+            tracker.begin_turn(),
+            "old",
+            "old reply",
+        )
+        .unwrap();
+        persist_completed_turn(
+            &mut history,
+            "chat",
+            tracker.begin_turn(),
+            "new",
+            "new reply",
+        )
+        .unwrap();
+
+        let restored = load_recent_history(&history, "chat", 2).unwrap();
+
+        assert_eq!(
+            restored
+                .iter()
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            ["new", "new reply"]
+        );
     }
 }

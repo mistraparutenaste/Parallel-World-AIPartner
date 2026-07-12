@@ -17,6 +17,7 @@ pw-domain = { workspace = true }
 pw-llm = { workspace = true }
 pw-platform = { workspace = true }
 pw-stt-sherpa = { workspace = true }
+pw-storage = { workspace = true }
 pw-tts = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
