@@ -3,6 +3,7 @@
 mod context;
 
 pub use context::{
-    DEFAULT_MEMORY_LIMIT, MemoryContext, MemoryRecord, MemoryStore, StoredSummary,
-    SummaryGenerator, SummaryWorker,
+    DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryRecord,
+    MemoryStore, PersistentFactGenerator, RollingSummaryGenerator, StoredSummary, SummaryGenerator,
+    SummaryWorker,
 };

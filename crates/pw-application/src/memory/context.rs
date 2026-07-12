@@ -84,6 +84,40 @@ pub trait SummaryGenerator {
     fn summarize(&mut self, messages: &[ChatMessage]) -> Result<String, PortError>;
 }
 
+#[allow(clippy::missing_errors_doc)]
+pub trait PersistentFactGenerator {
+    fn extract(&mut self, user_message: &str) -> Result<Vec<String>, PortError>;
+}
+
+#[derive(Default)]
+pub struct JapanesePersistentFactGenerator;
+impl PersistentFactGenerator for JapanesePersistentFactGenerator {
+    fn extract(&mut self, user_message: &str) -> Result<Vec<String>, PortError> {
+        let durable = ["好き", "嫌い", "住んで", "名前は", "仕事は", "誕生日"];
+        Ok(user_message
+            .split(['。', '！', '？', '\n'])
+            .map(str::trim)
+            .filter(|sentence| {
+                !sentence.is_empty() && durable.iter().any(|word| sentence.contains(word))
+            })
+            .map(str::to_owned)
+            .collect())
+    }
+}
+
+#[derive(Default)]
+pub struct RollingSummaryGenerator;
+impl SummaryGenerator for RollingSummaryGenerator {
+    fn summarize(&mut self, messages: &[ChatMessage]) -> Result<String, PortError> {
+        Ok(messages
+            .iter()
+            .map(|message| message.content.trim())
+            .filter(|content| !content.is_empty())
+            .collect::<Vec<_>>()
+            .join(" / "))
+    }
+}
+
 /// Explicit background-service boundary. The caller supplies only an old,
 /// stable message window; the live conversation path never waits on it.
 pub struct SummaryWorker<G> {

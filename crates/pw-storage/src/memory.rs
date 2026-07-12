@@ -32,6 +32,10 @@ impl MemoryStore for SqliteMemoryStore {
         content: &str,
         updated_at: i64,
     ) -> Result<i64, PortError> {
+        if let Some(id) = self.database.connection().query_row("SELECT id FROM memories WHERE content=?1 AND source_conversation_id IS ?2 ORDER BY id LIMIT 1", params![content, source], |row| row.get(0)).optional().map_err(|e| PortError(e.to_string()))? {
+            self.database.connection().execute("UPDATE memories SET updated_at=?1 WHERE id=?2", params![updated_at,id]).map_err(|e| PortError(e.to_string()))?;
+            return Ok(id);
+        }
         self.database.connection().execute("INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES(?1,?2,?3,?3)", params![content,source,updated_at]).map_err(|e| PortError(e.to_string()))?;
         Ok(self.database.connection().last_insert_rowid())
     }
@@ -65,6 +69,28 @@ impl MemoryStore for SqliteMemoryStore {
     fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryRecord>, PortError> {
         if query.trim().is_empty() || limit == 0 {
             return Ok(Vec::new());
+        }
+        if query.trim().chars().count() < 3 {
+            let escaped = query
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
+            let mut statement = self.database.connection().prepare("SELECT id,content FROM memories WHERE content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2").map_err(|e| PortError(e.to_string()))?;
+            return statement
+                .query_map(
+                    params![pattern, i64::try_from(limit).unwrap_or(i64::MAX)],
+                    |row| {
+                        Ok(MemoryRecord {
+                            id: row.get(0)?,
+                            content: row.get(1)?,
+                        })
+                    },
+                )
+                .map_err(|e| PortError(e.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| PortError(e.to_string()));
         }
         let phrase = format!("\"{}\"", query.trim().replace('"', "\"\""));
         let mut statement=self.database.connection().prepare("SELECT m.id,m.content FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2").map_err(|e| PortError(e.to_string()))?;
@@ -119,5 +145,24 @@ mod tests {
         assert_eq!(store.search("コーヒー", 10).unwrap().len(), 1);
         store.delete_memory(id).unwrap();
         assert!(store.search("コーヒー", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn japanese_short_queries_use_escaped_like_fallback() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        store.upsert_memory(None, "猫が好き", 1).unwrap();
+        store.upsert_memory(None, "100%確実_です", 2).unwrap();
+        assert_eq!(store.search("猫", 10).unwrap()[0].content, "猫が好き");
+        assert_eq!(store.search("%", 10).unwrap()[0].content, "100%確実_です");
+        assert_eq!(store.search("_", 10).unwrap()[0].content, "100%確実_です");
+    }
+
+    #[test]
+    fn fact_upsert_does_not_duplicate_identical_source_content() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let first = store.upsert_memory(None, "猫が好き", 1).unwrap();
+        let second = store.upsert_memory(None, "猫が好き", 2).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(store.search("猫", 10).unwrap().len(), 1);
     }
 }

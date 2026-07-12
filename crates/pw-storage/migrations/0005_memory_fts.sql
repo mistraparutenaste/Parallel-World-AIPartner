@@ -4,6 +4,7 @@ CREATE VIRTUAL TABLE memories_fts USING fts5(
     content_rowid='id',
     tokenize='trigram'
 );
+INSERT INTO memories_fts(rowid, content) SELECT id, content FROM memories;
 CREATE TRIGGER memories_fts_insert AFTER INSERT ON memories BEGIN
   INSERT INTO memories_fts(rowid, content) VALUES (new.id, new.content);
 END;

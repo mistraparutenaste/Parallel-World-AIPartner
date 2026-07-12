@@ -13,7 +13,10 @@ use pw_application::conversation::{
     PromptBuilder,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
-use pw_application::memory::{DEFAULT_MEMORY_LIMIT, MemoryContext, MemoryStore};
+use pw_application::memory::{
+    DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryStore,
+    PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator,
+};
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
 };
@@ -50,6 +53,89 @@ fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext
         user_settings: None,
         memories: memories.into_iter().map(|item| item.content).collect(),
         summary: summary.map(|item| item.content),
+    }
+}
+
+#[allow(clippy::needless_pass_by_value, clippy::collapsible_if)]
+fn run_enrichment(database_path: &Path, rx: std::sync::mpsc::Receiver<String>) {
+    let Ok(database) = Database::open(database_path) else {
+        return;
+    };
+    let history = SqliteConversationHistory::new(database);
+    let Ok(database) = Database::open(database_path) else {
+        return;
+    };
+    let mut memory = SqliteMemoryStore::new(database);
+    let mut facts = JapanesePersistentFactGenerator;
+    let mut summary = RollingSummaryGenerator;
+    while let Ok(user_text) = rx.recv() {
+        if let Ok(items) = facts.extract(&user_text) {
+            for fact in items {
+                if let Err(error) =
+                    memory.upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
+                {
+                    tracing::warn!(%error, "persistent fact enrichment failed");
+                }
+            }
+        }
+        match history.list_messages(DEFAULT_CONVERSATION_ID) {
+            Ok(messages) if messages.len() > 4 => {
+                let old = &messages[..messages.len() - 4];
+                let prompt_messages = old
+                    .iter()
+                    .map(|item| {
+                        ChatMessage::new(
+                            match item.role {
+                                MessageRole::User => ChatRole::User,
+                                MessageRole::Assistant => ChatRole::Assistant,
+                            },
+                            item.content.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                if let (Some(through), Ok(content)) = (
+                    old.last().and_then(|item| item.id),
+                    summary.summarize(&prompt_messages),
+                ) {
+                    if let Err(error) = memory.upsert_summary(
+                        DEFAULT_CONVERSATION_ID,
+                        &content,
+                        through,
+                        unix_timestamp(),
+                    ) {
+                        tracing::warn!(%error, "conversation summary enrichment failed");
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(error) => tracing::warn!(%error, "conversation enrichment history read failed"),
+        }
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_context_worker<M: MemoryStore>(
+    memory: M,
+    rx: std::sync::mpsc::Receiver<Command>,
+    conversation_tx: Sender<Command>,
+) {
+    while let Ok(command) = rx.recv() {
+        match command {
+            Command::Submit(text, turn_id) => {
+                let context = load_memory_context(&memory, &text);
+                if conversation_tx
+                    .send(Command::Prepared(text, turn_id, context))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Command::Shutdown => {
+                let _ = conversation_tx.send(Command::Shutdown);
+                break;
+            }
+            Command::Prepared(..) => {}
+        }
     }
 }
 
@@ -107,15 +193,26 @@ struct PersistentConversationEvents<E, H> {
     history: Mutex<H>,
     conversation_id: String,
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
+    enrichment: Option<Sender<String>>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
+    #[cfg(test)]
     fn new(inner: E, history: H, conversation_id: impl Into<String>) -> Self {
+        Self::new_with_enrichment(inner, history, conversation_id, None)
+    }
+    fn new_with_enrichment(
+        inner: E,
+        history: H,
+        conversation_id: impl Into<String>,
+        enrichment: Option<Sender<String>>,
+    ) -> Self {
         Self {
             inner,
             history: Mutex::new(history),
             conversation_id: conversation_id.into(),
             pending_users: Mutex::new(HashMap::new()),
+            enrichment,
         }
     }
 
@@ -179,6 +276,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
         ) {
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
+            if let Some(enrichment) = &self.enrichment {
+                let _ = enrichment.send(user_text.clone());
+            }
             pending.remove(&turn);
         }
     }
@@ -194,6 +294,7 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
 
 enum Command {
     Submit(String, u64),
+    Prepared(String, u64, MemoryContext),
     Shutdown,
 }
 
@@ -201,16 +302,29 @@ struct Worker {
     tx: Sender<Command>,
     settings_fingerprint: String,
     thread: Option<std::thread::JoinHandle<()>>,
+    context_thread: Option<std::thread::JoinHandle<()>>,
+    enrichment_thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl Worker {
     fn shutdown(mut self) -> Result<(), String> {
         let _ = self.tx.send(Command::Shutdown);
-        self.thread.take().map_or(Ok(()), |thread| {
+        let result = self.context_thread.take().map_or(Ok(()), |thread| {
+            thread
+                .join()
+                .map_err(|_| "context worker panicked during shutdown".to_owned())
+        });
+        let conversation = self.thread.take().map_or(Ok(()), |thread| {
             thread
                 .join()
                 .map_err(|_| "conversation worker panicked during shutdown".to_owned())
-        })
+        });
+        let enrichment = self.enrichment_thread.take().map_or(Ok(()), |thread| {
+            thread
+                .join()
+                .map_err(|_| "enrichment worker panicked during shutdown".to_owned())
+        });
+        result.and(conversation).and(enrichment)
     }
 }
 
@@ -328,7 +442,9 @@ impl ChatService {
             strip_emoji: settings.strip_emoji,
         };
         let cancel = Arc::clone(&self.cancel);
-        let (tx, rx) = channel::<Command>();
+        let (tx, context_rx) = channel::<Command>();
+        let (conversation_tx, rx) = channel::<Command>();
+        let (enrichment_tx, enrichment_rx) = channel::<String>();
         let database_path = app
             .state::<AppDataLayout>()
             .data
@@ -338,9 +454,10 @@ impl ChatService {
             Database::open_in_memory()
         }).map_err(|error| format!("failed to initialize conversation history: {error}"))?;
         let history = SqliteConversationHistory::new(database);
-        let memory = Database::open(&database_path)
-            .map(SqliteMemoryStore::new)
-            .map_err(|error| format!("failed to initialize memory search: {error}"))?;
+        let memory = Database::open(&database_path).or_else(|error| {
+            tracing::warn!(%error, "memory database unavailable; using empty temporary context");
+            Database::open_in_memory()
+        }).map(SqliteMemoryStore::new).map_err(|error| format!("failed to initialize temporary memory context: {error}"))?;
         let seed = load_recent_history(&history, DEFAULT_CONVERSATION_ID, MAX_HISTORY_MESSAGES)
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "conversation history restore failed; continuing without restored history");
@@ -350,16 +467,27 @@ impl ChatService {
             tracing::warn!(%error, "failed to restore turn sequence; starting from temporary sequence");
             None
         }).unwrap_or(0);
-        let events = PersistentConversationEvents::new(
+        let events = PersistentConversationEvents::new_with_enrichment(
             TauriConversationEvents { app },
             history,
             DEFAULT_CONVERSATION_ID,
+            Some(enrichment_tx),
         );
+
+        let context_thread = std::thread::Builder::new()
+            .name("pw-memory-context".into())
+            .spawn(move || run_context_worker(memory, context_rx, conversation_tx))
+            .map_err(|error| format!("failed to spawn memory context worker: {error}"))?;
+
+        let enrichment_path = database_path.clone();
+        let enrichment_thread = std::thread::Builder::new()
+            .name("pw-memory-enrichment".into())
+            .spawn(move || run_enrichment(&enrichment_path, enrichment_rx))
+            .map_err(|error| format!("failed to spawn memory enrichment worker: {error}"))?;
 
         let thread = std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
-                let memory = memory;
                 let mut orchestrator = ConversationOrchestrator::new_with_history_after(
                     config,
                     llm,
@@ -370,11 +498,11 @@ impl ChatService {
                 );
                 while let Ok(command) = rx.recv() {
                     match command {
-                        Command::Submit(text, turn_id) => {
+                        Command::Prepared(text, turn_id, context) => {
                             orchestrator.recover();
-                            let context = load_memory_context(&memory, &text);
                             orchestrator.submit_user_text_with_context(&text, turn_id, &context);
                         }
+                        Command::Submit(..) => {}
                         Command::Shutdown => break,
                     }
                 }
@@ -385,6 +513,8 @@ impl ChatService {
             tx,
             settings_fingerprint: fingerprint(settings),
             thread: Some(thread),
+            context_thread: Some(context_thread),
+            enrichment_thread: Some(enrichment_thread),
         })
     }
 }
@@ -571,12 +701,114 @@ mod tests {
         }
     }
 
+    struct SlowMemory;
+    impl MemoryStore for SlowMemory {
+        fn load_summary(
+            &self,
+            _: &str,
+        ) -> Result<Option<StoredSummary>, pw_application::PortError> {
+            Ok(None)
+        }
+        fn upsert_summary(
+            &mut self,
+            _: &str,
+            _: &str,
+            _: i64,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn upsert_memory(
+            &mut self,
+            _: Option<&str>,
+            _: &str,
+            _: i64,
+        ) -> Result<i64, pw_application::PortError> {
+            unreachable!()
+        }
+        fn update_memory(
+            &mut self,
+            _: i64,
+            _: &str,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn delete_memory(&mut self, _: i64) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn delete_summary(&mut self, _: &str) -> Result<(), pw_application::PortError> {
+            unreachable!()
+        }
+        fn search(
+            &self,
+            _: &str,
+            _: usize,
+        ) -> Result<Vec<MemoryRecord>, pw_application::PortError> {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            Ok(Vec::new())
+        }
+    }
+
     #[test]
     fn memory_lookup_failure_keeps_the_conversation_path_available() {
         assert_eq!(
             load_memory_context(&FailingMemory, "hello"),
             MemoryContext::default()
         );
+    }
+
+    #[test]
+    fn completed_turn_enrichment_survives_restart_and_is_loaded_into_context() {
+        let path =
+            std::env::temp_dir().join(format!("pw-enrichment-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        for (user, assistant) in [
+            ("古い質問", "古い回答"),
+            ("次の質問", "次の回答"),
+            ("私は猫が好きです", "覚えました"),
+        ] {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                user,
+                assistant,
+            )
+            .unwrap();
+        }
+        drop(history);
+        let (tx, rx) = channel();
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || run_enrichment(&worker_path, rx));
+        tx.send("私は猫が好きです".into()).unwrap();
+        drop(tx);
+        worker.join().unwrap();
+
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let context = load_memory_context(&store, "猫");
+        assert_eq!(context.memories, ["私は猫が好きです"]);
+        assert!(context.summary.unwrap().contains("古い質問"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn slow_memory_search_does_not_block_submit_sender() {
+        let (tx, rx) = channel();
+        let (conversation_tx, conversation_rx) = channel();
+        let worker =
+            std::thread::spawn(move || run_context_worker(SlowMemory, rx, conversation_tx));
+        let started = std::time::Instant::now();
+        tx.send(Command::Submit("query".into(), 1)).unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_millis(50));
+        assert!(matches!(
+            conversation_rx.recv().unwrap(),
+            Command::Prepared(_, 1, _)
+        ));
+        tx.send(Command::Shutdown).unwrap();
+        worker.join().unwrap();
     }
 
     #[test]
@@ -640,6 +872,7 @@ mod tests {
             while let Ok(command) = rx.recv() {
                 match command {
                     Command::Submit(_, _) => worker_persisted.store(true, Ordering::SeqCst),
+                    Command::Prepared(_, _, _) => {}
                     Command::Shutdown => break,
                 }
             }
@@ -648,6 +881,8 @@ mod tests {
             tx,
             settings_fingerprint: "old".into(),
             thread: Some(thread),
+            context_thread: None,
+            enrichment_thread: None,
         };
         worker.tx.send(Command::Submit("turn".into(), 1)).unwrap();
 

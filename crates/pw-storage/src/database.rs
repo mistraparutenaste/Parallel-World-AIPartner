@@ -219,4 +219,27 @@ mod tests {
         drop(database);
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn upgrades_v4_database_and_backfills_existing_memories_into_fts() {
+        let path =
+            std::env::temp_dir().join(format!("pw-v4-memory-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let database = Database::open(&path).unwrap();
+            database.connection().execute("INSERT INTO memories(content,created_at,updated_at) VALUES('既存の猫記憶',1,1)", []).unwrap();
+            database.connection().execute_batch("DROP TRIGGER memories_fts_insert; DROP TRIGGER memories_fts_delete; DROP TRIGGER memories_fts_update; DROP TABLE memories_fts; PRAGMA user_version=4;").unwrap();
+        }
+        let database = Database::open(&path).unwrap();
+        let count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM memories_fts WHERE memories_fts MATCH '\"既存の猫記憶\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        let _ = std::fs::remove_file(path);
+    }
 }
