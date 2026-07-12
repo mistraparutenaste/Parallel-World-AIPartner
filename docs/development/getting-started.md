@@ -55,6 +55,17 @@ $env:PW_STT_MODEL_DIR=".models-dev/sherpa-onnx-zipformer-ja-reazonspeech-2024-08
 cargo test -p pw-stt-sherpa --test e2e_pipeline -- --ignored
 ```
 
+## 音声合成（AivisSpeech Engine）
+
+読み上げには [AivisSpeech Engine](https://aivis-project.com/) をローカルで起動しておく（既定 `http://127.0.0.1:10101`）。未起動でもアプリは動作し、音声のみ「利用できません」へ縮退する（テキスト表示は継続）。接続先・話者・音量・話速・ユーザー辞書は設定画面の「音声合成」パネルから変更する。
+
+実エンジンの受け入れテスト（/speakers → 合成 → WAV検証、キャッシュ再利用）:
+
+```powershell
+# エンジン起動後（接続先を変える場合は $env:PW_TTS_BASE_URL を設定）
+cargo test -p pw-tts --test real_engine -- --ignored --nocapture
+```
+
 ## 開発起動
 
 ```powershell
