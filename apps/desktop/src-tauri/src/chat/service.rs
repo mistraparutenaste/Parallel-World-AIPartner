@@ -71,9 +71,11 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
         .extract(user_text)
         .map_err(|error| error.to_string())?
     {
-        memory
-            .upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
-            .map_err(|error| error.to_string())?;
+        if let Err(error) =
+            memory.upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
+        {
+            tracing::warn!(%error, "persistent fact rejected; summary enrichment continues");
+        }
     }
     let messages = history
         .list_messages(DEFAULT_CONVERSATION_ID)
@@ -127,11 +129,9 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
         .last()
         .and_then(|item| item.id)
         .ok_or_else(|| "pending summary message lacks id".to_owned())?;
-    if !bounded.is_empty() {
-        memory
-            .upsert_summary(DEFAULT_CONVERSATION_ID, &bounded, through, unix_timestamp())
-            .map_err(|error| error.to_string())?;
-    }
+    memory
+        .upsert_summary(DEFAULT_CONVERSATION_ID, &bounded, through, unix_timestamp())
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -861,6 +861,56 @@ mod tests {
         assert!(second.through_message_id >= first.through_message_id);
         assert!(second.content.chars().count() <= SUMMARY_MAX_CHARS);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn unsafe_only_summary_batch_advances_cursor_then_later_safe_batch_is_processed() {
+        let path =
+            std::env::temp_dir().join(format!("pw-summary-cursor-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        for (user, assistant) in [
+            ("APIキー=abc", "token=xyz"),
+            ("安全な質問", "安全な回答"),
+            ("最近1", "最近1回答"),
+        ] {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                user,
+                assistant,
+            )
+            .unwrap();
+        }
+        drop(history);
+        process_enrichment_job(&path, "通常発話").unwrap();
+        let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert!(first.content.is_empty());
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        for (user, assistant) in [("追加1", "追加1回答"), ("追加2", "追加2回答")] {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                user,
+                assistant,
+            )
+            .unwrap();
+        }
+        drop(history);
+        process_enrichment_job(&path, "通常発話").unwrap();
+        let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert!(second.through_message_id > first.through_message_id);
+        assert!(second.content.contains("安全な質問"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

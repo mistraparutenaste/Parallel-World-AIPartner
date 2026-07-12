@@ -93,6 +93,21 @@ pub trait PersistentFactGenerator {
 pub struct JapanesePersistentFactGenerator;
 impl PersistentFactGenerator for JapanesePersistentFactGenerator {
     fn extract(&mut self, user_message: &str) -> Result<Vec<String>, PortError> {
+        let questions = [
+            "？",
+            "?",
+            "ですか",
+            "ますか",
+            "誰",
+            "なぜ",
+            "どうして",
+            "どこ",
+            "いつ",
+            "何",
+        ];
+        if questions.iter().any(|word| user_message.contains(word)) {
+            return Ok(Vec::new());
+        }
         let durable = ["好き", "嫌い", "住んで", "名前は", "仕事は", "誕生日"];
         let rejected = [
             "ない",
@@ -133,6 +148,12 @@ pub fn is_safe_persistent_content(content: &str) -> bool {
         "secret",
         "authorization",
         "bearer ",
+        "apiキー",
+        "トークン",
+        "パスワード",
+        "秘密",
+        "認証",
+        "ベアラー",
     ];
     if labels.iter().any(|label| lower.contains(label)) {
         return false;
@@ -252,9 +273,26 @@ mod tests {
             "token=abc",
             "secret value",
             "AbCdEf0123456789AbCdEf012345",
+            "APIキー=a",
+            "トークン: x",
+            "パスワードは短い",
+            "秘密=a",
+            "認証情報=x",
+            "ベアラー a",
         ] {
             assert!(!is_safe_persistent_content(secret), "{secret}");
         }
         assert!(is_safe_persistent_content("私は猫が好きです"));
+    }
+
+    #[test]
+    fn question_marker_or_question_word_rejects_the_whole_message_before_split() {
+        let mut generator = JapanesePersistentFactGenerator;
+        for question in [
+            "私は猫が好きです。あなたは好きですか？",
+            "私は猫が好きです。なぜ犬が好きなの",
+        ] {
+            assert!(generator.extract(question).unwrap().is_empty());
+        }
     }
 }

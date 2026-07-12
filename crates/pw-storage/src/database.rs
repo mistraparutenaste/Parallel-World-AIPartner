@@ -250,4 +250,27 @@ mod tests {
         assert_eq!(count, 1);
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn v6_upgrade_deduplicates_null_and_empty_sources_consistently_with_unique_index() {
+        let path =
+            std::env::temp_dir().join(format!("pw-v5-dedupe-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let database = Database::open(&path).unwrap();
+            database.connection().execute_batch("DROP INDEX memories_source_content_unique; PRAGMA user_version=5; INSERT INTO conversations(id,created_at,updated_at) VALUES('',1,1); INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES('同じ記憶',NULL,1,1),('同じ記憶','',2,2);").unwrap();
+        }
+        let database = Database::open(&path).unwrap();
+        let count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM memories WHERE content='同じ記憶'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        assert!(database.connection().execute("INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES('同じ記憶','',3,3)", []).is_err());
+        let _ = std::fs::remove_file(path);
+    }
 }

@@ -52,6 +52,11 @@ impl MemoryStore for SqliteMemoryStore {
         Ok(self.database.connection().last_insert_rowid())
     }
     fn update_memory(&mut self, id: i64, content: &str, updated_at: i64) -> Result<(), PortError> {
+        if !is_safe_persistent_content(content) {
+            return Err(PortError(
+                "refusing to persist secret-shaped memory content".into(),
+            ));
+        }
         self.database
             .connection()
             .execute(
@@ -187,5 +192,12 @@ mod tests {
                 .is_err()
         );
         assert!(store.search("Authorization", 10).unwrap().is_empty());
+        let id = store.upsert_memory(None, "私は猫が好き", 1).unwrap();
+        assert!(store.update_memory(id, "APIキー=x", 2).is_err());
+        assert!(
+            store
+                .upsert_summary("missing", "パスワード=x", 1, 1)
+                .is_err()
+        );
     }
 }
