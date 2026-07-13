@@ -130,9 +130,27 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-rearm-runtime-feature",
             "allow-report-frontend-error",
             "allow-list-diagnostic-reports",
-            "allow-export-diagnostic-reports"
+            "allow-export-diagnostic-reports",
+            "allow-get-update-state",
+            "allow-check-for-updates",
+            "allow-install-update"
         ]
     );
+}
+
+#[test]
+fn updater_commands_are_settings_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            permissions.iter().all(|permission| {
+                !permission.contains("update-state")
+                    && !permission.contains("check-for-updates")
+                    && !permission.contains("install-update")
+            }),
+            "updater command leaked into {capability}"
+        );
+    }
 }
 
 #[test]

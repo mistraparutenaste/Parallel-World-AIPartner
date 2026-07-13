@@ -14,7 +14,8 @@ use pw_contracts::{
     FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto,
     QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
     SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
-    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UpdateStateDto, UpdateStatusDto,
+    UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -59,6 +60,8 @@ fn main() {
     DiagnosticReportDto::export_all(&config).expect("export DiagnosticReportDto bindings");
     FrontendDiagnosticDto::export_all(&config).expect("export FrontendDiagnosticDto bindings");
     FrontendErrorKindDto::export_all(&config).expect("export FrontendErrorKindDto bindings");
+    UpdateStatusDto::export_all(&config).expect("export UpdateStatusDto bindings");
+    UpdateStateDto::export_all(&config).expect("export UpdateStateDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

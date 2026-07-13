@@ -32,5 +32,8 @@
     "allow-report-frontend-error",
     "allow-list-diagnostic-reports",
     "allow-export-diagnostic-reports"
+    ,"allow-get-update-state"
+    ,"allow-check-for-updates"
+    ,"allow-install-update"
   ]
 }

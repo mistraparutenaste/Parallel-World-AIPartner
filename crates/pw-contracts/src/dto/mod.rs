@@ -8,6 +8,7 @@ mod chat;
 mod diagnostics;
 mod runtime_health;
 mod tts;
+mod update;
 
 pub use app_status::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
 pub use audio::{
@@ -29,3 +30,4 @@ pub use tts::{
     SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
     UserDictWordDto,
 };
+pub use update::{UpdateStateDto, UpdateStatusDto};

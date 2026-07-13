@@ -1,0 +1,5 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Updater fixtures are signature-verified byte-for-byte; never normalize them
+tools/fixtures/updater/** -text

@@ -5,6 +5,7 @@ import { TtsPanel } from './TtsPanel';
 import { DataPanel } from './DataPanel';
 import { RuntimeHealthPanel } from './RuntimeHealthPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
+import { UpdatesPanel } from './UpdatesPanel';
 
 const SETTINGS_SECTIONS = [
   'マイク',
@@ -38,6 +39,7 @@ export function SettingsWindow() {
       <DataPanel />
       <RuntimeHealthPanel />
       <DiagnosticsPanel />
+      <UpdatesPanel />
     </main>
   );
 }

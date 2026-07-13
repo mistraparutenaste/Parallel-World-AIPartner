@@ -15,5 +15,5 @@ pub use dto::{
     QueueMetricsDto, RUNTIME_HEALTH_EVENT, RuntimeDiagnosticsDto, RuntimeFeatureDto,
     RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto,
     SttStateEventDto, TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UserDictWordDto,
+    UpdateStateDto, UpdateStatusDto, UserDictWordDto,
 };

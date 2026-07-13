@@ -20,6 +20,7 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+async-trait = "0.1"
 cpal = "0.18.1"
 command-group = "5.0.1"
 pw-application = { path = "crates/pw-application" }
@@ -43,6 +44,7 @@ sherpa-onnx = "1.13.4"
 tauri = { version = "2.11.5", features = ["macos-private-api", "protocol-asset"] }
 tauri-build = { version = "2.6.3", features = [] }
 tauri-plugin-window-state = "2"
+tauri-plugin-updater = "=2.10.1"
 tiny_http = "0.12"
 thiserror = "2.0"
 tracing = "0.1"

@@ -31,3 +31,5 @@ export type { RuntimeDiagnosticsDto } from './generated/RuntimeDiagnosticsDto';
 export type { DiagnosticReportDto } from './generated/DiagnosticReportDto';
 export type { FrontendDiagnosticDto } from './generated/FrontendDiagnosticDto';
 export type { FrontendErrorKindDto } from './generated/FrontendErrorKindDto';
+export type { UpdateStateDto } from './generated/UpdateStateDto';
+export type { UpdateStatusDto } from './generated/UpdateStatusDto';

@@ -13,7 +13,10 @@ pub mod speech;
 pub mod stability_heartbeat;
 pub mod supervisor;
 pub mod tts;
+pub mod updates;
 pub mod windows;
+
+use std::sync::Arc;
 
 use tauri::Manager;
 
@@ -22,9 +25,11 @@ use tauri::Manager;
 /// # Panics
 ///
 /// Panics if the Tauri runtime fails to start.
+#[allow(clippy::too_many_lines)] // Builder wiring is intentionally visible in one lifecycle function.
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::character::CharacterState::default())
         .manage(speech::SpeechService::default())
         .manage(chat::ChatService::default())
@@ -64,7 +69,10 @@ pub fn run() {
             supervisor::report_runtime_failure,
             supervisor::report_runtime_success,
             supervisor::retry_live2d_runtime,
-            supervisor::rearm_runtime_feature
+            supervisor::rearm_runtime_feature,
+            commands::updates::get_update_state,
+            commands::updates::check_for_updates,
+            commands::updates::install_update
         ])
         .setup(|app| {
             app.manage(supervisor::ManagedProcesses::from_environment(
@@ -77,6 +85,43 @@ pub fn run() {
                 app.handle().clone(),
                 heartbeat_path,
             )?);
+            let updater_configured = app
+                .config()
+                .plugins
+                .0
+                .get("updater")
+                .and_then(|value| value.get("endpoints"))
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|endpoints| !endpoints.is_empty());
+            if updater_configured {
+                let flush_app = app.handle().clone();
+                let flusher = updates::IdempotentFlusher::new(move || {
+                    flush_app
+                        .state::<stability_heartbeat::StabilityHeartbeatService>()
+                        .shutdown();
+                    flush_app.state::<supervisor::ManagedProcesses>().shutdown();
+                });
+                let backend = Arc::new(updates::TauriUpdateBackend::new(
+                    app.handle().clone(),
+                    flusher.clone(),
+                ));
+                app.manage(updates::UpdateService::enabled(
+                    app.package_info().version.to_string(),
+                    backend,
+                    Arc::new(updates::SettingsUpdateEmitter(app.handle().clone())),
+                    flusher,
+                ));
+                let update_app = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = update_app.state::<updates::UpdateService>().check().await {
+                        tracing::warn!(%error, "startup update check failed");
+                    }
+                });
+            } else {
+                app.manage(updates::UpdateService::disabled(
+                    app.package_info().version.to_string(),
+                ));
+            }
             windows::create_missing_windows(app.handle())?;
             restore_window_states(app.handle());
             windows::spawn_cursor_watcher(app.handle().clone());
@@ -92,6 +137,7 @@ pub fn run() {
                 app.state::<stability_heartbeat::StabilityHeartbeatService>()
                     .shutdown();
                 app.state::<supervisor::ManagedProcesses>().shutdown();
+                app.state::<updates::UpdateService>().flush_before_exit();
             }
         });
 }
