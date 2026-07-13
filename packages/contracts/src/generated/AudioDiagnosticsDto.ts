@@ -3,4 +3,4 @@
 /**
  * Snapshot of the speech pipeline counters for the diagnostics UI.
  */
-export type AudioDiagnosticsDto = { schema_version: number, running: boolean, capture_enabled: boolean, frames_processed: bigint, segments_completed: bigint, transcripts_accepted: bigint, transcripts_rejected: bigint, dropped_samples: bigint, };
+export type AudioDiagnosticsDto = { schema_version: number, running: boolean, capture_enabled: boolean, frames_processed: bigint, segments_completed: bigint, transcripts_accepted: bigint, transcripts_rejected: bigint, dropped_samples: bigint, failure_queue_depth: number, failure_queue_dropped: bigint, };

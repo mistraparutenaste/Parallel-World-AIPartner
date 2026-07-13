@@ -2,6 +2,7 @@ import type {
   AudioDeviceDto,
   AudioDiagnosticsDto,
   AudioLevelEventDto,
+  DeviceFallbackEventDto,
   RuntimeHealthEventDto,
   SttStateEventDto,
 } from '@parallel-world/contracts';
@@ -69,6 +70,10 @@ export function MicrophonePanel() {
         setMessage(null);
       }
     });
+    const stopFallback = subscribeEvent<DeviceFallbackEventDto>('stt-device-fallback', (payload) => {
+      setMessage(`選択したマイクが見つからないため、既定のマイク（${payload.active_device_id ?? '自動選択'}）を使用しています。`);
+      void refreshDevices();
+    });
 
     const timer = setInterval(() => {
       if (phaseRef.current === 'listening') {
@@ -88,6 +93,7 @@ export function MicrophonePanel() {
       stopState();
       stopLevel();
       stopHealth();
+      stopFallback();
     };
   }, []);
 
@@ -160,6 +166,8 @@ export function MicrophonePanel() {
             <li>採用: {diagnostics.transcripts_accepted}</li>
             <li>棄却: {diagnostics.transcripts_rejected}</li>
             <li>ドロップサンプル数: {diagnostics.dropped_samples}</li>
+            <li>障害通知キュー: {diagnostics.failure_queue_depth}</li>
+            <li>破棄された障害通知: {diagnostics.failure_queue_dropped}</li>
           </ul>
         </details>
       )}

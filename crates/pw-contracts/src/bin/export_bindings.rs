@@ -9,10 +9,11 @@ use std::path::Path;
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
-    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto, FailureClassDto,
-    HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
+    DeviceFallbackEventDto, FailureClassDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto,
+    ProcessOwnershipDto, RuntimeFeatureDto, RuntimeHealthEventDto, SpeechAudioEventDto,
+    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
+    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -29,6 +30,7 @@ fn main() {
     AudioDeviceDto::export_all(&config).expect("export AudioDeviceDto bindings");
     AudioDiagnosticsDto::export_all(&config).expect("export AudioDiagnosticsDto bindings");
     AudioLevelEventDto::export_all(&config).expect("export AudioLevelEventDto bindings");
+    DeviceFallbackEventDto::export_all(&config).expect("export DeviceFallbackEventDto bindings");
     SttPhaseDto::export_all(&config).expect("export SttPhaseDto bindings");
     SttStateEventDto::export_all(&config).expect("export SttStateEventDto bindings");
     TranscriptEventDto::export_all(&config).expect("export TranscriptEventDto bindings");

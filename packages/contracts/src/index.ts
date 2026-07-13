@@ -2,6 +2,7 @@ export type { AppStatusDto } from './generated/AppStatusDto';
 export type { AudioDeviceDto } from './generated/AudioDeviceDto';
 export type { AudioDiagnosticsDto } from './generated/AudioDiagnosticsDto';
 export type { AudioLevelEventDto } from './generated/AudioLevelEventDto';
+export type { DeviceFallbackEventDto } from './generated/DeviceFallbackEventDto';
 export type { SttPhaseDto } from './generated/SttPhaseDto';
 export type { SttStateEventDto } from './generated/SttStateEventDto';
 export type { TranscriptEventDto } from './generated/TranscriptEventDto';

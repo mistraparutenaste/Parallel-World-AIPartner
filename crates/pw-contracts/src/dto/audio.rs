@@ -24,6 +24,17 @@ pub struct AudioDiagnosticsDto {
     pub transcripts_accepted: u64,
     pub transcripts_rejected: u64,
     pub dropped_samples: u64,
+    pub failure_queue_depth: usize,
+    pub failure_queue_dropped: u64,
+}
+
+/// Emitted when the preferred microphone disappears and capture moves to the default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "DeviceFallbackEventDto.ts")]
+pub struct DeviceFallbackEventDto {
+    pub schema_version: u16,
+    pub preferred_device_id: Option<String>,
+    pub active_device_id: Option<String>,
 }
 
 /// Lifecycle state changes of the speech pipeline.
@@ -65,7 +76,7 @@ pub struct AudioLevelEventDto {
 
 #[cfg(test)]
 mod tests {
-    use super::{SttPhaseDto, SttStateEventDto};
+    use super::{DeviceFallbackEventDto, SttPhaseDto, SttStateEventDto};
     use crate::SCHEMA_VERSION;
 
     #[test]
@@ -79,5 +90,17 @@ mod tests {
         assert_eq!(json["schema_version"], 1);
         assert_eq!(json["phase"], "unavailable");
         assert_eq!(json["message"], "model missing");
+    }
+
+    #[test]
+    fn device_fallback_keeps_preferred_and_active_ids_distinct() {
+        let value = DeviceFallbackEventDto {
+            schema_version: SCHEMA_VERSION,
+            preferred_device_id: Some("usb-mic".into()),
+            active_device_id: Some("built-in".into()),
+        };
+        let json = serde_json::to_value(value).unwrap();
+        assert_eq!(json["preferred_device_id"], "usb-mic");
+        assert_eq!(json["active_device_id"], "built-in");
     }
 }

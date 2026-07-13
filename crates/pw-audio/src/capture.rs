@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, SampleFormat};
@@ -47,6 +48,7 @@ pub struct CaptureSession {
     /// Samples dropped because the ring buffer was full.
     pub dropped_samples: Arc<AtomicU64>,
     stop: Option<mpsc::Sender<()>>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl CaptureSession {
@@ -54,13 +56,21 @@ impl CaptureSession {
     pub fn dropped(&self) -> u64 {
         self.dropped_samples.load(Ordering::Relaxed)
     }
+
+    /// Stops capture and waits until the stream-owning thread has released the device.
+    pub fn stop_and_join(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
 }
 
 impl Drop for CaptureSession {
     fn drop(&mut self) {
-        if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
-        }
+        self.stop_and_join();
     }
 }
 
@@ -98,7 +108,7 @@ pub fn start_capture_with_failures(
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
 
-    std::thread::Builder::new()
+    let worker = std::thread::Builder::new()
         .name("pw-audio-capture".into())
         .spawn(move || {
             let result = build_stream(device_id.as_deref(), failures);
@@ -128,6 +138,7 @@ pub fn start_capture_with_failures(
         sample_rate,
         dropped_samples: dropped,
         stop: Some(stop_tx),
+        worker: Some(worker),
     })
 }
 
@@ -237,5 +248,36 @@ fn classify_stream_error(error: &cpal::Error) -> AudioStreamFailure {
         cpal::ErrorKind::DeviceNotAvailable => AudioStreamFailure::NotAvailable,
         cpal::ErrorKind::HostUnavailable => AudioStreamFailure::HostUnavailable,
         _ => AudioStreamFailure::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+    use super::CaptureSession;
+
+    #[test]
+    fn dropping_session_joins_stream_owner() {
+        let (_producer, consumer) = rtrb::RingBuffer::<f32>::new(1);
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel();
+        let exited = Arc::new(AtomicBool::new(false));
+        let worker_exited = Arc::clone(&exited);
+        let worker = std::thread::spawn(move || {
+            let _ = stop_rx.recv();
+            worker_exited.store(true, Ordering::Release);
+        });
+        let session = CaptureSession {
+            consumer,
+            sample_rate: 48_000,
+            dropped_samples: Arc::new(AtomicU64::new(0)),
+            stop: Some(stop_tx),
+            worker: Some(worker),
+        };
+
+        drop(session);
+
+        assert!(exited.load(Ordering::Acquire));
     }
 }

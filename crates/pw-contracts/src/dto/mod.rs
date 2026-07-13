@@ -10,8 +10,8 @@ mod tts;
 
 pub use app_status::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
 pub use audio::{
-    AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto,
+    AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, DeviceFallbackEventDto, SttPhaseDto,
+    SttStateEventDto, TranscriptEventDto,
 };
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{CharacterManifestDto, MotionGroupDto};
