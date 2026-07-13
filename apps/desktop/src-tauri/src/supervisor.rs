@@ -1,4 +1,5 @@
 use std::{
+    net::{SocketAddr, TcpStream},
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -46,17 +47,39 @@ impl ManagedProcesses {
     pub fn from_environment() -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let mut handles = Vec::new();
-        for (name, variable, args_variable) in [
-            ("AivisSpeech", "PW_AIVIS_ENGINE", "PW_AIVIS_ARGS"),
-            ("llama-server", "PW_LLAMA_SERVER", "PW_LLAMA_ARGS"),
+        for (name, variable, args_variable, port_variable, default_port) in [
+            (
+                "AivisSpeech",
+                "PW_AIVIS_ENGINE",
+                "PW_AIVIS_ARGS_JSON",
+                "PW_TTS_PORT",
+                10101,
+            ),
+            (
+                "llama-server",
+                "PW_LLAMA_SERVER",
+                "PW_LLAMA_ARGS_JSON",
+                "PW_LLM_PORT",
+                8080,
+            ),
         ] {
             let Some(path) = std::env::var_os(variable).filter(|value| !value.is_empty()) else {
                 continue;
             };
-            let args = std::env::var(args_variable)
+            let args = match std::env::var(args_variable) {
+                Ok(value) => match serde_json::from_str::<Vec<String>>(&value) {
+                    Ok(args) => args.into_iter().map(Into::into).collect(),
+                    Err(error) => {
+                        tracing::error!(process=name, %error, "invalid JSON argument array");
+                        continue;
+                    }
+                },
+                Err(_) => Vec::new(),
+            };
+            let port = std::env::var(port_variable)
                 .ok()
-                .map(|value| value.split_whitespace().map(Into::into).collect())
-                .unwrap_or_default();
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(default_port);
             handles.push(spawn_monitor(
                 name,
                 ProcessSpec {
@@ -66,6 +89,7 @@ impl ManagedProcesses {
                     current_dir: None,
                     output_capacity: 64 * 1024,
                 },
+                SocketAddr::from(([127, 0, 0, 1], port)),
                 stop.clone(),
             ));
         }
@@ -74,14 +98,12 @@ impl ManagedProcesses {
             handles: Mutex::new(handles),
         }
     }
-}
 
-impl Drop for ManagedProcesses {
-    fn drop(&mut self) {
+    pub fn shutdown(&self) {
         self.stop.store(true, Ordering::Release);
         for handle in self
             .handles
-            .get_mut()
+            .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .drain(..)
         {
@@ -90,8 +112,23 @@ impl Drop for ManagedProcesses {
     }
 }
 
-fn spawn_monitor(name: &'static str, spec: ProcessSpec, stop: Arc<AtomicBool>) -> JoinHandle<()> {
+impl Drop for ManagedProcesses {
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
+fn spawn_monitor(
+    name: &'static str,
+    spec: ProcessSpec,
+    probe: SocketAddr,
+    stop: Arc<AtomicBool>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
+        if probe_ready(probe) {
+            tracing::info!(process=name, %probe, "existing external process detected; not owned");
+            return;
+        }
         let clock = SystemClock;
         let seed = clock.now_ms() ^ u64::from(std::process::id());
         let mut backoff = BackoffPolicy::new(&clock, Jitter(seed));
@@ -104,6 +141,18 @@ fn spawn_monitor(name: &'static str, spec: ProcessSpec, stop: Arc<AtomicBool>) -
                         generation = child.generation(),
                         "managed process started"
                     );
+                    let ready_deadline = std::time::Instant::now() + Duration::from_secs(15);
+                    while !stop.load(Ordering::Acquire)
+                        && !probe_ready(probe)
+                        && child.try_wait().ok().flatten().is_none()
+                        && std::time::Instant::now() < ready_deadline
+                    {
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    if !probe_ready(probe) {
+                        tracing::warn!(process=name, %probe, "readiness probe failed");
+                        let _ = child.stop(Duration::from_secs(5));
+                    }
                     while !stop.load(Ordering::Acquire) && child.try_wait().ok().flatten().is_none()
                     {
                         thread::sleep(Duration::from_millis(100));
@@ -129,6 +178,10 @@ fn spawn_monitor(name: &'static str, spec: ProcessSpec, stop: Arc<AtomicBool>) -
             }
         }
     })
+}
+
+fn probe_ready(address: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
 }
 
 fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {

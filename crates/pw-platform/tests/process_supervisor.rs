@@ -89,7 +89,7 @@ fn spawn_failure_and_stop_race_are_safe() {
     let missing = ProcessSpec::new("definitely-not-a-real-parallel-world-executable");
     assert!(matches!(
         ProcessSupervisor::spawn(&missing),
-        Err(SupervisorError::Spawn(_))
+        Err(SupervisorError::InvalidExecutable(_))
     ));
 
     let supervisor = std::sync::Arc::new(ProcessSupervisor::spawn(&helper("hang")).unwrap());

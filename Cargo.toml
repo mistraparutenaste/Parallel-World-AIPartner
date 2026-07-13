@@ -21,6 +21,7 @@ publish = false
 
 [workspace.dependencies]
 cpal = "0.18.1"
+command-group = "5.0.1"
 pw-application = { path = "crates/pw-application" }
 pw-audio = { path = "crates/pw-audio" }
 pw-contracts = { path = "crates/pw-contracts" }

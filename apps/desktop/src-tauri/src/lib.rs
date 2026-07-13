@@ -63,8 +63,16 @@ pub fn run() {
             windows::spawn_cursor_watcher(app.handle().clone());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running parallel-world");
+        .build(tauri::generate_context!())
+        .expect("error while building parallel-world")
+        .run(|app, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                app.state::<supervisor::ManagedProcesses>().shutdown();
+            }
+        });
 }
 
 /// Restores saved position and size for every window (best effort).

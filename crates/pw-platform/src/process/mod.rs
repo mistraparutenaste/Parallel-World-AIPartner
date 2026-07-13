@@ -1,9 +1,10 @@
+use command_group::{CommandGroup, GroupChild};
 use std::{
     collections::VecDeque,
     ffi::OsString,
     io::{self, Read},
     path::PathBuf,
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
@@ -45,6 +46,8 @@ pub struct ProcessOutput {
 
 #[derive(Debug, thiserror::Error)]
 pub enum SupervisorError {
+    #[error("invalid executable: {0}")]
+    InvalidExecutable(String),
     #[error("failed to spawn child: {0}")]
     Spawn(#[source] io::Error),
     #[error("process operation failed: {0}")]
@@ -83,7 +86,7 @@ impl BoundedBytes {
 }
 
 struct State {
-    child: Child,
+    child: GroupChild,
     status: Option<ExitStatus>,
 }
 
@@ -93,29 +96,39 @@ pub struct ProcessSupervisor {
     generation: u64,
     stdout: Arc<Mutex<BoundedBytes>>,
     stderr: Arc<Mutex<BoundedBytes>>,
+    drains: Mutex<Vec<thread::JoinHandle<()>>>,
 }
 
 impl ProcessSupervisor {
     /// # Errors
     /// Returns an error when the operating system rejects the spawn.
     pub fn spawn(spec: &ProcessSpec) -> Result<Self, SupervisorError> {
-        let mut command = Command::new(&spec.executable);
+        let executable = validate_executable(&spec.executable)?;
+        let mut command = Command::new(executable);
+        command.env_clear();
+        for name in ["SystemRoot", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
+        }
         command
             .args(&spec.args)
             .envs(spec.env.iter().cloned())
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         if let Some(dir) = &spec.current_dir {
             command.current_dir(dir);
         }
-        let mut child = command.spawn().map_err(SupervisorError::Spawn)?;
+        let mut child = command.group_spawn().map_err(SupervisorError::Spawn)?;
         let stdout = Arc::new(Mutex::new(BoundedBytes::new(spec.output_capacity)));
         let stderr = Arc::new(Mutex::new(BoundedBytes::new(spec.output_capacity)));
-        if let Some(pipe) = child.stdout.take() {
-            spawn_drain(pipe, stdout.clone());
+        let mut drains = Vec::new();
+        if let Some(pipe) = child.inner().stdout.take() {
+            drains.push(spawn_drain(pipe, stdout.clone()));
         }
-        if let Some(pipe) = child.stderr.take() {
-            spawn_drain(pipe, stderr.clone());
+        if let Some(pipe) = child.inner().stderr.take() {
+            drains.push(spawn_drain(pipe, stderr.clone()));
         }
         Ok(Self {
             pid: child.id(),
@@ -126,6 +139,7 @@ impl ProcessSupervisor {
             }),
             stdout,
             stderr,
+            drains: Mutex::new(drains),
         })
     }
 
@@ -186,6 +200,7 @@ impl ProcessSupervisor {
         if generation != self.generation {
             return Ok(false);
         }
+        self.request_shutdown()?;
         if self.wait_for_exit(grace)?.is_some() {
             return Ok(true);
         }
@@ -199,6 +214,18 @@ impl ProcessSupervisor {
             state.status = Some(state.child.wait()?);
         }
         Ok(true)
+    }
+
+    /// Requests graceful shutdown by closing the owned child's stdin.
+    /// `AivisSpeech` and `llama-server` do not expose a stable authenticated HTTP shutdown contract;
+    /// after the grace period the owned process group/job is terminated.
+    ///
+    /// # Errors
+    /// Returns an error if the supervisor state lock is poisoned.
+    pub fn request_shutdown(&self) -> Result<(), SupervisorError> {
+        let mut state = self.lock_state()?;
+        drop(state.child.inner().stdin.take());
+        Ok(())
     }
 
     /// # Errors
@@ -234,10 +261,21 @@ impl ProcessSupervisor {
 impl Drop for ProcessSupervisor {
     fn drop(&mut self) {
         let _ = self.stop(Duration::from_secs(5));
+        for handle in self
+            .drains
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+        {
+            let _ = handle.join();
+        }
     }
 }
 
-fn spawn_drain(mut pipe: impl Read + Send + 'static, output: Arc<Mutex<BoundedBytes>>) {
+fn spawn_drain(
+    mut pipe: impl Read + Send + 'static,
+    output: Arc<Mutex<BoundedBytes>>,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
         loop {
@@ -249,5 +287,22 @@ fn spawn_drain(mut pipe: impl Read + Send + 'static, output: Arc<Mutex<BoundedBy
                     .append(&buffer[..read]),
             }
         }
-    });
+    })
+}
+
+fn validate_executable(path: &std::path::Path) -> Result<PathBuf, SupervisorError> {
+    if !path.is_absolute() {
+        return Err(SupervisorError::InvalidExecutable(
+            "path must be absolute".into(),
+        ));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| SupervisorError::InvalidExecutable(error.to_string()))?;
+    if !canonical.is_file() {
+        return Err(SupervisorError::InvalidExecutable(
+            "path is not a regular file".into(),
+        ));
+    }
+    Ok(canonical)
 }
