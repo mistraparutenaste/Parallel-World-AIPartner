@@ -1,4 +1,4 @@
-import type { AudioDeviceDto, SttStateEventDto } from '@parallel-world/contracts';
+import type { AudioDeviceDto, RuntimeHealthEventDto, SttStateEventDto } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MicrophonePanel } from './MicrophonePanel';
@@ -82,5 +82,26 @@ describe('MicrophonePanel', () => {
     expect(invokeMock).toHaveBeenCalledWith('set_capture_enabled', {
       enabled: false,
     });
+  });
+
+  it('shows audio recovery and re-enumerates devices', async () => {
+    render(<MicrophonePanel />);
+    await screen.findByRole('option', { name: 'Mic A' });
+    const payload: RuntimeHealthEventDto = {
+      schema_version: 1,
+      feature: 'audio_input',
+      status: 'recovering',
+      failure_class: 'transient',
+      last_error: null,
+      attempts: 1,
+      ownership: 'not_applicable',
+      circuit_open: false,
+      changed_at_ms: 1,
+    };
+
+    act(() => listenHandlers.get('runtime-health')?.({ payload }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('マイクを再接続しています');
+    expect(invokeMock.mock.calls.filter(([name]) => name === 'list_microphones')).toHaveLength(2);
   });
 });

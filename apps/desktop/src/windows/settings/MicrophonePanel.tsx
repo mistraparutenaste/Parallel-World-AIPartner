@@ -2,6 +2,7 @@ import type {
   AudioDeviceDto,
   AudioDiagnosticsDto,
   AudioLevelEventDto,
+  RuntimeHealthEventDto,
   SttStateEventDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
@@ -35,7 +36,7 @@ export function MicrophonePanel() {
   useEffect(() => {
     let disposed = false;
 
-    invoke<AudioDeviceDto[]>('list_microphones')
+    const refreshDevices = () => invoke<AudioDeviceDto[]>('list_microphones')
       .then((list) => {
         if (!disposed) {
           setDevices(list);
@@ -47,6 +48,7 @@ export function MicrophonePanel() {
           setMessage(`マイクを列挙できません: ${String(error)}`);
         }
       });
+    void refreshDevices();
 
     const stopState = subscribeEvent<SttStateEventDto>('stt-state', (payload) => {
       setPhase(payload.phase);
@@ -54,6 +56,18 @@ export function MicrophonePanel() {
     });
     const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
       setLevel(payload.rms);
+    });
+    const stopHealth = subscribeEvent<RuntimeHealthEventDto>('runtime-health', (payload) => {
+      if (payload.feature !== 'audio_input') return;
+      if (payload.status === 'recovering') {
+        setMessage('マイクを再接続しています…');
+        void refreshDevices();
+      } else if (payload.status === 'degraded') {
+        setMessage(payload.last_error ?? '選択したマイクが見つからないため既定のマイクを使用します。');
+        void refreshDevices();
+      } else if (payload.status === 'healthy') {
+        setMessage(null);
+      }
     });
 
     const timer = setInterval(() => {
@@ -73,6 +87,7 @@ export function MicrophonePanel() {
       clearInterval(timer);
       stopState();
       stopLevel();
+      stopHealth();
     };
   }, []);
 

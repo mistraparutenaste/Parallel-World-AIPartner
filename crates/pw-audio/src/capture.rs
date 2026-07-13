@@ -13,6 +13,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, SampleFormat};
 
 use crate::mix::{push_mono_counting_drops, write_interleaved_as_mono};
+use crate::recovery::{AudioStreamFailure, FailureSender};
 
 /// Ring buffer capacity in samples (~2 s at 48 kHz mono).
 const RING_CAPACITY: usize = 96_000;
@@ -74,6 +75,25 @@ impl Drop for CaptureSession {
 ///
 /// Panics when the OS refuses to spawn the audio thread.
 pub fn start_capture(device_id: Option<&str>) -> Result<CaptureSession, CaptureError> {
+    start_capture_with_failures(device_id, None)
+}
+
+/// Starts capture and forwards CPAL stream failures to a bounded control channel.
+///
+/// The error callback performs only a non-blocking channel send. Recovery, logging,
+/// device enumeration and stream rebuilding must happen on the owning control thread.
+///
+/// # Errors
+///
+/// Returns a [`CaptureError`] when the device cannot be resolved or the stream cannot be built.
+///
+/// # Panics
+///
+/// Panics when the OS refuses to spawn the dedicated capture thread.
+pub fn start_capture_with_failures(
+    device_id: Option<&str>,
+    failures: Option<FailureSender>,
+) -> Result<CaptureSession, CaptureError> {
     let device_id = device_id.map(str::to_owned);
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -81,7 +101,7 @@ pub fn start_capture(device_id: Option<&str>) -> Result<CaptureSession, CaptureE
     std::thread::Builder::new()
         .name("pw-audio-capture".into())
         .spawn(move || {
-            let result = build_stream(device_id.as_deref());
+            let result = build_stream(device_id.as_deref(), failures);
             match result {
                 Ok((stream, session_parts)) => {
                     if let Err(error) = stream.play() {
@@ -113,7 +133,10 @@ pub fn start_capture(device_id: Option<&str>) -> Result<CaptureSession, CaptureE
 
 type SessionParts = (rtrb::Consumer<f32>, u32, Arc<AtomicU64>);
 
-fn build_stream(device_id: Option<&str>) -> Result<(cpal::Stream, SessionParts), CaptureError> {
+fn build_stream(
+    device_id: Option<&str>,
+    failures: Option<FailureSender>,
+) -> Result<(cpal::Stream, SessionParts), CaptureError> {
     let host = cpal::default_host();
     let device = match device_id {
         Some(id) => {
@@ -142,6 +165,7 @@ fn build_stream(device_id: Option<&str>) -> Result<(cpal::Stream, SessionParts),
             channels,
             producer,
             Arc::clone(&dropped),
+            failures.clone(),
         )?,
         SampleFormat::U16 => build_typed_stream::<u16>(
             &device,
@@ -149,6 +173,7 @@ fn build_stream(device_id: Option<&str>) -> Result<(cpal::Stream, SessionParts),
             channels,
             producer,
             Arc::clone(&dropped),
+            failures.clone(),
         )?,
         _ => build_typed_stream::<f32>(
             &device,
@@ -156,6 +181,7 @@ fn build_stream(device_id: Option<&str>) -> Result<(cpal::Stream, SessionParts),
             channels,
             producer,
             Arc::clone(&dropped),
+            failures,
         )?,
     };
     Ok((stream, (consumer, sample_rate, dropped)))
@@ -167,6 +193,7 @@ fn build_typed_stream<T>(
     channels: usize,
     mut producer: rtrb::Producer<f32>,
     dropped: Arc<AtomicU64>,
+    failures: Option<FailureSender>,
 ) -> Result<cpal::Stream, CaptureError>
 where
     T: cpal::SizedSample,
@@ -191,10 +218,24 @@ where
                     dropped.fetch_add(lost as u64, Ordering::Relaxed);
                 }
             },
-            |error| {
-                tracing::warn!(%error, "audio input stream error");
+            move |error| {
+                if let Some(sender) = &failures {
+                    let _ = sender.notify(classify_stream_error(&error));
+                }
             },
             None,
         )
         .map_err(CaptureError::BuildStream)
+}
+
+fn classify_stream_error(error: &cpal::Error) -> AudioStreamFailure {
+    match error.kind() {
+        cpal::ErrorKind::DeviceChanged | cpal::ErrorKind::StreamInvalidated => {
+            AudioStreamFailure::DeviceChanged
+        }
+        cpal::ErrorKind::DeviceBusy => AudioStreamFailure::Busy,
+        cpal::ErrorKind::DeviceNotAvailable => AudioStreamFailure::NotAvailable,
+        cpal::ErrorKind::HostUnavailable => AudioStreamFailure::HostUnavailable,
+        _ => AudioStreamFailure::Unknown,
+    }
 }
