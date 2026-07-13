@@ -3,6 +3,7 @@ import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
 import { TtsPanel } from './TtsPanel';
 import { DataPanel } from './DataPanel';
+import { RuntimeHealthPanel } from './RuntimeHealthPanel';
 
 const SETTINGS_SECTIONS = [
   'マイク',
@@ -34,6 +35,7 @@ export function SettingsWindow() {
       <TtsPanel />
       <CharacterPanel />
       <DataPanel />
+      <RuntimeHealthPanel />
     </main>
   );
 }

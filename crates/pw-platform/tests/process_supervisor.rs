@@ -18,6 +18,10 @@ fn helper(mode: &str) -> ProcessSpec {
 }
 
 #[test]
+#[allow(
+    clippy::zombie_processes,
+    reason = "the supervisor tree-kill test owns and reaps this descendant"
+)]
 fn supervisor_helper_child() {
     let Ok(mode) = std::env::var("PW_HELPER_MODE") else {
         return;
@@ -36,6 +40,17 @@ fn supervisor_helper_child() {
         "hang" => loop {
             thread::sleep(Duration::from_secs(1));
         },
+        "descendant" => {
+            let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+            child
+                .args(["--exact", "supervisor_helper_child", "--nocapture"])
+                .env("PW_HELPER_MODE", "hang");
+            let child = child.spawn().unwrap();
+            eprintln!("DESCENDANT_PID={}", child.id());
+            loop {
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
         _ => std::process::exit(2),
     }
 }
@@ -120,4 +135,32 @@ fn health_probe_reports_running_child() {
     assert!(supervisor.is_healthy().unwrap());
     supervisor.stop(Duration::from_millis(10)).unwrap();
     assert!(!supervisor.is_healthy().unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+fn stop_reaps_descendant_process_tree() {
+    let supervisor = ProcessSupervisor::spawn(&helper("descendant")).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let descendant = loop {
+        let stderr = String::from_utf8_lossy(&supervisor.output().stderr).into_owned();
+        if let Some(pid) = stderr
+            .lines()
+            .find_map(|line| line.strip_prefix("DESCENDANT_PID="))
+        {
+            break pid.parse::<u32>().unwrap();
+        }
+        assert!(Instant::now() < deadline, "descendant pid was not reported");
+        thread::sleep(Duration::from_millis(10));
+    };
+    supervisor.stop(Duration::from_millis(50)).unwrap();
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {descendant}"), "/NH"])
+        .output()
+        .unwrap();
+    let listing = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !listing.contains(&descendant.to_string()),
+        "orphan process: {listing}"
+    );
 }
