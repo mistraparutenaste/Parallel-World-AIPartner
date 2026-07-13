@@ -120,6 +120,19 @@ fn delete_history_core(
         schema_version: SCHEMA_VERSION,
     })
 }
+fn execute_delete_history(
+    reset: impl FnOnce(&mut dyn FnMut() -> Result<(), String>) -> Result<(), String>,
+    delete: impl FnOnce() -> Result<ConversationHistoryDeletedEventDto, String>,
+    emit: impl FnOnce(ConversationHistoryDeletedEventDto) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut delete = Some(delete);
+    let mut emit = Some(emit);
+    let mut operation = || {
+        let payload = delete.take().expect("operation called once")()?;
+        emit.take().expect("operation called once")(payload)
+    };
+    reset(&mut operation)
+}
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 /// Stops chat and atomically deletes its durable history.
@@ -131,11 +144,14 @@ pub fn delete_conversation_history<R: Runtime>(
     layout: State<'_, AppDataLayout>,
     chat: State<'_, ChatService>,
 ) -> Result<(), String> {
-    chat.with_exclusive_reset(|| {
-        let payload = delete_history_core(&path(&layout))?;
-        app.emit("conversation-history-deleted", payload)
-            .map_err(|e| e.to_string())
-    })
+    execute_delete_history(
+        |operation| chat.with_exclusive_reset(operation),
+        || delete_history_core(&path(&layout)),
+        |payload| {
+            app.emit("conversation-history-deleted", payload)
+                .map_err(|e| e.to_string())
+        },
+    )
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -163,8 +179,11 @@ pub fn delete_memories(
 
 #[cfg(test)]
 mod tests {
-    use super::{delete_history_core, export_database, validated_export_path};
+    use super::{
+        delete_history_core, execute_delete_history, export_database, validated_export_path,
+    };
     use pw_application::history::{ConversationHistory, StoredConversation};
+    use pw_contracts::{ConversationHistoryDeletedEventDto, SCHEMA_VERSION};
     use pw_storage::{Database, SqliteConversationHistory};
     #[test]
     fn canonicalization_rejects_parent_alias_and_hardlink() {
@@ -240,5 +259,55 @@ mod tests {
             0
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn delete_wrapper_orders_reset_delete_emit_and_propagates_failures() {
+        use std::cell::RefCell;
+        let order = RefCell::new(Vec::new());
+        execute_delete_history(
+            |op| {
+                order.borrow_mut().push("reset");
+                op()
+            },
+            || {
+                order.borrow_mut().push("delete");
+                Ok(ConversationHistoryDeletedEventDto {
+                    schema_version: SCHEMA_VERSION,
+                })
+            },
+            |payload| {
+                assert_eq!(payload.schema_version, SCHEMA_VERSION);
+                order.borrow_mut().push("emit");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(*order.borrow(), ["reset", "delete", "emit"]);
+        let touched = RefCell::new(Vec::new());
+        assert!(
+            execute_delete_history(
+                |_| Err("reset".into()),
+                || {
+                    touched.borrow_mut().push("delete");
+                    unreachable!()
+                },
+                |_| {
+                    touched.borrow_mut().push("emit");
+                    Ok(())
+                }
+            )
+            .is_err()
+        );
+        assert!(touched.borrow().is_empty());
+        assert!(
+            execute_delete_history(
+                |op| op(),
+                || Ok(ConversationHistoryDeletedEventDto {
+                    schema_version: SCHEMA_VERSION
+                }),
+                |_| Err("emit".into())
+            )
+            .is_err()
+        );
     }
 }

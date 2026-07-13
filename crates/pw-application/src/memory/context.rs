@@ -240,15 +240,26 @@ pub fn redact_persistent_content(content: &str) -> String {
 fn redact_key_values(content: &str) -> String {
     use std::sync::OnceLock;
     static KEY_VALUE: OnceLock<regex::Regex> = OnceLock::new();
+    static QUOTED: OnceLock<regex::Regex> = OnceLock::new();
     static AUTH: OnceLock<regex::Regex> = OnceLock::new();
-    let key_value = KEY_VALUE.get_or_init(|| regex::Regex::new(r"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)\s*([:=])\s*([A-Za-z0-9._/\-\p{L}]+)([,;:]?)").unwrap());
+    static SPOKEN: OnceLock<regex::Regex> = OnceLock::new();
+    let key_value = KEY_VALUE.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)\s*([:=])\s*(["']?(?:\\.|[A-Za-z0-9._/\-\p{L}])+["']?)([,;:]?)"#).unwrap());
     let auth = AUTH.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)(\bauthorization\b\s*[:=]?\s*bearer\s+)([A-Za-z0-9._/\-]{2,})([,;:]?)",
+            r#"(?i)(\bauthorization\b\s*[:=]?\s*[A-Za-z][A-Za-z0-9_-]*\s+)(["']?(?:\\.|[A-Za-z0-9._/\-])+["']?)([,;:]?)"#,
         )
         .unwrap()
     });
-    let redacted = auth.replace_all(content, "$1[REDACTED]$3");
+    let quoted = QUOTED.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)(\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*')"#).unwrap());
+    let redacted = quoted.replace_all(content, "$1$2[REDACTED]");
+    let redacted = auth.replace_all(&redacted, "$1[REDACTED]$3");
+    let spoken = SPOKEN.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(\bsecret\s+value\s+|パスワードは\s*)(["']?(?:\\.|[^\s,;])+["']?)([,;:]?)"#,
+        )
+        .unwrap()
+    });
+    let redacted = spoken.replace_all(&redacted, "$1[REDACTED]$3");
     key_value
         .replace_all(&redacted, "$1$2[REDACTED]$4")
         .into_owned()
@@ -406,6 +417,22 @@ mod tests {
             redact_persistent_content("secret:xyz; next"),
             "secret:[REDACTED]; next"
         );
+        for (input, expected) in [
+            (r#"token = "abc def"; next"#, "token = [REDACTED]; next"),
+            (r"secret='ab\' cd'", "secret=[REDACTED]"),
+            (
+                "Authorization: Basic abc123, next",
+                "Authorization: Basic [REDACTED], next",
+            ),
+            (
+                "Authorization Digest xyz",
+                "Authorization Digest [REDACTED]",
+            ),
+            ("secret value abc; next", "secret value [REDACTED]; next"),
+            ("パスワードは xyz, 次", "パスワードは [REDACTED], 次"),
+        ] {
+            assert_eq!(redact_persistent_content(input), expected, "{input}");
+        }
     }
 
     #[test]
