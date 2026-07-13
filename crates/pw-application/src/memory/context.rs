@@ -243,6 +243,7 @@ fn redact_key_values(content: &str) -> String {
     static QUOTED: OnceLock<regex::Regex> = OnceLock::new();
     static AUTH: OnceLock<regex::Regex> = OnceLock::new();
     static SPOKEN: OnceLock<regex::Regex> = OnceLock::new();
+    static JAPANESE: OnceLock<regex::Regex> = OnceLock::new();
     let key_value = KEY_VALUE.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)\s*([:=])\s*(["']?(?:\\.|[A-Za-z0-9._/\-\p{L}])+["']?)([,;:]?)"#).unwrap());
     let auth = AUTH.get_or_init(|| {
         regex::Regex::new(
@@ -253,6 +254,8 @@ fn redact_key_values(content: &str) -> String {
     let quoted = QUOTED.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)(\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*')"#).unwrap());
     let redacted = quoted.replace_all(content, "$1$2[REDACTED]");
     let redacted = auth.replace_all(&redacted, "$1[REDACTED]$3");
+    let japanese = JAPANESE.get_or_init(|| regex::Regex::new(r#"(APIキー|トークン|パスワード|秘密の値|秘密|認証情報|認証)(\s*(?:は|が|：|:|=)\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;]+)([,;:]?)"#).unwrap());
+    let redacted = japanese.replace_all(&redacted, "$1$2[REDACTED]$3");
     let spoken = SPOKEN.get_or_init(|| {
         regex::Regex::new(
             r#"(?i)(\bsecret\s+value\s+|パスワードは\s*)(["']?(?:\\.|[^\s,;])+["']?)([,;:]?)"#,
@@ -409,6 +412,20 @@ mod tests {
         for ordinary in ["token economy", "password management", "パスワード管理方法"] {
             assert_eq!(redact_persistent_content(ordinary), ordinary);
         }
+        for (input, expected) in [
+            ("APIキーは abc", "APIキーは [REDACTED]"),
+            ("トークン が 'abc def'", "トークン が [REDACTED]"),
+            ("パスワード：\"abc def\"", "パスワード：[REDACTED]"),
+            ("秘密の値: abc", "秘密の値: [REDACTED]"),
+            ("認証情報 = xyz", "認証情報 = [REDACTED]"),
+            ("認証は xyz", "認証は [REDACTED]"),
+        ] {
+            assert_eq!(redact_persistent_content(input), expected, "{input}");
+        }
+        assert_eq!(
+            redact_persistent_content("APIキー管理方法"),
+            "APIキー管理方法"
+        );
         assert_eq!(
             redact_persistent_content("token=abc, next"),
             "token=[REDACTED], next"

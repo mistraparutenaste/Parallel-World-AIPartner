@@ -1147,7 +1147,7 @@ mod tests {
             &mut history,
             DEFAULT_CONVERSATION_ID,
             tracker.begin_turn(),
-            "keep token=\"raw Secret123\", secret value rawValue789; next",
+            "keep token=\"raw Secret123\", secret value rawValue789; APIキーは japaneseRaw123, next",
             "Authorization: Basic rawAssistant456;",
         )
         .unwrap();
@@ -1166,6 +1166,7 @@ mod tests {
             assert!(!joined.contains("rawSecret123"));
             assert!(!joined.contains("raw Secret123"));
             assert!(!joined.contains("rawValue789"));
+            assert!(!joined.contains("japaneseRaw123"));
             assert!(!joined.contains("rawAssistant456"));
         }
         let _ = std::fs::remove_dir_all(root);
