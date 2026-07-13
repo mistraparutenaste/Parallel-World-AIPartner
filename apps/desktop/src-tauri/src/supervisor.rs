@@ -1,4 +1,5 @@
 use std::{
+    io::{Read, Write},
     net::{SocketAddr, TcpStream},
     path::PathBuf,
     sync::{
@@ -80,6 +81,11 @@ impl ManagedProcesses {
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(default_port);
+            let probe_paths: &'static [&'static str] = if name == "AivisSpeech" {
+                &["/version", "/speakers"]
+            } else {
+                &["/health", "/v1/models"]
+            };
             handles.push(spawn_monitor(
                 name,
                 ProcessSpec {
@@ -90,6 +96,7 @@ impl ManagedProcesses {
                     output_capacity: 64 * 1024,
                 },
                 SocketAddr::from(([127, 0, 0, 1], port)),
+                probe_paths,
                 stop.clone(),
             ));
         }
@@ -122,10 +129,11 @@ fn spawn_monitor(
     name: &'static str,
     spec: ProcessSpec,
     probe: SocketAddr,
+    probe_paths: &'static [&'static str],
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        if probe_ready(probe) {
+        if probe_ready(probe, probe_paths) {
             tracing::info!(process=name, %probe, "existing external process detected; not owned");
             return;
         }
@@ -143,13 +151,13 @@ fn spawn_monitor(
                     );
                     let ready_deadline = std::time::Instant::now() + Duration::from_secs(15);
                     while !stop.load(Ordering::Acquire)
-                        && !probe_ready(probe)
+                        && !probe_ready(probe, probe_paths)
                         && child.try_wait().ok().flatten().is_none()
                         && std::time::Instant::now() < ready_deadline
                     {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    if !probe_ready(probe) {
+                    if !probe_ready(probe, probe_paths) {
                         tracing::warn!(process=name, %probe, "readiness probe failed");
                         let _ = child.stop(Duration::from_secs(5));
                     }
@@ -180,8 +188,28 @@ fn spawn_monitor(
     })
 }
 
-fn probe_ready(address: SocketAddr) -> bool {
-    TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok()
+fn probe_ready(address: SocketAddr, paths: &[&str]) -> bool {
+    paths.iter().any(|path| probe_http(address, path))
+}
+
+fn probe_http(address: SocketAddr, path: &str) -> bool {
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
+        return false;
+    };
+    let timeout = Some(Duration::from_millis(500));
+    if stream.set_read_timeout(timeout).is_err() || stream.set_write_timeout(timeout).is_err() {
+        return false;
+    }
+    let request = format!("GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n");
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = [0_u8; 64];
+    let Ok(read) = stream.read(&mut response) else {
+        return false;
+    };
+    let status = std::str::from_utf8(&response[..read]).unwrap_or_default();
+    status.starts_with("HTTP/1.1 2") || status.starts_with("HTTP/1.0 2")
 }
 
 fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {
