@@ -186,62 +186,6 @@ pub fn redact_persistent_content(content: &str) -> String {
     pw_domain::runtime_health::redact_persistent_content(content)
 }
 
-#[allow(dead_code)]
-fn legacy_redact_persistent_content(content: &str) -> String {
-    let keyed = redact_key_values(content);
-    if keyed != content {
-        return keyed;
-    }
-    if contains_label_only(content) {
-        return content.to_owned();
-    }
-    if is_safe_persistent_content(content) {
-        return content.to_owned();
-    }
-    let lower = content.to_ascii_lowercase();
-    let labels = [
-        "authorization",
-        "bearer",
-        "api_key",
-        "apikey",
-        "api key",
-        "token",
-        "password",
-        "passwd",
-        "secret",
-        "apiキー",
-        "トークン",
-        "パスワード",
-        "秘密",
-        "認証",
-        "ベアラー",
-    ];
-    let cut = labels.iter().filter_map(|label| lower.find(label)).min();
-    if let Some(index) = cut {
-        let prefix = content[..index].trim_end();
-        return if prefix.is_empty() {
-            "[REDACTED]".into()
-        } else {
-            format!("{prefix} [REDACTED]")
-        };
-    }
-    content
-        .split_whitespace()
-        .map(|part| {
-            if part.chars().count() >= 24
-                && part
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-            {
-                "[REDACTED]"
-            } else {
-                part
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 fn redact_key_values(content: &str) -> String {
     use std::sync::OnceLock;
     static KEY_VALUE: OnceLock<regex::Regex> = OnceLock::new();
