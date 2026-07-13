@@ -7,6 +7,7 @@ use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
+use crate::diagnostics::QueueMetrics;
 use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue};
 use pw_contracts::{
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
@@ -71,6 +72,7 @@ pub struct TtsService {
     dropped_sentences: AtomicU64,
     text_only_turn: AtomicU64,
     health: Arc<Mutex<RuntimeHealth>>,
+    queue_metrics: Arc<QueueMetrics>,
 }
 
 impl Default for TtsService {
@@ -82,6 +84,7 @@ impl Default for TtsService {
             dropped_sentences: AtomicU64::new(0),
             text_only_turn: AtomicU64::new(0),
             health: Arc::new(Mutex::new(RuntimeHealth::new(RuntimeFeature::TextToSpeech))),
+            queue_metrics: Arc::new(QueueMetrics::new("tts", TTS_QUEUE_CAPACITY)),
         }
     }
 }
@@ -94,6 +97,9 @@ fn fingerprint(settings: &TtsSettingsDto) -> String {
 }
 
 impl TtsService {
+    pub fn queue_metrics(&self) -> pw_contracts::QueueMetricsDto {
+        self.queue_metrics.snapshot()
+    }
     fn lock(&self) -> MutexGuard<'_, Option<Worker>> {
         self.worker
             .lock()
@@ -141,29 +147,37 @@ impl TtsService {
                 }
             }
         }
-        if let Some(worker) = guard.as_ref()
-            && let Err(error) = worker.tx.try_send(Command::Sentence {
+        if let Some(worker) = guard.as_ref() {
+            self.queue_metrics.enqueued();
+            if let Err(error) = worker.tx.try_send(Command::Sentence {
                 turn,
                 text: text.to_owned(),
-            })
-        {
-            match error {
-                TrySendError::Full(_) => {
-                    self.dropped_sentences.fetch_add(1, Ordering::Relaxed);
-                    self.invalid_up_to
-                        .fetch_max(turn.value(), Ordering::Relaxed);
-                    if self.text_only_turn.swap(turn.value(), Ordering::Relaxed) != turn.value() {
-                        emit_state(
-                            app,
-                            false,
-                            Some("tts queue is busy; continuing this turn text-only".to_owned()),
-                        );
+            }) {
+                self.queue_metrics.dequeued();
+                match error {
+                    TrySendError::Full(_) => {
+                        self.queue_metrics.busy();
+                        self.queue_metrics.dropped();
+                        self.dropped_sentences.fetch_add(1, Ordering::Relaxed);
+                        self.invalid_up_to
+                            .fetch_max(turn.value(), Ordering::Relaxed);
+                        if self.text_only_turn.swap(turn.value(), Ordering::Relaxed) != turn.value()
+                        {
+                            emit_state(
+                                app,
+                                false,
+                                Some(
+                                    "tts queue is busy; continuing this turn text-only".to_owned(),
+                                ),
+                            );
+                            emit_tts_health(app, &self.health, false);
+                        }
+                    }
+                    TrySendError::Disconnected(_) => {
+                        self.queue_metrics.dropped();
+                        emit_state(app, false, Some("tts worker is not available".to_owned()));
                         emit_tts_health(app, &self.health, false);
                     }
-                }
-                TrySendError::Disconnected(_) => {
-                    emit_state(app, false, Some("tts worker is not available".to_owned()));
-                    emit_tts_health(app, &self.health, false);
                 }
             }
         }
@@ -207,12 +221,14 @@ impl TtsService {
             health: Arc::clone(&self.health),
             invalid: Arc::clone(&invalid),
         };
+        let queue_metrics = Arc::clone(&self.queue_metrics);
 
         let thread = std::thread::Builder::new()
             .name("pw-tts".into())
             .spawn(move || {
                 let mut queue = SpeechSynthesisQueue::new(synthesizer, sink);
                 while let Ok(command) = rx.recv() {
+                    queue_metrics.dequeued();
                     if worker_cancel.load(Ordering::Relaxed) {
                         break;
                     }

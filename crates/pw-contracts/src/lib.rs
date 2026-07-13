@@ -11,7 +11,8 @@ pub use dto::{
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
     DeviceFallbackEventDto, FailureClassDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto,
-    ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto, RuntimeHealthEventDto,
-    SCHEMA_VERSION, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT, RuntimeDiagnosticsDto,
+    RuntimeFeatureDto, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
+    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
+    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };

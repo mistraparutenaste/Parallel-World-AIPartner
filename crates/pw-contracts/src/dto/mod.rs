@@ -20,8 +20,8 @@ pub use chat::{
     ConversationStateEventDto, LlmSettingsDto,
 };
 pub use runtime_health::{
-    FailureClassDto, HealthStatusDto, ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto,
-    RuntimeHealthEventDto,
+    FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
+    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
 };
 pub use tts::{
     SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,

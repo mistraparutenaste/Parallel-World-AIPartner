@@ -31,6 +31,7 @@ use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::commands::character::CharacterState;
+use crate::diagnostics::QueueMetrics;
 
 pub const MESSAGE_EVENT: &str = "chat-message";
 pub const STATE_EVENT: &str = "conversation-state";
@@ -146,24 +147,45 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 struct EnrichmentSender {
     wake: SyncSender<()>,
     pending: Arc<Mutex<Option<String>>>,
+    metrics: Arc<QueueMetrics>,
 }
 
 impl EnrichmentSender {
     fn replace_latest(&self, text: String) -> Result<(), ()> {
-        *self
+        let mut pending = self
             .pending
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.replace(text).is_some() {
+            self.metrics.coalesced();
+        }
+        drop(pending);
+        self.metrics.enqueued();
         match self.wake.try_send(()) {
-            Ok(()) | Err(TrySendError::Full(())) => Ok(()),
-            Err(TrySendError::Disconnected(())) => Err(()),
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(())) => {
+                self.metrics.dequeued();
+                self.metrics.busy();
+                Ok(())
+            }
+            Err(TrySendError::Disconnected(())) => {
+                self.metrics.dequeued();
+                self.metrics.dropped();
+                Err(())
+            }
         }
     }
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_enrichment(database_path: &Path, rx: Receiver<()>, pending: Arc<Mutex<Option<String>>>) {
+fn run_enrichment(
+    database_path: &Path,
+    rx: Receiver<()>,
+    pending: Arc<Mutex<Option<String>>>,
+    metrics: Arc<QueueMetrics>,
+) {
     while rx.recv().is_ok() {
+        metrics.dequeued();
         let Some(user_text) = pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -182,15 +204,26 @@ fn run_context_worker<M: MemoryStore>(
     memory: M,
     rx: Receiver<Command>,
     conversation_tx: SyncSender<Command>,
+    submit_metrics: Arc<QueueMetrics>,
+    context_metrics: Arc<QueueMetrics>,
+    conversation_metrics: Arc<QueueMetrics>,
 ) {
     while let Ok(command) = rx.recv() {
+        submit_metrics.dequeued();
         match command {
             Command::Submit(text, turn_id) => {
+                context_metrics.enqueued();
                 let context = load_memory_context(&memory, &text);
+                context_metrics.dequeued();
+                // Account for the distinct prepared-conversation queue.
+                // Increment before send so a fast consumer cannot underflow depth.
+                conversation_metrics.enqueued();
                 if conversation_tx
                     .send(Command::Prepared(text, turn_id, context))
                     .is_err()
                 {
+                    conversation_metrics.dequeued();
+                    conversation_metrics.dropped();
                     break;
                 }
             }
@@ -361,11 +394,26 @@ enum Command {
     Prepared(String, u64, MemoryContext),
 }
 
-fn enqueue_submit(tx: &SyncSender<Command>, text: String, turn_id: u64) -> Result<(), String> {
+fn enqueue_submit(
+    tx: &SyncSender<Command>,
+    metrics: &QueueMetrics,
+    text: String,
+    turn_id: u64,
+) -> Result<(), String> {
+    metrics.enqueued();
     tx.try_send(Command::Submit(text, turn_id))
         .map_err(|error| match error {
-            TrySendError::Full(_) => "conversation is busy; please retry".to_owned(),
-            TrySendError::Disconnected(_) => "conversation worker is not available".to_owned(),
+            TrySendError::Full(_) => {
+                metrics.dequeued();
+                metrics.busy();
+                metrics.dropped();
+                "conversation is busy; please retry".to_owned()
+            }
+            TrySendError::Disconnected(_) => {
+                metrics.dequeued();
+                metrics.dropped();
+                "conversation worker is not available".to_owned()
+            }
         })
 }
 
@@ -415,6 +463,10 @@ pub struct ChatService {
     cancel: Arc<AtomicBool>,
     fallback_turn_id: AtomicU64,
     health: Arc<Mutex<RuntimeHealth>>,
+    submit_metrics: Arc<QueueMetrics>,
+    context_metrics: Arc<QueueMetrics>,
+    conversation_metrics: Arc<QueueMetrics>,
+    enrichment_metrics: Arc<QueueMetrics>,
 }
 
 impl Default for ChatService {
@@ -427,6 +479,16 @@ impl Default for ChatService {
             health: Arc::new(Mutex::new(RuntimeHealth::new(
                 RuntimeFeature::LanguageModel,
             ))),
+            submit_metrics: Arc::new(QueueMetrics::new("chat_submit", SUBMIT_QUEUE_CAPACITY)),
+            context_metrics: Arc::new(QueueMetrics::new("chat_context", SUBMIT_QUEUE_CAPACITY)),
+            conversation_metrics: Arc::new(QueueMetrics::new(
+                "chat_conversation",
+                CONVERSATION_QUEUE_CAPACITY,
+            )),
+            enrichment_metrics: Arc::new(QueueMetrics::new(
+                "chat_enrichment",
+                ENRICHMENT_QUEUE_CAPACITY,
+            )),
         }
     }
 }
@@ -444,6 +506,17 @@ fn fingerprint(settings: &LlmSettingsDto) -> String {
 }
 
 impl ChatService {
+    pub fn queue_metrics(&self) -> Vec<pw_contracts::QueueMetricsDto> {
+        [
+            &self.submit_metrics,
+            &self.context_metrics,
+            &self.conversation_metrics,
+            &self.enrichment_metrics,
+        ]
+        .into_iter()
+        .map(|metrics| metrics.snapshot())
+        .collect()
+    }
     /// Stops the active workers and clears their in-memory prompt state.
     ///
     /// # Errors
@@ -532,7 +605,7 @@ impl ChatService {
         };
         let database_path = layout.data.join("parallel-world.sqlite3");
         let turn_id = self.reserve_turn_id(&database_path);
-        enqueue_submit(&worker.tx, text, turn_id)
+        enqueue_submit(&worker.tx, &self.submit_metrics, text, turn_id)
     }
 
     /// Cancels the in-flight turn (生成途中で停止).
@@ -540,6 +613,7 @@ impl ChatService {
         self.cancel.store(true, Ordering::Relaxed);
     }
 
+    #[allow(clippy::too_many_lines)]
     fn start_worker<R: Runtime>(
         &self,
         app: AppHandle<R>,
@@ -570,6 +644,7 @@ impl ChatService {
         let enrichment_tx = EnrichmentSender {
             wake: enrichment_wake,
             pending: Arc::clone(&enrichment_pending),
+            metrics: Arc::clone(&self.enrichment_metrics),
         };
         let database_path = app
             .state::<AppDataLayout>()
@@ -605,15 +680,33 @@ impl ChatService {
 
         let context_thread = std::thread::Builder::new()
             .name("pw-memory-context".into())
-            .spawn(move || run_context_worker(memory, context_rx, conversation_tx))
+            .spawn({
+                let submit_metrics = Arc::clone(&self.submit_metrics);
+                let context_metrics = Arc::clone(&self.context_metrics);
+                let conversation_metrics = Arc::clone(&self.conversation_metrics);
+                move || {
+                    run_context_worker(
+                        memory,
+                        context_rx,
+                        conversation_tx,
+                        submit_metrics,
+                        context_metrics,
+                        conversation_metrics,
+                    );
+                }
+            })
             .map_err(|error| format!("failed to spawn memory context worker: {error}"))?;
 
         let enrichment_path = database_path.clone();
         let enrichment_thread = std::thread::Builder::new()
             .name("pw-memory-enrichment".into())
-            .spawn(move || run_enrichment(&enrichment_path, enrichment_rx, enrichment_pending))
+            .spawn({
+                let metrics = Arc::clone(&self.enrichment_metrics);
+                move || run_enrichment(&enrichment_path, enrichment_rx, enrichment_pending, metrics)
+            })
             .map_err(|error| format!("failed to spawn memory enrichment worker: {error}"))?;
 
+        let conversation_metrics_for_worker = Arc::clone(&self.conversation_metrics);
         let thread = std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
@@ -626,6 +719,7 @@ impl ChatService {
                     last_turn_id,
                 );
                 while let Ok(command) = rx.recv() {
+                    conversation_metrics_for_worker.dequeued();
                     match command {
                         Command::Prepared(text, turn_id, context) => {
                             orchestrator.recover();
@@ -992,7 +1086,14 @@ mod tests {
         let pending = Arc::new(Mutex::new(Some("私は猫が好きです".to_owned())));
         let worker_pending = Arc::clone(&pending);
         let worker_path = path.clone();
-        let worker = std::thread::spawn(move || run_enrichment(&worker_path, rx, worker_pending));
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                worker_pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+            );
+        });
         tx.send(()).unwrap();
         drop(tx);
         worker.join().unwrap();
@@ -1187,8 +1288,16 @@ mod tests {
     fn slow_memory_search_does_not_block_submit_sender() {
         let (tx, rx) = sync_channel(8);
         let (conversation_tx, conversation_rx) = sync_channel(8);
-        let worker =
-            std::thread::spawn(move || run_context_worker(SlowMemory, rx, conversation_tx));
+        let worker = std::thread::spawn(move || {
+            run_context_worker(
+                SlowMemory,
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", 8)),
+                Arc::new(QueueMetrics::new("test_context", 8)),
+                Arc::new(QueueMetrics::new("test_conversation", 8)),
+            );
+        });
         let started = std::time::Instant::now();
         tx.send(Command::Submit("query".into(), 1)).unwrap();
         assert!(started.elapsed() < std::time::Duration::from_millis(50));
@@ -1343,9 +1452,10 @@ mod tests {
     #[test]
     fn bounded_submit_queue_returns_busy_without_silently_dropping_user_text() {
         let (tx, rx) = sync_channel(1);
-        enqueue_submit(&tx, "first".to_owned(), 1).unwrap();
+        let metrics = QueueMetrics::new("test_submit", 1);
+        enqueue_submit(&tx, &metrics, "first".to_owned(), 1).unwrap();
 
-        let error = enqueue_submit(&tx, "second".to_owned(), 2).unwrap_err();
+        let error = enqueue_submit(&tx, &metrics, "second".to_owned(), 2).unwrap_err();
 
         assert_eq!(error, "conversation is busy; please retry");
         let Command::Submit(text, turn_id) = rx.recv().unwrap() else {
@@ -1361,6 +1471,7 @@ mod tests {
         let sender = EnrichmentSender {
             wake,
             pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
         sender.replace_latest("old".into()).unwrap();
         sender.replace_latest("latest".into()).unwrap();

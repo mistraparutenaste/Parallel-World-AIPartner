@@ -237,6 +237,12 @@
           "markdownDescription": "Enables the get_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_runtime_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-runtime-diagnostics",
+          "markdownDescription": "Enables the get_runtime_diagnostics command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_tts_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-tts-settings",
@@ -391,6 +397,12 @@
           "type": "string",
           "const": "deny-get-llm-settings",
           "markdownDescription": "Denies the get_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_runtime_diagnostics command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-runtime-diagnostics",
+          "markdownDescription": "Denies the get_runtime_diagnostics command without any pre-configured scope."
         },
         {
           "description": "Denies the get_tts_settings command without any pre-configured scope.",

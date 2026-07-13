@@ -1,4 +1,4 @@
-import type { RuntimeHealthEventDto } from '@parallel-world/contracts';
+import type { RuntimeDiagnosticsDto, RuntimeHealthEventDto } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
@@ -20,8 +20,10 @@ function ownership(event: RuntimeHealthEventDto) {
 
 export function RuntimeHealthPanel() {
   const [health, setHealth] = useState<Partial<Record<RuntimeHealthEventDto['feature'], RuntimeHealthEventDto>>>({});
+  const [diagnostics, setDiagnostics] = useState<RuntimeDiagnosticsDto | null>(null);
 
   useEffect(() => {
+    void invoke<RuntimeDiagnosticsDto>('get_runtime_diagnostics').then(setDiagnostics).catch(() => undefined);
     let active = true;
     let dispose: (() => void) | undefined;
     void Promise.resolve()
@@ -58,6 +60,12 @@ export function RuntimeHealthPanel() {
               </button>
             ) : null}
           </li>
+        ))}
+      </ul>
+      <h3>Bounded queues</h3>
+      <ul>
+        {diagnostics?.queues.map((queue) => (
+          <li key={queue.name}>{queue.name}: {queue.depth} / {queue.capacity}; dropped {queue.dropped}; busy {queue.busy}; coalesced {queue.coalesced}</li>
         ))}
       </ul>
     </section>

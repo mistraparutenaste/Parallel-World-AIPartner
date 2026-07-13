@@ -110,6 +110,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-stop-listening",
             "allow-set-capture-enabled",
             "allow-get-audio-diagnostics",
+            "allow-get-runtime-diagnostics",
             "allow-get-llm-settings",
             "allow-set-llm-settings",
             "allow-get-tts-settings",
@@ -135,6 +136,18 @@ fn process_rearm_is_exposed_only_to_settings() {
                 .iter()
                 .any(|permission| permission.contains("rearm-managed-process")),
             "process rearm leaked into {capability}"
+        );
+    }
+}
+
+#[test]
+fn runtime_diagnostics_is_exposed_only_to_settings() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("get-runtime-diagnostics"))
         );
     }
 }

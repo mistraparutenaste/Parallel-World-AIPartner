@@ -83,3 +83,15 @@ test('settings can rearm only a circuit-open managed process', async () => {
   });
   expect(screen.queryByRole('button', { name: /音声合成.*再起動/ })).not.toBeInTheDocument();
 });
+
+test('renders all bounded queue diagnostics', async () => {
+  invokeMock.mockImplementation((command) => command === 'get_runtime_diagnostics'
+    ? Promise.resolve({ schema_version: 1, queues: [
+      { name: 'chat_submit', depth: 2, capacity: 8, dropped: 1, busy: 1, coalesced: 0 },
+      { name: 'tts', depth: 0, capacity: 8, dropped: 3, busy: 2, coalesced: 0 },
+    ] })
+    : Promise.resolve(undefined));
+  render(<RuntimeHealthPanel />);
+  expect(await screen.findByText(/chat_submit.*2 \/ 8.*dropped 1.*busy 1/)).toBeInTheDocument();
+  expect(screen.getByText(/tts.*0 \/ 8.*dropped 3.*busy 2/)).toBeInTheDocument();
+});

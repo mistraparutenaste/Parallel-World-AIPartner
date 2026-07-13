@@ -26,3 +26,5 @@ export type { FailureClassDto } from './generated/FailureClassDto';
 export type { HealthStatusDto } from './generated/HealthStatusDto';
 export type { RuntimeFeatureDto } from './generated/RuntimeFeatureDto';
 export type { RuntimeHealthEventDto } from './generated/RuntimeHealthEventDto';
+export type { QueueMetricsDto } from './generated/QueueMetricsDto';
+export type { RuntimeDiagnosticsDto } from './generated/RuntimeDiagnosticsDto';

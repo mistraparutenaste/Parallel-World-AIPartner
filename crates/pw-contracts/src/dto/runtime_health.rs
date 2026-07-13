@@ -3,6 +3,24 @@ use ts_rs::TS;
 
 pub const RUNTIME_HEALTH_EVENT: &str = "runtime-health";
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct QueueMetricsDto {
+    pub name: String,
+    pub depth: usize,
+    pub capacity: usize,
+    pub dropped: u64,
+    pub busy: u64,
+    pub coalesced: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct RuntimeDiagnosticsDto {
+    pub schema_version: u16,
+    pub queues: Vec<QueueMetricsDto>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export)]

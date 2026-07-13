@@ -16,6 +16,7 @@
     "allow-stop-listening",
     "allow-set-capture-enabled",
     "allow-get-audio-diagnostics",
+    "allow-get-runtime-diagnostics",
     "allow-get-llm-settings",
     "allow-set-llm-settings",
     "allow-get-tts-settings",

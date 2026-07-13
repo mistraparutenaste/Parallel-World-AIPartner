@@ -7,6 +7,7 @@ pub mod bootstrap;
 pub mod character;
 pub mod chat;
 pub mod commands;
+pub mod diagnostics;
 pub mod error;
 pub mod speech;
 pub mod supervisor;
@@ -39,6 +40,7 @@ pub fn run() {
             commands::audio::set_capture_enabled,
             commands::audio::set_speech_playback,
             commands::audio::get_audio_diagnostics,
+            commands::diagnostics::get_runtime_diagnostics,
             commands::chat::send_chat_message,
             commands::chat::cancel_turn,
             commands::chat::get_llm_settings,

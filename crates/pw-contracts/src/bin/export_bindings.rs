@@ -11,9 +11,9 @@ use pw_contracts::{
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
     DeviceFallbackEventDto, FailureClassDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto,
-    ProcessOwnershipDto, RuntimeFeatureDto, RuntimeHealthEventDto, SpeechAudioEventDto,
-    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
-    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
+    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
+    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -53,6 +53,8 @@ fn main() {
     ProcessOwnershipDto::export_all(&config).expect("export ProcessOwnershipDto bindings");
     FailureClassDto::export_all(&config).expect("export FailureClassDto bindings");
     RuntimeHealthEventDto::export_all(&config).expect("export RuntimeHealthEventDto bindings");
+    QueueMetricsDto::export_all(&config).expect("export QueueMetricsDto bindings");
+    RuntimeDiagnosticsDto::export_all(&config).expect("export RuntimeDiagnosticsDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

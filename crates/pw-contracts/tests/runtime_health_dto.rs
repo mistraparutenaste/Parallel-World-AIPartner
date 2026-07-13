@@ -1,8 +1,25 @@
 use pw_contracts::{
-    FailureClassDto, HealthStatusDto, ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto,
-    RuntimeHealthEventDto,
+    FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
+    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SCHEMA_VERSION,
 };
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
+
+#[test]
+fn runtime_diagnostics_exposes_bounded_queue_metrics() {
+    let queue = QueueMetricsDto {
+        name: "chat_submit".to_owned(),
+        depth: 2,
+        capacity: 8,
+        dropped: 3,
+        busy: 4,
+        coalesced: 5,
+    };
+    let dto = RuntimeDiagnosticsDto {
+        schema_version: SCHEMA_VERSION,
+        queues: vec![queue.clone()],
+    };
+    assert_eq!(dto.queues, vec![queue]);
+}
 
 #[test]
 fn runtime_health_event_is_versioned_and_named() {
