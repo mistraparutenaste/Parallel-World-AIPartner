@@ -24,6 +24,10 @@ fn main() {
             "list_user_dict",
             "add_user_dict_word",
             "delete_user_dict_word",
+            "get_runtime_diagnostics",
+            "report_frontend_error",
+            "list_diagnostic_reports",
+            "export_diagnostic_reports",
         ]),
     ))
     .expect("failed to run tauri build script");

@@ -28,6 +28,9 @@
     "allow-export-user-data",
     "allow-delete-conversation-history",
     "allow-delete-memories",
-    "allow-rearm-runtime-feature"
+    "allow-rearm-runtime-feature",
+    "allow-report-frontend-error",
+    "allow-list-diagnostic-reports",
+    "allow-export-diagnostic-reports"
   ]
 }

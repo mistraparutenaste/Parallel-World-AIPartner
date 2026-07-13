@@ -28,3 +28,6 @@ export type { RuntimeFeatureDto } from './generated/RuntimeFeatureDto';
 export type { RuntimeHealthEventDto } from './generated/RuntimeHealthEventDto';
 export type { QueueMetricsDto } from './generated/QueueMetricsDto';
 export type { RuntimeDiagnosticsDto } from './generated/RuntimeDiagnosticsDto';
+export type { DiagnosticReportDto } from './generated/DiagnosticReportDto';
+export type { FrontendDiagnosticDto } from './generated/FrontendDiagnosticDto';
+export type { FrontendErrorKindDto } from './generated/FrontendErrorKindDto';

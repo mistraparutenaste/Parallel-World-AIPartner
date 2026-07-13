@@ -67,7 +67,8 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
             "allow-set-speech-playback",
             "allow-report-runtime-failure",
             "allow-report-runtime-success",
-            "allow-rearm-runtime-feature"
+            "allow-rearm-runtime-feature",
+            "allow-report-frontend-error"
         ]
     );
 }
@@ -82,7 +83,8 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
             "allow-get-app-status",
             "allow-send-chat-message",
             "allow-cancel-turn",
-            "allow-list-conversation-history"
+            "allow-list-conversation-history",
+            "allow-report-frontend-error"
         ]
     );
     for permission in &permissions {
@@ -125,7 +127,10 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-export-user-data",
             "allow-delete-conversation-history",
             "allow-delete-memories",
-            "allow-rearm-runtime-feature"
+            "allow-rearm-runtime-feature",
+            "allow-report-frontend-error",
+            "allow-list-diagnostic-reports",
+            "allow-export-diagnostic-reports"
         ]
     );
 }
@@ -149,6 +154,18 @@ fn runtime_diagnostics_is_exposed_only_to_settings() {
             !permissions
                 .iter()
                 .any(|permission| permission.contains("get-runtime-diagnostics"))
+        );
+    }
+}
+
+#[test]
+fn crash_report_listing_and_export_are_settings_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("diagnostic-reports"))
         );
     }
 }

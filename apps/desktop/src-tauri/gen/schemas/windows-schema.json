@@ -207,6 +207,12 @@
           "markdownDescription": "Enables the delete_user_dict_word command without any pre-configured scope."
         },
         {
+          "description": "Enables the export_diagnostic_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-diagnostic-reports",
+          "markdownDescription": "Enables the export_diagnostic_reports command without any pre-configured scope."
+        },
+        {
           "description": "Enables the export_user_data command.",
           "type": "string",
           "const": "allow-export-user-data",
@@ -255,6 +261,12 @@
           "markdownDescription": "Enables the list_conversation_history command."
         },
         {
+          "description": "Enables the list_diagnostic_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-diagnostic-reports",
+          "markdownDescription": "Enables the list_diagnostic_reports command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-microphones",
@@ -283,6 +295,12 @@
           "type": "string",
           "const": "allow-rearm-runtime-feature",
           "markdownDescription": "Enables the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the report_frontend_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-report-frontend-error",
+          "markdownDescription": "Enables the report_frontend_error command without any pre-configured scope."
         },
         {
           "description": "Enables the report_runtime_failure command without any pre-configured scope.",
@@ -387,6 +405,12 @@
           "markdownDescription": "Denies the delete_user_dict_word command without any pre-configured scope."
         },
         {
+          "description": "Denies the export_diagnostic_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-diagnostic-reports",
+          "markdownDescription": "Denies the export_diagnostic_reports command without any pre-configured scope."
+        },
+        {
           "description": "Denies the export_user_data command.",
           "type": "string",
           "const": "deny-export-user-data",
@@ -435,6 +459,12 @@
           "markdownDescription": "Denies the list_conversation_history command."
         },
         {
+          "description": "Denies the list_diagnostic_reports command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-diagnostic-reports",
+          "markdownDescription": "Denies the list_diagnostic_reports command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_microphones command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-microphones",
@@ -463,6 +493,12 @@
           "type": "string",
           "const": "deny-rearm-runtime-feature",
           "markdownDescription": "Denies the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the report_frontend_error command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-report-frontend-error",
+          "markdownDescription": "Denies the report_frontend_error command without any pre-configured scope."
         },
         {
           "description": "Denies the report_runtime_failure command without any pre-configured scope.",

@@ -10,10 +10,11 @@ use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DeviceFallbackEventDto, FailureClassDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto,
-    ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    DeviceFallbackEventDto, DiagnosticReportDto, FailureClassDto, FrontendDiagnosticDto,
+    FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto,
+    QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
+    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -55,6 +56,9 @@ fn main() {
     RuntimeHealthEventDto::export_all(&config).expect("export RuntimeHealthEventDto bindings");
     QueueMetricsDto::export_all(&config).expect("export QueueMetricsDto bindings");
     RuntimeDiagnosticsDto::export_all(&config).expect("export RuntimeDiagnosticsDto bindings");
+    DiagnosticReportDto::export_all(&config).expect("export DiagnosticReportDto bindings");
+    FrontendDiagnosticDto::export_all(&config).expect("export FrontendDiagnosticDto bindings");
+    FrontendErrorKindDto::export_all(&config).expect("export FrontendErrorKindDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }

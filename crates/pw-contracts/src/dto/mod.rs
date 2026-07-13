@@ -5,6 +5,7 @@ mod audio;
 mod character_cursor;
 mod character_manifest;
 mod chat;
+mod diagnostics;
 mod runtime_health;
 mod tts;
 
@@ -19,6 +20,7 @@ pub use chat::{
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationMessageDto,
     ConversationStateEventDto, LlmSettingsDto,
 };
+pub use diagnostics::{DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto};
 pub use runtime_health::{
     FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
     RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
