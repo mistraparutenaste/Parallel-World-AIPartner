@@ -104,4 +104,25 @@ describe('control center', () => {
       document.documentElement.removeAttribute('data-theme');
     });
   });
+
+  it('renders conversation timestamps stored as Unix seconds', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_ui_preferences') {
+        return Promise.resolve({ schema_version: 1, theme: 'system', chat_placement: 'docked' });
+      }
+      if (command === 'list_conversation_history') return Promise.resolve([]);
+      if (command === 'list_conversation_log') {
+        return Promise.resolve({
+          schema_version: 1,
+          messages: [{ schema_version: 1, message_id: 1, turn_id: 1, role: 'user', text: 'saved', created_at: 1_700_000_000 }],
+          next_before_message_id: null,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    render(<SettingsWindow />);
+    const navigation = await screen.findByRole('tablist', { name: '管理メニュー' });
+    fireEvent.click(within(navigation).getByRole('tab', { name: 'ログ' }));
+    expect(await screen.findByText(/2023/)).toBeInTheDocument();
+  });
 });

@@ -64,7 +64,7 @@ export function ConversationLogPanel() {
             <span className="log-meta">
               {message.role === 'user' ? 'あなた' : 'Parallel World'}
               {' · '}
-              {new Date(message.created_at).toLocaleString('ja-JP')}
+              {new Date(message.created_at * 1_000).toLocaleString('ja-JP')}
             </span>
             <p>{message.text}</p>
           </li>
