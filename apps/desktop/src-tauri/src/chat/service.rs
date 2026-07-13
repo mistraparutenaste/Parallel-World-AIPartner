@@ -919,6 +919,97 @@ mod tests {
     }
 
     #[test]
+    fn phase5_restart_delete_and_export_acceptance() {
+        let root =
+            std::env::temp_dir().join(format!("pw-phase5-acceptance-{}", std::process::id()));
+        let database_path = root.join("parallel-world.sqlite3");
+        let snapshot_path = root.join("export.sqlite3");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let mut history = SqliteConversationHistory::new(Database::open(&database_path).unwrap());
+        let mut tracker = TurnTracker::new();
+        persist_completed_turn(
+            &mut history,
+            DEFAULT_CONVERSATION_ID,
+            tracker.begin_turn(),
+            "猫の話を覚えて",
+            "覚えました",
+        )
+        .unwrap();
+        drop(history);
+        process_enrichment_job(&database_path, "私は猫が好き").unwrap();
+
+        let reopened_history =
+            SqliteConversationHistory::new(Database::open(&database_path).unwrap());
+        let restored = load_recent_history(
+            &reopened_history,
+            DEFAULT_CONVERSATION_ID,
+            MAX_HISTORY_MESSAGES,
+        )
+        .unwrap();
+        assert_eq!(restored.len(), 2);
+        let store = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        let context = load_memory_context(&store, "猫");
+        let prompt = PromptBuilder {
+            system_rules: "rules".into(),
+            character_prompt: "character".into(),
+        }
+        .build_with_context(&restored, "次の質問", &context);
+        assert!(prompt.iter().any(|message| message.content.contains("猫")));
+
+        Database::open(&database_path)
+            .unwrap()
+            .backup_to(&snapshot_path)
+            .unwrap();
+        let snapshot = SqliteConversationHistory::new(Database::open(&snapshot_path).unwrap());
+        assert_eq!(
+            snapshot
+                .list_messages(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .len(),
+            2
+        );
+
+        let mut history = SqliteConversationHistory::new(Database::open(&database_path).unwrap());
+        history
+            .delete_conversation(DEFAULT_CONVERSATION_ID)
+            .unwrap();
+        drop(history);
+        let mut memory = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        memory.delete_summary(DEFAULT_CONVERSATION_ID).unwrap();
+        for record in memory.search("猫", DEFAULT_MEMORY_LIMIT).unwrap() {
+            memory.delete_memory(record.id).unwrap();
+        }
+        drop(memory);
+        let reopened = SqliteConversationHistory::new(Database::open(&database_path).unwrap());
+        assert!(
+            reopened
+                .list_messages(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .is_empty()
+        );
+        let empty_context = load_memory_context(
+            &SqliteMemoryStore::new(Database::open(&database_path).unwrap()),
+            "猫",
+        );
+        assert!(empty_context.summary.is_none());
+        assert!(empty_context.memories.is_empty());
+        let next_prompt = PromptBuilder {
+            system_rules: "rules".into(),
+            character_prompt: "character".into(),
+        }
+        .build_with_context(&[], "新しい会話", &empty_context);
+        assert!(
+            !next_prompt
+                .iter()
+                .any(|message| message.content.contains("覚えて"))
+        );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn enrichment_recovers_after_open_failure_and_rolls_summary_forward_by_message_id() {
         let root =
             std::env::temp_dir().join(format!("pw-enrichment-recovery-{}", std::process::id()));

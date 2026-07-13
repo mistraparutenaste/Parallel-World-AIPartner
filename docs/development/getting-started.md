@@ -105,3 +105,8 @@ corepack pnpm build
 
 - `misc` / `others` / `common` / `helpers` / `temp` / `utils` のような曖昧なディレクトリを作らない。
 - 1ファイルは1つの主要責務を持つ。
+# Phase 5 データ検証
+
+会話履歴・要約・長期記憶は app-data 配下の `data/parallel-world.sqlite3` に保存されます。エクスポートは SQLite Online Backup により、単独で再open可能な整合snapshotを作ります。設定画面には会話履歴と要約・記憶の個別削除があります。削除済みcontextが次のpromptへ戻らないことを確認する場合は両方を実行してください。
+
+Phase 5受け入れ検証とschema v1〜v6 migration検証は `cargo test --workspace` に含まれます。
