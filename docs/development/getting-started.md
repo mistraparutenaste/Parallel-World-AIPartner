@@ -20,6 +20,7 @@
 ## セットアップ
 
 ```powershell
+corepack enable pnpm
 corepack pnpm install
 corepack pnpm build
 cargo test --workspace
@@ -27,7 +28,7 @@ cargo test --workspace
 
 `corepack pnpm build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
 
-root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`も`corepack pnpm`を呼ぶため、子processでも`packageManager: pnpm@11.11.0`が適用される。直接`pnpm`を実行しない。
+`corepack enable pnpm` はNodeと同じinstall先へshimを作る。管理された実行環境でそこへ書けない場合は、PATH上でfallbackより前にある書込み可能directoryを `corepack enable --install-directory <directory> pnpm` へ指定する。root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`も`corepack pnpm`を呼ぶ。`pnpm --version`、`corepack pnpm --version`、`corepack pnpm -r exec pnpm --version`がすべて`11.11.0`であることを確認する。
 
 ## 開発用Live2Dモデルの配置
 

@@ -29,6 +29,7 @@ node_modules/
 dist/
 # ts-rs #[test] export artifacts (canonical bindings live in packages/contracts)
 /crates/pw-contracts/bindings/
+/artifacts/soak/
 
 # Local state
 .env

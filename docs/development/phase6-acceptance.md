@@ -52,4 +52,4 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.
 - `tools/scripts/soak-test.ps1 -SelfTest -SelfTestRootChild`: 期待終了コード4、`root_child_rejection.passed=true`、unexpected / orphan空
 - `git diff --check`: 成功
 
-実測toolchainはNode.js `24.15.0` / Corepack pnpm `11.11.0`。rootと3 workspace子processで一致し、`Unsupported engine`警告は発生しなかった。Phase 6の状態は引き続き「実装済み・実機soakゲート待ち」であり、2時間run完走とは扱わない。
+実測toolchainはNode.js `24.15.0` / Corepack pnpm `11.11.0`。Codex runtimeのfallback pnpm `11.7.0`が先に解決される環境では、PATH先頭の書込み可能なruntime overrideへ`corepack enable --install-directory <override> pnpm`を実行した。`pnpm --version`、`corepack pnpm --version`、rootと3 workspace子processのpnpmがすべて`11.11.0`、Nodeがすべて`24.15.0`で一致し、`Unsupported engine`警告は発生しなかった。Phase 6の状態は引き続き「実装済み・実機soakゲート待ち」であり、2時間run完走とは扱わない。
