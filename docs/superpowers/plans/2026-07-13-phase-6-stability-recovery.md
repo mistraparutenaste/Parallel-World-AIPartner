@@ -46,19 +46,19 @@
 
 **Files:** `crates/pw-audio/src/capture.rs`、device watcher、SpeechService、MicrophonePanel。
 
-- [ ] RED: error callback通知、選択device再選択、消失時default fallback、明示停止非復旧、古いgeneration破棄、bounded通知dropをfake adapterで検証。
-- [ ] GREEN: callbackはbounded channel通知のみ、control workerがdrop→再列挙→config再交渉→stream再構築。
-- [ ] UI: recovering/fallback deviceを型付きeventで表示し、再列挙可能にする。
-- [ ] VERIFY: audio/desktop/frontend tests、fmt/clippy/typecheck。
-- [ ] COMMIT: `feat(audio): recover from device disconnects`。
+- [x] RED: error callback通知、選択device再選択、消失時default fallback、明示停止非復旧、古いgeneration破棄、bounded通知dropをfake adapterで検証。
+- [x] GREEN: callbackはbounded channel通知のみ、control workerがdrop→再列挙→config再交渉→stream再構築。
+- [x] UI: recovering/fallback deviceを型付きeventで表示し、再列挙可能にする。
+- [x] VERIFY: audio/desktop/frontend tests、fmt/clippy/typecheck。
+- [x] COMMIT: `feat(audio): recover from device disconnects`。
 
 ### Task 4: STT再初期化とSpeechService supervisor
 
 **Files:** `apps/desktop/src-tauri/src/speech/service.rs`、`crates/pw-application/src/speech/`。
 
-- [ ] RED: VAD/STT build失敗、一時runtime失敗、モデル恒久不足、cancel、mute保持、retry cap、worker join/thread leakを検証。
-- [ ] GREEN: typed failure、bounded retry、JoinHandle管理、mirror thread統合、設定変更と明示停止の区別を実装。
-- [ ] VERIFY: speech tests、実モデルignored test、fmt/clippy。
+- [x] RED: VAD/STT build失敗、一時runtime失敗、モデル恒久不足、cancel、mute保持、retry cap、worker join/thread leakを検証。
+- [x] GREEN: typed failure、bounded retry、JoinHandle管理、mirror thread統合、設定変更と明示停止の区別を実装。
+- [x] VERIFY: speech tests、実モデルignored test、fmt/clippy。
 - [ ] COMMIT: `feat(stt): reinitialize failed speech pipelines`。
 
 ### Task 5: LLM/TTS/Live2D縮退統合とbounded queues
@@ -99,4 +99,3 @@
 - [ ] FULL GATE: Rust fmt/clippy/test、pnpm build/typecheck/test、Tauri debug build。
 - [ ] REVIEW: Phase 6仕様横断レビューでCritical/Important 0を確認。
 - [ ] COMMIT: `docs: complete phase 6 stability and recovery`。
-
