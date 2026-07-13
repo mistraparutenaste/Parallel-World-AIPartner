@@ -58,8 +58,7 @@ pub struct ManagedProcesses {
     stop: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     configs: Vec<MonitorConfig>,
-    handles: Mutex<Vec<JoinHandle<()>>>,
-    lifecycle: Mutex<Lifecycle>,
+    lifecycle: Mutex<LifecycleState>,
     circuits: Arc<AtomicU64>,
     sink: Arc<dyn RuntimeHealthSink>,
 }
@@ -68,6 +67,75 @@ pub struct ManagedProcesses {
 enum Lifecycle {
     Running,
     Shutdown,
+}
+
+struct LifecycleCore {
+    lifecycle: Lifecycle,
+    generation: u64,
+}
+impl LifecycleCore {
+    const fn new() -> Self {
+        Self {
+            lifecycle: Lifecycle::Running,
+            generation: 1,
+        }
+    }
+    const fn generation(&self) -> u64 {
+        self.generation
+    }
+    fn shutdown(&mut self) {
+        if self.lifecycle == Lifecycle::Running {
+            self.lifecycle = Lifecycle::Shutdown;
+            self.generation = self.generation.saturating_add(1);
+        }
+    }
+    fn rearm(&mut self) -> Result<u64, &'static str> {
+        if self.lifecycle == Lifecycle::Shutdown {
+            return Err("process supervision is shut down");
+        }
+        self.generation = self.generation.saturating_add(1);
+        Ok(self.generation)
+    }
+}
+struct LifecycleState {
+    core: LifecycleCore,
+    handles: Vec<JoinHandle<()>>,
+}
+
+struct FailureEvent {
+    attempts: u8,
+    circuit_open: bool,
+}
+struct FailureOutcome {
+    event: FailureEvent,
+    decision: BackoffDecision,
+}
+struct FailureCycle<'a, C, R> {
+    policy: BackoffPolicy<'a, C, R>,
+}
+impl<'a, C: Clock, R: RandomSource> FailureCycle<'a, C, R> {
+    const fn new(clock: &'a C, rng: R) -> Self {
+        Self {
+            policy: BackoffPolicy::new(clock, rng),
+        }
+    }
+    fn failure(&mut self) -> FailureOutcome {
+        let decision = self.policy.record_failure();
+        FailureOutcome {
+            event: FailureEvent {
+                attempts: self.policy.attempts(),
+                circuit_open: decision == BackoffDecision::CircuitOpen,
+            },
+            decision,
+        }
+    }
+    fn healthy_tick(&mut self) -> bool {
+        self.policy.record_healthy();
+        self.policy.reset_if_stable()
+    }
+    const fn attempts(&self) -> u8 {
+        self.policy.attempts()
+    }
 }
 
 #[derive(Clone)]
@@ -146,8 +214,10 @@ impl ManagedProcesses {
             stop,
             generation,
             configs,
-            handles: Mutex::new(handles),
-            lifecycle: Mutex::new(Lifecycle::Running),
+            lifecycle: Mutex::new(LifecycleState {
+                core: LifecycleCore::new(),
+                handles,
+            }),
             circuits,
             sink,
         }
@@ -158,28 +228,25 @@ impl ManagedProcesses {
             .lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *lifecycle == Lifecycle::Shutdown {
+        if lifecycle.core.lifecycle == Lifecycle::Shutdown {
             return;
         }
-        *lifecycle = Lifecycle::Shutdown;
+        lifecycle.core.shutdown();
         self.stop.store(true, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
-        for handle in self
-            .handles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-        {
+        self.generation
+            .store(lifecycle.core.generation(), Ordering::Release);
+        for handle in lifecycle.handles.drain(..) {
             let _ = handle.join();
         }
     }
 
     #[must_use]
     pub fn is_running(&self) -> bool {
-        *self
-            .lifecycle
+        self.lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .core
+            .lifecycle
             == Lifecycle::Running
     }
 
@@ -188,11 +255,11 @@ impl ManagedProcesses {
     /// # Errors
     /// Returns an error after terminal shutdown, for an unopened circuit, or an unconfigured feature.
     pub fn rearm(&self, feature: RuntimeFeature) -> Result<(), &'static str> {
-        let lifecycle = self
+        let mut lifecycle = self
             .lifecycle
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if *lifecycle != Lifecycle::Running {
+        if lifecycle.core.lifecycle != Lifecycle::Running {
             return Err("process supervision is shut down");
         }
         let bit = feature_bit(feature);
@@ -205,6 +272,8 @@ impl ManagedProcesses {
         if self.circuits.fetch_and(!bit, Ordering::AcqRel) & bit == 0 {
             return Err("feature circuit is not open");
         }
+        let new_generation = lifecycle.core.rearm()?;
+        self.generation.store(new_generation, Ordering::Release);
         let handle = spawn_monitor(
             config.name,
             config.spec,
@@ -212,15 +281,12 @@ impl ManagedProcesses {
             config.probe_paths,
             self.stop.clone(),
             self.generation.clone(),
-            self.generation.load(Ordering::Acquire),
+            new_generation,
             config.feature,
             self.sink.clone(),
             self.circuits.clone(),
         );
-        self.handles
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push(handle);
+        lifecycle.handles.push(handle);
         Ok(())
     }
 }
@@ -331,7 +397,7 @@ fn spawn_monitor(
         }
         let clock = SystemClock;
         let seed = clock.now_ms() ^ u64::from(std::process::id());
-        let mut backoff = BackoffPolicy::new(&clock, Jitter(seed));
+        let mut failure_cycle = FailureCycle::new(&clock, Jitter(seed));
         while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
             match ProcessSupervisor::spawn(&spec) {
                 Ok(child) => {
@@ -360,7 +426,7 @@ fn spawn_monitor(
                             feature,
                             ProcessOwnershipDto::Managed,
                             true,
-                            backoff.attempts(),
+                            failure_cycle.attempts(),
                             false,
                         );
                     }
@@ -369,13 +435,13 @@ fn spawn_monitor(
                         && generations.load(Ordering::Acquire) == generation
                     {
                         match child.try_wait() {
-                            Ok(None) => {
-                                debug_assert_eq!(
-                                    MonitorCore::child_status(Ok(true)),
-                                    MonitorDecision::Continue
-                                );
+                            Ok(status) => {
+                                if MonitorCore::child_status(Ok(status.is_none()))
+                                    == MonitorDecision::Restart
+                                {
+                                    break;
+                                }
                             }
-                            Ok(Some(_)) => break,
                             Err(error) => {
                                 tracing::error!(process=name, %error, "managed process status query failed");
                                 publish_health(
@@ -399,7 +465,7 @@ fn spawn_monitor(
                                     feature,
                                     ProcessOwnershipDto::Managed,
                                     false,
-                                    backoff.attempts().saturating_add(1),
+                                    failure_cycle.attempts().saturating_add(1),
                                     false,
                                 );
                                 let _ = child.stop(Duration::from_secs(5));
@@ -407,8 +473,7 @@ fn spawn_monitor(
                             }
                         }
                         thread::sleep(Duration::from_millis(100));
-                        backoff.record_healthy();
-                        let _ = backoff.reset_if_stable();
+                        let _ = failure_cycle.healthy_tick();
                     }
                     if stop.load(Ordering::Acquire)
                         || generations.load(Ordering::Acquire) != generation
@@ -422,26 +487,19 @@ fn spawn_monitor(
                     tracing::warn!(process = name, %error, "managed process spawn failed");
                 }
             }
+            let outcome = failure_cycle.failure();
             publish_health(
                 sink.as_ref(),
                 feature,
                 ProcessOwnershipDto::Managed,
                 false,
-                backoff.attempts().saturating_add(1),
-                false,
+                outcome.event.attempts,
+                outcome.event.circuit_open,
             );
-            match backoff.record_failure() {
+            match outcome.decision {
                 BackoffDecision::RetryAfter(delay) => sleep_interruptibly(&stop, delay),
                 BackoffDecision::CircuitOpen => {
                     tracing::error!(process = name, "managed process restart circuit opened");
-                    publish_health(
-                        sink.as_ref(),
-                        feature,
-                        ProcessOwnershipDto::Managed,
-                        false,
-                        8,
-                        true,
-                    );
                     circuits.fetch_or(feature_bit(feature), Ordering::Release);
                     break;
                 }
@@ -589,6 +647,77 @@ fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    struct FakeClock(AtomicU64);
+    impl Clock for FakeClock {
+        fn now_ms(&self) -> u64 {
+            self.0.load(Ordering::Relaxed)
+        }
+    }
+    struct MaxRandom;
+    impl RandomSource for MaxRandom {
+        fn uniform_inclusive(&mut self, upper: u64) -> u64 {
+            upper
+        }
+    }
+
+    #[test]
+    fn failure_cycle_is_the_single_source_of_failure_events_and_circuit_decisions() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut cycle = FailureCycle::new(&clock, MaxRandom);
+        for attempts in 1..8 {
+            let outcome = cycle.failure();
+            assert_eq!(outcome.event.attempts, attempts);
+            assert!(!outcome.event.circuit_open);
+            assert!(matches!(outcome.decision, BackoffDecision::RetryAfter(_)));
+        }
+        let outcome = cycle.failure();
+        assert_eq!(outcome.event.attempts, 8);
+        assert!(outcome.event.circuit_open);
+        assert_eq!(outcome.decision, BackoffDecision::CircuitOpen);
+    }
+
+    #[test]
+    fn failure_cycle_resets_after_sixty_healthy_seconds() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut cycle = FailureCycle::new(&clock, MaxRandom);
+        let _ = cycle.failure();
+        assert!(!cycle.healthy_tick());
+        clock.0.store(60_000, Ordering::Relaxed);
+        assert!(cycle.healthy_tick());
+        assert_eq!(cycle.failure().event.attempts, 1);
+    }
+
+    #[test]
+    fn lifecycle_shutdown_is_terminal_and_rearm_uses_a_new_generation() {
+        let mut lifecycle = LifecycleCore::new();
+        let first = lifecycle.generation();
+        let replacement = lifecycle.rearm().unwrap();
+        assert!(replacement > first);
+        lifecycle.shutdown();
+        assert!(lifecycle.rearm().is_err());
+        assert_eq!(lifecycle.generation(), replacement + 1);
+    }
+
+    #[test]
+    fn shutdown_rearm_interleave_cannot_spawn_after_terminal_transition() {
+        let lifecycle = Arc::new(Mutex::new(LifecycleCore::new()));
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let mut shutdown_guard = lifecycle.lock().unwrap();
+        let other_lifecycle = lifecycle.clone();
+        let other_barrier = barrier.clone();
+        let rearm = thread::spawn(move || {
+            other_barrier.wait();
+            other_lifecycle.lock().unwrap().rearm()
+        });
+        barrier.wait();
+        shutdown_guard.shutdown();
+        drop(shutdown_guard);
+        assert_eq!(
+            rearm.join().unwrap(),
+            Err("process supervision is shut down")
+        );
+    }
 
     #[test]
     fn core_does_not_report_healthy_before_readiness() {
