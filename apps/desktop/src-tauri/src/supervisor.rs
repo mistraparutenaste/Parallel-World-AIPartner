@@ -172,6 +172,14 @@ struct FailureOutcome {
     event: FailureEvent,
     decision: BackoffDecision,
 }
+
+#[derive(Clone, Copy)]
+enum PublishedHealthState {
+    Starting,
+    Healthy,
+    Recovering,
+    Degraded,
+}
 struct FailureCycle<'a, C, R> {
     policy: BackoffPolicy<&'a C, R>,
 }
@@ -363,6 +371,14 @@ impl ManagedProcesses {
         }
         let new_generation = lifecycle.core.rearm()?;
         self.generation.store(new_generation, Ordering::Release);
+        publish_health(
+            self.sink.as_ref(),
+            feature,
+            ProcessOwnershipDto::Managed,
+            PublishedHealthState::Starting,
+            0,
+            false,
+        );
         let handle = spawn_monitor(
             config.name,
             config.spec,
@@ -686,6 +702,14 @@ fn spawn_monitor(
         let seed = clock.now_ms() ^ u64::from(std::process::id());
         let mut failure_cycle = FailureCycle::new(&clock, Jitter(seed));
         while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
+            publish_health(
+                sink.as_ref(),
+                feature,
+                ProcessOwnershipDto::Managed,
+                PublishedHealthState::Starting,
+                failure_cycle.attempts(),
+                false,
+            );
             match ProcessSupervisor::spawn(&spec) {
                 Ok(child) => {
                     diagnostics
@@ -717,7 +741,7 @@ fn spawn_monitor(
                             sink.as_ref(),
                             feature,
                             ProcessOwnershipDto::Managed,
-                            true,
+                            PublishedHealthState::Healthy,
                             failure_cycle.attempts(),
                             false,
                         );
@@ -740,7 +764,7 @@ fn spawn_monitor(
                                     sink.as_ref(),
                                     feature,
                                     ProcessOwnershipDto::Managed,
-                                    false,
+                                    PublishedHealthState::Recovering,
                                     1,
                                     false,
                                 );
@@ -756,7 +780,7 @@ fn spawn_monitor(
                                     sink.as_ref(),
                                     feature,
                                     ProcessOwnershipDto::Managed,
-                                    false,
+                                    PublishedHealthState::Recovering,
                                     failure_cycle.attempts().saturating_add(1),
                                     false,
                                 );
@@ -765,7 +789,12 @@ fn spawn_monitor(
                             }
                         }
                         thread::sleep(Duration::from_millis(100));
-                        let _ = failure_cycle.healthy_tick();
+                        publish_healthy_tick(
+                            &mut failure_cycle,
+                            sink.as_ref(),
+                            feature,
+                            ProcessOwnershipDto::Managed,
+                        );
                     }
                     if stop.load(Ordering::Acquire)
                         || generations.load(Ordering::Acquire) != generation
@@ -797,7 +826,11 @@ fn spawn_monitor(
                 sink.as_ref(),
                 feature,
                 ProcessOwnershipDto::Managed,
-                false,
+                if outcome.event.circuit_open {
+                    PublishedHealthState::Degraded
+                } else {
+                    PublishedHealthState::Recovering
+                },
                 outcome.event.attempts,
                 outcome.event.circuit_open,
             );
@@ -865,23 +898,46 @@ fn publish_health(
     sink: &dyn RuntimeHealthSink,
     feature: RuntimeFeature,
     ownership: ProcessOwnershipDto,
-    healthy: bool,
+    state: PublishedHealthState,
     attempts: u8,
     circuit_open: bool,
 ) {
     let mut health = RuntimeHealth::new(feature);
-    if healthy {
-        health.mark_healthy(SystemClock.now_ms());
-    } else {
-        health.mark_failed(
+    let changed_at_ms = SystemClock.now_ms();
+    match state {
+        PublishedHealthState::Starting => health.mark_starting(changed_at_ms),
+        PublishedHealthState::Healthy => health.mark_healthy(changed_at_ms),
+        PublishedHealthState::Recovering => health.mark_failed(
             &RuntimeFailure::transient(FailureCode::Unavailable),
-            SystemClock.now_ms(),
-        );
+            changed_at_ms,
+        ),
+        PublishedHealthState::Degraded => health.mark_degraded(
+            &RuntimeFailure::transient(FailureCode::Unavailable),
+            changed_at_ms,
+        ),
     }
     let mut event = RuntimeHealthEventDto::from((&health, attempts));
     event.ownership = ownership;
     event.circuit_open = circuit_open;
     sink.publish(event);
+}
+
+fn publish_healthy_tick<C: Clock, R: RandomSource>(
+    failure_cycle: &mut FailureCycle<'_, C, R>,
+    sink: &dyn RuntimeHealthSink,
+    feature: RuntimeFeature,
+    ownership: ProcessOwnershipDto,
+) {
+    if failure_cycle.healthy_tick() {
+        publish_health(
+            sink,
+            feature,
+            ownership,
+            PublishedHealthState::Healthy,
+            failure_cycle.attempts(),
+            false,
+        );
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -896,12 +952,26 @@ fn monitor_external(
     sink: &dyn RuntimeHealthSink,
 ) {
     let mut failures = 0_u8;
-    publish_health(sink, feature, ProcessOwnershipDto::External, true, 0, false);
+    publish_health(
+        sink,
+        feature,
+        ProcessOwnershipDto::External,
+        PublishedHealthState::Healthy,
+        0,
+        false,
+    );
     while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
         thread::sleep(Duration::from_secs(1));
         if probe_ready(probe, paths) {
             failures = 0;
-            publish_health(sink, feature, ProcessOwnershipDto::External, true, 0, false);
+            publish_health(
+                sink,
+                feature,
+                ProcessOwnershipDto::External,
+                PublishedHealthState::Healthy,
+                0,
+                false,
+            );
         } else {
             failures = failures.saturating_add(1);
             if failures >= 3 {
@@ -910,7 +980,7 @@ fn monitor_external(
                     sink,
                     feature,
                     ProcessOwnershipDto::External,
-                    false,
+                    PublishedHealthState::Recovering,
                     failures,
                     false,
                 );
@@ -955,6 +1025,7 @@ fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pw_contracts::HealthStatusDto;
     use std::net::TcpListener;
 
     struct FakeClock(AtomicU64);
@@ -968,6 +1039,128 @@ mod tests {
         fn uniform_inclusive(&mut self, upper: u64) -> u64 {
             upper
         }
+    }
+
+    #[derive(Default)]
+    struct CapturingHealthSink(Mutex<Vec<RuntimeHealthEventDto>>);
+
+    impl RuntimeHealthSink for CapturingHealthSink {
+        fn publish(&self, event: RuntimeHealthEventDto) {
+            self.0.lock().unwrap().push(event);
+        }
+    }
+
+    #[test]
+    fn production_publisher_records_the_complete_managed_health_lifecycle() {
+        let registry = Arc::new(ManagedHealthRegistry::default());
+        let downstream = Arc::new(CapturingHealthSink::default());
+        let sink = RecordingRuntimeHealthSink {
+            registry: Arc::clone(&registry),
+            downstream: downstream.clone(),
+        };
+
+        for (state, attempts, circuit_open) in [
+            (PublishedHealthState::Starting, 0, false),
+            (PublishedHealthState::Recovering, 3, false),
+            (PublishedHealthState::Degraded, 8, true),
+            (PublishedHealthState::Healthy, 0, false),
+        ] {
+            publish_health(
+                &sink,
+                RuntimeFeature::LanguageModel,
+                ProcessOwnershipDto::Managed,
+                state,
+                attempts,
+                circuit_open,
+            );
+            let emitted = downstream.0.lock().unwrap().last().unwrap().clone();
+            assert_eq!(registry.snapshots(), vec![emitted]);
+        }
+
+        let events = downstream.0.lock().unwrap().clone();
+        assert_eq!(
+            events.iter().map(|event| event.status).collect::<Vec<_>>(),
+            [
+                HealthStatusDto::Starting,
+                HealthStatusDto::Recovering,
+                HealthStatusDto::Degraded,
+                HealthStatusDto::Healthy,
+            ]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.attempts)
+                .collect::<Vec<_>>(),
+            [0, 3, 8, 0]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.circuit_open)
+                .collect::<Vec<_>>(),
+            [false, false, true, false]
+        );
+        assert!(events.iter().all(|event| event.feature
+            == pw_contracts::RuntimeFeatureDto::LanguageModel
+            && event.ownership == ProcessOwnershipDto::Managed));
+        assert_eq!(registry.snapshots(), vec![events[3].clone()]);
+    }
+
+    #[test]
+    fn production_rearm_replaces_the_old_circuit_snapshot_with_starting() {
+        let feature = RuntimeFeature::LanguageModel;
+        let registry = Arc::new(ManagedHealthRegistry::default());
+        let downstream = Arc::new(CapturingHealthSink::default());
+        let sink: Arc<dyn RuntimeHealthSink> = Arc::new(RecordingRuntimeHealthSink {
+            registry: Arc::clone(&registry),
+            downstream,
+        });
+        publish_health(
+            sink.as_ref(),
+            feature,
+            ProcessOwnershipDto::Managed,
+            PublishedHealthState::Degraded,
+            8,
+            true,
+        );
+        let old_changed_at_ms = registry.snapshots()[0].changed_at_ms;
+        let processes = ManagedProcesses {
+            stop: Arc::new(AtomicBool::new(true)),
+            generation: Arc::new(AtomicU64::new(1)),
+            configs: vec![MonitorConfig {
+                name: "test-runtime",
+                spec: ProcessSpec {
+                    executable: PathBuf::from("unused-test-runtime"),
+                    args: Vec::new(),
+                    env: Vec::new(),
+                    current_dir: None,
+                    output_capacity: 1024,
+                },
+                probe: SocketAddr::from(([127, 0, 0, 1], 9)),
+                probe_paths: &["/health"],
+                feature,
+            }],
+            lifecycle: Mutex::new(LifecycleState {
+                core: LifecycleCore::new(),
+                handles: Vec::new(),
+            }),
+            circuits: Arc::new(AtomicU64::new(feature_bit(feature))),
+            sink,
+            health: Arc::clone(&registry),
+            diagnostics: Arc::new(ProcessDiagnostics::default()),
+        };
+
+        processes.rearm(feature).unwrap();
+
+        let snapshots = processes.health_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].status, HealthStatusDto::Starting);
+        assert_eq!(snapshots[0].attempts, 0);
+        assert!(!snapshots[0].circuit_open);
+        assert_eq!(snapshots[0].ownership, ProcessOwnershipDto::Managed);
+        assert!(snapshots[0].changed_at_ms >= old_changed_at_ms);
+        processes.shutdown();
     }
 
     #[test]
@@ -1058,6 +1251,46 @@ mod tests {
         clock.0.store(60_000, Ordering::Relaxed);
         assert!(cycle.healthy_tick());
         assert_eq!(cycle.failure().event.attempts, 1);
+    }
+
+    #[test]
+    fn stable_reset_republishes_healthy_with_zero_attempts() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut cycle = FailureCycle::new(&clock, MaxRandom);
+        assert_eq!(cycle.failure().event.attempts, 1);
+        let registry = Arc::new(ManagedHealthRegistry::default());
+        let sink = RecordingRuntimeHealthSink {
+            registry: Arc::clone(&registry),
+            downstream: Arc::new(CapturingHealthSink::default()),
+        };
+        publish_health(
+            &sink,
+            RuntimeFeature::LanguageModel,
+            ProcessOwnershipDto::Managed,
+            PublishedHealthState::Healthy,
+            cycle.attempts(),
+            false,
+        );
+        assert_eq!(registry.snapshots()[0].attempts, 1);
+        publish_healthy_tick(
+            &mut cycle,
+            &sink,
+            RuntimeFeature::LanguageModel,
+            ProcessOwnershipDto::Managed,
+        );
+
+        clock.0.store(60_000, Ordering::Relaxed);
+        publish_healthy_tick(
+            &mut cycle,
+            &sink,
+            RuntimeFeature::LanguageModel,
+            ProcessOwnershipDto::Managed,
+        );
+
+        let snapshot = &registry.snapshots()[0];
+        assert_eq!(snapshot.status, HealthStatusDto::Healthy);
+        assert_eq!(snapshot.attempts, 0);
+        assert!(!snapshot.circuit_open);
     }
 
     #[test]
