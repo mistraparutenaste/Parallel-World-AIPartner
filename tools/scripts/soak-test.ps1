@@ -213,26 +213,29 @@ function Stop-ProcessTree([object]$RootIdentity, [hashtable]$CapturedByKey) {
         foreach($entry in $owned){[void](Stop-CapturedOwnedIdentity $entry $RootIdentity)}
         Start-Sleep -Milliseconds 100
     }while([DateTime]::UtcNow-lt$deadline-and(Test-ProcessIdentity $RootIdentity))
+    $finalOwned=@(Get-OwnedProcessSnapshot $RootIdentity|Sort-Object Depth -Descending)
+    $finalHandles=@()
+    foreach($entry in $finalOwned){
+        $identity=$entry.Identity;$CapturedByKey[([string]$identity.ProcessId+":"+[string]$identity.StartTicks)]=$identity
+        if(Test-CapturedOwnershipLineage $entry $RootIdentity){
+            $process=Get-MatchingProcess $identity
+            if($null-ne$process-and(Test-CapturedOwnershipLineage $entry $RootIdentity)){$finalHandles+=,$process}
+        }
+    }
     Stop-ProcessIdentity $RootIdentity
+    foreach($process in $finalHandles){try{$process.Kill()}catch{}}
 }
 
 function Get-ResidualProcessIdentities([hashtable]$CapturedByKey) {
     $parents = Get-ProcessParentMap
-    $ownedPids = @{}
-    foreach($identity in $CapturedByKey.Values){$ownedPids[[int]$identity.ProcessId]=$true}
     $residual = @{}
-    $changed = $true
-    while($changed){
-        $changed = $false
-        foreach($pidValue in $parents.Keys){
-            $processId=[int]$pidValue;$parent=[int]$parents[$processId]
-            if($ownedPids.ContainsKey($parent) -and -not $ownedPids.ContainsKey($processId)){
-                $identity=Get-ProcessIdentity $processId
-                if($null -ne $identity){$ownedPids[$processId]=$true;$residual[([string]$identity.ProcessId+":"+[string]$identity.StartTicks)]=$identity;$changed=$true}
-            }
+    foreach($pidValue in $parents.Keys){
+        $identity=Get-ProcessIdentity ([int]$pidValue)
+        if($null-ne$identity){
+            $key=[string]$identity.ProcessId+":"+[string]$identity.StartTicks
+            if($CapturedByKey.ContainsKey($key)){$residual[$key]=$identity}
         }
     }
-    foreach($identity in $CapturedByKey.Values){if(Test-ProcessIdentity $identity){$residual[([string]$identity.ProcessId+":"+[string]$identity.StartTicks)]=$identity}}
     return @($residual.Values)
 }
 
@@ -583,7 +586,8 @@ while($true){
     if ($maximums.fault_count -gt $thresholds.fault_max) { $violations += "fault_cap" }
     if ($maximums.panic_count -gt 0) { $violations += "panic" }
     if ($durationMinutesValue -ge 120 -and -not $heartbeatSeen) { $violations += "heartbeat_missing" }
-    if ($SelfTest -and -not $heartbeatSeen) { $violations += "selftest_heartbeat_missing" }
+    if ($SelfTestRootChild -and -not $heartbeatSeen) { $violations += "root_child_heartbeat_rejected" }
+    elseif ($SelfTest -and -not $heartbeatSeen) { $violations += "selftest_heartbeat_missing" }
     if (Test-SupervisorUnhealthyViolation $samples $durationMinutesValue) { $violations += "supervisor_unhealthy" }
     if ($heartbeatInvalid) { $violations += "heartbeat_stale_incomplete_or_unowned" }
     if ($FaultInjection -and -not $faultRecovered) { $violations += "fault_recovery_deadline_missed" }
@@ -605,13 +609,34 @@ while($true){
         if($spawned.Count -lt $minimumSpawns){$violations+="cleanup_respawn_not_observed"}
         foreach($spawnIdentity in $spawned){if(Test-ProcessIdentity $spawnIdentity){$orphanIds+=[int]$spawnIdentity.ProcessId;$violations+="cleanup_respawn_orphan";Stop-ProcessIdentity $spawnIdentity}}
     }
+    $rootChildRejection=$null
+    if($SelfTestRootChild){
+        $rootWasFaultVictim=@($faultTimeline|Where-Object{[int]$_.process_id-eq[int]$rootIdentity.ProcessId}).Count-gt0
+        if($heartbeatSeen){$violations+="root_child_heartbeat_accepted"}
+        if(@($faultTimeline).Count-ne0){$violations+="root_child_fault_timeline_nonempty"}
+        if($rootWasFaultVictim){$violations+="root_child_selected_as_fault_victim"}
+        if(@($orphanIds).Count-ne0){$violations+="root_child_cleanup_orphan"}
+        $unexpected=@($violations|Where-Object{$_-ne"root_child_heartbeat_rejected"})
+        $rootChildRejection=[ordered]@{
+            exercised=$true
+            passed=(-not$heartbeatSeen-and@($faultTimeline).Count-eq0-and-not$rootWasFaultVictim-and@($orphanIds).Count-eq0-and$unexpected.Count-eq0)
+            reason="root_child_heartbeat_rejected"
+            heartbeat_seen=[bool]$heartbeatSeen
+            fault_timeline_count=@($faultTimeline).Count
+            root_process_id=[int]$rootIdentity.ProcessId
+            root_was_fault_victim=[bool]$rootWasFaultVictim
+            orphan_process_ids=@($orphanIds)
+            unexpected_violations=$unexpected
+        }
+        if(-not$rootChildRejection.passed-and$unexpected.Count-eq0){$violations+="root_child_assertion_failed"}
+    }
     $finishedAt = [DateTimeOffset]::UtcNow
     $supervisorUnhealthySeen = @($samples | Where-Object { $null -ne $_.supervisor_healthy -and $_.supervisor_healthy -eq $false }).Count -gt 0
     $summary = [ordered]@{
         schema_version = 1; run_id = $runId; passed = ($violations.Count -eq 0);
         build_hash = $gitHash; git_dirty=$gitDirty; executable_sha256=$executableSha256; os = $os; audio_device = $audioDevice; seed = $seedValue;
         started_at = $startedAt.ToString("o"); finished_at = $finishedAt.ToString("o");
-        sample_count = $samples.Count; heartbeat_seen=$heartbeatSeen; supervisor_unhealthy_seen=$supervisorUnhealthySeen; fault_timeline = $faultTimeline; violations = $violations;
+        sample_count = $samples.Count; heartbeat_seen=$heartbeatSeen; supervisor_unhealthy_seen=$supervisorUnhealthySeen; root_child_rejection=$rootChildRejection; fault_timeline = $faultTimeline; violations = $violations;
         slopes_per_hour=$slopes; growth=$growth; maximums=$maximums; thresholds=$thresholds; orphan_process_ids=$orphanIds;
         jsonl = $jsonlPath
     }

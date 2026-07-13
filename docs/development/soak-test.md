@@ -31,6 +31,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.ps1 -SelfTest
 ```
 
+`-SelfTest -SelfTestRootChild` はroot PIDを`child_process_ids`へ混入したheartbeatを拒否する負例で、終了コード4と専用理由`root_child_heartbeat_rejected`を返す。summaryの`root_child_rejection`にはheartbeat未受理、fault timeline 0、rootがfault対象でないこと、orphan 0、期待外violation 0のassert結果を記録する。
+
 各runは `<UTC>-<seed>.jsonl` と `<UTC>-<seed>-summary.json` を生成する。metadataにはgit hash/dirty、実行ファイルSHA-256、OS、heartbeatから取得した実audio device、seedを記録する。summaryにはfault timeline、全metricのmaximum、warm-up後のslope/growth、threshold、violations、cleanup後のorphan PIDを含める。
 
 終了コードは `0=合格`、`2=引数または実行ファイル不正`、`3=予期しない終了`、`4=資源閾値違反`、`5=成果物生成または実行時エラー`。終了経路にかかわらず起動processとその子孫を停止する。
