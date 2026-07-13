@@ -24,6 +24,7 @@ $ExitArtifact = 5
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $startedProcess = $null
 $selfTestLateMarker = ""
+$selfTestSpawnLog = ""
 
 Add-Type -TypeDefinition @'
 using System;
@@ -155,21 +156,63 @@ function Get-ProcessDepth([int]$ProcessId, [int]$RootPid, [hashtable]$Parents) {
     return -1
 }
 
+function Get-OwnedProcessSnapshot([object]$RootIdentity) {
+    if(-not (Test-ProcessIdentity $RootIdentity)){return @()}
+    $rootPid=[int]$RootIdentity.ProcessId
+    $parents=Get-ProcessParentMap
+    $identities=@{}
+    foreach($processId in @($rootPid)+@(Get-DescendantIds $rootPid)){
+        $identity=Get-ProcessIdentity ([int]$processId)
+        if($null-ne$identity){$identities[[int]$identity.ProcessId]=$identity}
+    }
+    $entries=@()
+    foreach($identity in $identities.Values){
+        if([int]$identity.ProcessId-eq$rootPid){continue}
+        $lineage=@($identity);$current=[int]$identity.ProcessId;$valid=$false
+        for($depth=1;$depth-lt64;$depth++){
+            if(-not$parents.ContainsKey($current)){break}
+            $parent=[int]$parents[$current]
+            if(-not$identities.ContainsKey($parent)){break}
+            $lineage+=,$identities[$parent]
+            if($parent-eq$rootPid){$valid=$true;break}
+            $current=$parent
+        }
+        if($valid){$entries+=,[pscustomobject]@{Identity=$identity;Depth=$lineage.Count-1;Lineage=$lineage}}
+    }
+    return @($entries)
+}
+
+function Test-CapturedOwnershipLineage([object]$Entry,[object]$RootIdentity) {
+    if($null-eq$Entry-or$Entry.Lineage.Count-lt2-or-not(Test-ProcessIdentity $RootIdentity)){return $false}
+    $parents=Get-ProcessParentMap
+    for($index=0;$index-lt$Entry.Lineage.Count;$index++){
+        $identity=$Entry.Lineage[$index]
+        if(-not(Test-ProcessIdentity $identity)){return $false}
+        if($index-lt$Entry.Lineage.Count-1){
+            if(-not$parents.ContainsKey([int]$identity.ProcessId)-or[int]$parents[[int]$identity.ProcessId]-ne[int]$Entry.Lineage[$index+1].ProcessId){return $false}
+        }
+    }
+    $capturedRoot=$Entry.Lineage[$Entry.Lineage.Count-1]
+    return [int]$capturedRoot.ProcessId-eq[int]$RootIdentity.ProcessId-and[long]$capturedRoot.StartTicks-eq[long]$RootIdentity.StartTicks
+}
+
+function Stop-CapturedOwnedIdentity([object]$Entry,[object]$RootIdentity) {
+    if(-not(Test-CapturedOwnershipLineage $Entry $RootIdentity)){return $false}
+    $process=Get-MatchingProcess $Entry.Identity
+    if($null-eq$process-or-not(Test-CapturedOwnershipLineage $Entry $RootIdentity)){return $false}
+    try{$process.Kill();return $true}catch{return $false}
+}
+
 function Stop-ProcessTree([object]$RootIdentity, [hashtable]$CapturedByKey) {
     if (-not (Test-ProcessIdentity $RootIdentity)) { return }
-    $RootPid = [int]$RootIdentity.ProcessId
-    $current = Get-ProcessTreeStats $RootPid
-    foreach($identity in $current.ProcessIdentities) {
-        $CapturedByKey[([string]$identity.ProcessId + ":" + [string]$identity.StartTicks)] = $identity
-    }
-    $parents = Get-ProcessParentMap
-    $owned = @($CapturedByKey.Values | ForEach-Object {
-        $depth = Get-ProcessDepth ([int]$_.ProcessId) $RootPid $parents
-        if ($depth -gt 0) { [pscustomobject]@{ Identity = $_; Depth = $depth } }
-    } | Sort-Object Depth -Descending)
-    foreach ($entry in $owned) {
-        [void](Stop-OwnedProcessIdentity $entry.Identity $RootIdentity)
-    }
+    $deadline=[DateTime]::UtcNow.AddSeconds(5)
+    do{
+        $owned=@(Get-OwnedProcessSnapshot $RootIdentity|Sort-Object Depth -Descending)
+        foreach($entry in $owned){$identity=$entry.Identity;$CapturedByKey[([string]$identity.ProcessId+":"+[string]$identity.StartTicks)]=$identity}
+        if($owned.Count-eq0){break}
+        foreach($entry in $owned){[void](Stop-CapturedOwnedIdentity $entry $RootIdentity)}
+        Start-Sleep -Milliseconds 100
+    }while([DateTime]::UtcNow-lt$deadline-and(Test-ProcessIdentity $RootIdentity))
     Stop-ProcessIdentity $RootIdentity
 }
 
@@ -366,6 +409,7 @@ try {
         $helperPath = Join-Path $OutputDir "heartbeat-supervisor.ps1"
         $lateSpawnerPath = Join-Path $OutputDir "late-grandchild.ps1"
         $selfTestLateMarker = Join-Path $OutputDir "late-grandchild.json"
+        $selfTestSpawnLog = Join-Path $OutputDir "supervisor-spawns.jsonl"
         $lateSpawnerSource = @'
 param([string]$Marker)
 $grandchild=Start-Process powershell.exe -ArgumentList '-NoProfile -Command "Start-Sleep -Seconds 30"' -PassThru -WindowStyle Hidden
@@ -375,11 +419,11 @@ Start-Sleep -Seconds 30
 '@
         [IO.File]::WriteAllText($lateSpawnerPath, $lateSpawnerSource, $Utf8NoBom)
         $helperSource = @'
-param([string]$Heartbeat,[switch]$IncludeRoot,[string]$LateSpawner,[string]$LateMarker)
+param([string]$Heartbeat,[switch]$IncludeRoot,[string]$LateSpawner,[string]$LateMarker,[string]$SpawnLog)
 $restart=0;$fault=0;$child=$null
 $started=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();$runId="$PID-$started";$watch=[Diagnostics.Stopwatch]::StartNew();$late=$null;Start-Sleep -Seconds 2
 while($true){
- if($null -eq $child -or $child.HasExited){if($null -ne $child){$restart++;$fault++};$child=Start-Process powershell.exe -ArgumentList '-NoProfile -Command "Start-Sleep -Seconds 30"' -PassThru -WindowStyle Hidden}
+ if($null -eq $child -or $child.HasExited){if($null -ne $child){$restart++;$fault++};$child=Start-Process powershell.exe -ArgumentList '-NoProfile -Command "Start-Sleep -Seconds 30"' -PassThru -WindowStyle Hidden;$spawn=@{ProcessId=$child.Id;StartTicks=$child.StartTime.ToUniversalTime().Ticks};[IO.File]::AppendAllText($SpawnLog,($spawn|ConvertTo-Json -Compress)+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))}
  if($null -eq $late -and $watch.ElapsedMilliseconds -ge 6500){$late=Start-Process powershell.exe -ArgumentList @('-NoProfile','-File',$LateSpawner,'-Marker',$LateMarker) -PassThru -WindowStyle Hidden}
  $childIds=if($IncludeRoot){@($PID,$child.Id)}else{@($child.Id)}
  $value=@{schema_version=1;process_id=$PID;run_id=$runId;started_timestamp_ms=$started;timestamp_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();audio_device='self-test-device';supervisor_healthy=$true;input_queue_depth=7;output_queue_depth=8;dropped_items=2;cache_file_count=9;log_bytes=1024;restart_count=$restart;panic_count=0;fault_count=$fault;child_process_ids=$childIds}
@@ -390,7 +434,7 @@ while($true){
         [IO.File]::WriteAllText($helperPath, $helperSource, $Utf8NoBom)
         $stale = @{schema_version=1;process_id=1;run_id="previous-run";started_timestamp_ms=1;timestamp_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();audio_device="stale";supervisor_healthy=$true;input_queue_depth=0;output_queue_depth=0;dropped_items=0;cache_file_count=0;log_bytes=0;restart_count=0;panic_count=0;fault_count=0;child_process_ids=@()}
         [IO.File]::WriteAllText($DiagnosticsHeartbeat, ($stale | ConvertTo-Json -Compress), $Utf8NoBom)
-        $ArgumentList = @("-NoProfile", "-File", $helperPath, "-Heartbeat", $DiagnosticsHeartbeat, "-LateSpawner", $lateSpawnerPath, "-LateMarker", $selfTestLateMarker)
+        $ArgumentList = @("-NoProfile", "-File", $helperPath, "-Heartbeat", $DiagnosticsHeartbeat, "-LateSpawner", $lateSpawnerPath, "-LateMarker", $selfTestLateMarker, "-SpawnLog", $selfTestSpawnLog)
         if($SelfTestRootChild){$ArgumentList += "-IncludeRoot"}
         $FaultInjection = -not $SelfTestRootChild; $FaultTarget = "OwnedChild"; $ConfirmOwnedFault = $true
     }
@@ -556,6 +600,10 @@ while($true){
         if(-not (Test-Path -LiteralPath $selfTestLateMarker)){throw "Late-grandchild self-test marker was not created."}
         $lateIdentity=Get-Content -LiteralPath $selfTestLateMarker -Raw|ConvertFrom-Json
         if(Test-ProcessIdentity $lateIdentity){$orphanIds+= [int]$lateIdentity.ProcessId;$violations+="late_grandchild_orphan";Stop-ProcessIdentity $lateIdentity}
+        $spawned=@(Get-Content -LiteralPath $selfTestSpawnLog|ForEach-Object{$_|ConvertFrom-Json})
+        $minimumSpawns=if($SelfTestRootChild){2}else{3}
+        if($spawned.Count -lt $minimumSpawns){$violations+="cleanup_respawn_not_observed"}
+        foreach($spawnIdentity in $spawned){if(Test-ProcessIdentity $spawnIdentity){$orphanIds+=[int]$spawnIdentity.ProcessId;$violations+="cleanup_respawn_orphan";Stop-ProcessIdentity $spawnIdentity}}
     }
     $finishedAt = [DateTimeOffset]::UtcNow
     $supervisorUnhealthySeen = @($samples | Where-Object { $null -ne $_.supervisor_healthy -and $_.supervisor_healthy -eq $false }).Count -gt 0

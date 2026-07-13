@@ -14,7 +14,7 @@ heartbeatはUTF-8 JSONで、次のschema version 1をatomic replaceで定期更�
 {"schema_version":1,"process_id":4321,"run_id":"4321-1783900800000","started_timestamp_ms":1783900800000,"timestamp_ms":1783900801000,"audio_device":"Microphone Array","supervisor_healthy":true,"input_queue_depth":0,"output_queue_depth":0,"dropped_items":0,"cache_file_count":12,"log_bytes":4096,"restart_count":0,"panic_count":0,"fault_count":0,"child_process_ids":[1234]}
 ```
 
-fault injectionは `-FaultInjection -FaultTarget OwnedChild -ConfirmOwnedFault` の3点を明示した場合だけ、harnessが起動したrootのstrict descendantを対象にする。root自身、任意PID、外部serviceは停止しない。faultとcleanupは観測時に全子孫のPIDとprocess開始時刻を固定し、停止直前にも同一identityと現在のownershipを再検証するため、長時間run中に再利用されたPIDを停止しない。通常終了時は最後のsample後にもprocess treeを再取得してidentity集合へ統合し、深い子孫から停止する。停止後は全processを再列挙して残存子孫をorphanとして報告する。kill後10秒deadlineをtimelineへ記録し、別identityの子processが観測されなければ失敗する。外部AivisSpeech/llama-serverのfault試験はこのflagでは行わず、個別の手動確認手順を用いる。
+fault injectionは `-FaultInjection -FaultTarget OwnedChild -ConfirmOwnedFault` の3点を明示した場合だけ、harnessが起動したrootのstrict descendantを対象にする。root自身、任意PID、外部serviceは停止しない。faultとcleanupは観測時に全子孫のPIDとprocess開始時刻を固定し、停止直前にも同一identityと現在のownershipを再検証するため、長時間run中に再利用されたPIDを停止しない。通常終了時はrootを最後まで維持し、最後のsample後にもprocess treeを再取得する。PID、開始時刻、rootまでのcaptured ownership lineageを再検証して深い子孫から停止し、supervisorがreplacement childを生成した場合もdeadline内で再取得・停止するpassを空になるまで反復する。root停止後は全processを再列挙して残存子孫をorphanとして報告する。kill後10秒deadlineをtimelineへ記録し、別identityの子processが観測されなければ失敗する。外部AivisSpeech/llama-serverのfault試験はこのflagでは行わず、個別の手動確認手順を用いる。
 
 ## 実行
 
