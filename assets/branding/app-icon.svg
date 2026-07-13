@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Parallel World PW orbit mark: canonical source for all desktop bundle icons. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">Parallel World</title>
+  <desc id="desc">PW orbit mark formed by two luminous worlds and crossing orbital paths</desc>
+  <defs>
+    <linearGradient id="background" x1="120" y1="80" x2="900" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#11193d"/>
+      <stop offset="0.55" stop-color="#322268"/>
+      <stop offset="1" stop-color="#10182e"/>
+    </linearGradient>
+    <linearGradient id="orbit" x1="216" y1="252" x2="830" y2="804" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#69e4ff"/>
+      <stop offset="0.48" stop-color="#a9a0ff"/>
+      <stop offset="1" stop-color="#ff79c8"/>
+    </linearGradient>
+    <radialGradient id="worldA" cx="35%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#e4fbff"/>
+      <stop offset="0.25" stop-color="#6de2ff"/>
+      <stop offset="1" stop-color="#1670ba"/>
+    </radialGradient>
+    <radialGradient id="worldB" cx="35%" cy="30%" r="75%">
+      <stop offset="0" stop-color="#fff0fb"/>
+      <stop offset="0.25" stop-color="#ff85d0"/>
+      <stop offset="1" stop-color="#8a3fba"/>
+    </radialGradient>
+    <filter id="glow" x="-35%" y="-35%" width="170%" height="170%">
+      <feGaussianBlur stdDeviation="15" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="url(#background)"/>
+  <circle cx="512" cy="512" r="378" fill="none" stroke="#ffffff" stroke-opacity="0.06" stroke-width="2"/>
+  <g fill="none" stroke="url(#orbit)" stroke-linecap="round" filter="url(#glow)">
+    <ellipse cx="512" cy="512" rx="338" ry="176" stroke-width="32" transform="rotate(-28 512 512)"/>
+    <path d="M284 298c86 18 163 95 202 218 40 126 101 205 254 221" stroke-width="26"/>
+  </g>
+  <g filter="url(#glow)">
+    <circle cx="350" cy="420" r="104" fill="url(#worldA)" stroke="#d8f9ff" stroke-width="13"/>
+    <circle cx="674" cy="604" r="104" fill="url(#worldB)" stroke="#ffe0f7" stroke-width="13"/>
+  </g>
+  <path d="M300 777V650h54c69 0 106 25 106 78 0 55-39 82-111 82h-4v65h-45v-98zm45-90v86h8c39 0 60-13 60-44 0-29-20-42-59-42h-9z" fill="#eefaff"/>
+  <path d="M489 650h47l27 142 38-142h42l38 142 27-142h47l-49 225h-45l-39-138-39 138h-45l-49-225z" fill="#fff0fa"/>
+</svg>
