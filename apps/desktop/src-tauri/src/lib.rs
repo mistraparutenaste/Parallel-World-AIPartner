@@ -9,6 +9,7 @@ pub mod chat;
 pub mod commands;
 pub mod error;
 pub mod speech;
+pub mod supervisor;
 pub mod tts;
 pub mod windows;
 
@@ -26,6 +27,7 @@ pub fn run() {
         .manage(speech::SpeechService::default())
         .manage(chat::ChatService::default())
         .manage(tts::TtsService::default())
+        .manage(supervisor::ManagedProcesses::from_environment())
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
