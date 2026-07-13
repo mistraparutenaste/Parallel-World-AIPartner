@@ -21,3 +21,7 @@ export type { TtsSettingsDto } from './generated/TtsSettingsDto';
 export type { TtsSpeakerDto } from './generated/TtsSpeakerDto';
 export type { TtsStateEventDto } from './generated/TtsStateEventDto';
 export type { UserDictWordDto } from './generated/UserDictWordDto';
+export type { FailureClassDto } from './generated/FailureClassDto';
+export type { HealthStatusDto } from './generated/HealthStatusDto';
+export type { RuntimeFeatureDto } from './generated/RuntimeFeatureDto';
+export type { RuntimeHealthEventDto } from './generated/RuntimeHealthEventDto';

@@ -9,9 +9,10 @@ use std::path::Path;
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
-    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto, LlmSettingsDto,
-    MotionGroupDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
-    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto, FailureClassDto,
+    HealthStatusDto, LlmSettingsDto, MotionGroupDto, RuntimeFeatureDto, RuntimeHealthEventDto,
+    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -45,6 +46,10 @@ fn main() {
     SpeechStopEventDto::export_all(&config).expect("export SpeechStopEventDto bindings");
     TtsStateEventDto::export_all(&config).expect("export TtsStateEventDto bindings");
     UserDictWordDto::export_all(&config).expect("export UserDictWordDto bindings");
+    RuntimeFeatureDto::export_all(&config).expect("export RuntimeFeatureDto bindings");
+    HealthStatusDto::export_all(&config).expect("export HealthStatusDto bindings");
+    FailureClassDto::export_all(&config).expect("export FailureClassDto bindings");
+    RuntimeHealthEventDto::export_all(&config).expect("export RuntimeHealthEventDto bindings");
 
     println!("TypeScript bindings exported to {}", out_dir.display());
 }
