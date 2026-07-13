@@ -29,10 +29,11 @@ describe('desktop windows', () => {
     expect(screen.getByRole('button', { name: '停止' })).toBeInTheDocument();
   });
 
-  it('renders settings navigation', () => {
+  it('renders control center navigation', () => {
     render(<SettingsWindow />);
-    expect(screen.getByRole('heading', { name: '設定' })).toBeInTheDocument();
-    const nav = screen.getByRole('navigation', { name: '設定メニュー' });
-    expect(within(nav).getByText('マイク')).toBeInTheDocument();
+    const nav = screen.getByRole('tablist', { name: '管理メニュー' });
+    expect(within(nav).getByRole('tab', { name: '会話' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: '設定' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: 'ログ' })).toBeInTheDocument();
   });
 });

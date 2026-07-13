@@ -42,7 +42,17 @@ pub struct ConversationMessageDto {
     pub turn_id: Option<u64>,
     pub role: ChatRoleDto,
     pub text: String,
+    #[ts(type = "number")]
     pub created_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "ConversationLogPageDto.ts")]
+pub struct ConversationLogPageDto {
+    pub schema_version: u16,
+    pub messages: Vec<ConversationMessageDto>,
+    #[ts(type = "number | null")]
+    pub next_before_message_id: Option<i64>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "ConversationHistoryDeletedEventDto.ts")]

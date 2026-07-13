@@ -1,7 +1,8 @@
 use crate::chat::ChatService;
 use pw_application::history::{ConversationHistory, MessageRole};
 use pw_contracts::{
-    ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationMessageDto, SCHEMA_VERSION,
+    ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
+    ConversationMessageDto, SCHEMA_VERSION,
 };
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory};
@@ -76,6 +77,103 @@ pub fn list_conversation_history(
                 })
                 .collect()
         })
+}
+
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn list_conversation_log_at(
+    database_path: &std::path::Path,
+    before_message_id: Option<i64>,
+    query: Option<&str>,
+) -> Result<ConversationLogPageDto, String> {
+    let query = query.map(str::trim).filter(|value| !value.is_empty());
+    if query.is_some_and(|value| value.chars().count() > 200) {
+        return Err("検索語は200文字以内で指定してください".into());
+    }
+    let pattern = query.map(|value| format!("%{}%", escape_like(value)));
+    let database = Database::open(database_path).map_err(|error| error.to_string())?;
+    let mut statement = database
+        .connection()
+        .prepare(
+            "SELECT id, turn_id, role, content, created_at
+             FROM messages
+             WHERE conversation_id = ?1
+               AND (?2 IS NULL OR content LIKE ?2 ESCAPE '\\')
+               AND (?3 IS NULL OR id < ?3)
+             ORDER BY id DESC
+             LIMIT 101",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(
+            (CONVERSATION, pattern.as_deref(), before_message_id),
+            |row| {
+                let role: String = row.get(2)?;
+                let role = match role.as_str() {
+                    "user" => ChatRoleDto::User,
+                    "assistant" => ChatRoleDto::Assistant,
+                    unknown => {
+                        return Err(rusqlite::Error::FromSqlConversionFailure(
+                            2,
+                            rusqlite::types::Type::Text,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("unknown role: {unknown}"),
+                            )),
+                        ));
+                    }
+                };
+                let turn_id: Option<i64> = row.get(1)?;
+                Ok(ConversationMessageDto {
+                    schema_version: SCHEMA_VERSION,
+                    message_id: row.get(0)?,
+                    turn_id: turn_id.map(u64::try_from).transpose().map_err(|error| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            1,
+                            rusqlite::types::Type::Integer,
+                            Box::new(error),
+                        )
+                    })?,
+                    role,
+                    text: row.get(3)?,
+                    created_at: row.get(4)?,
+                })
+            },
+        )
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    let mut messages = rows;
+    let has_more = messages.len() > 100;
+    messages.truncate(100);
+    messages.reverse();
+    Ok(ConversationLogPageDto {
+        schema_version: SCHEMA_VERSION,
+        next_before_message_id: has_more
+            .then(|| messages.first().map(|message| message.message_id))
+            .flatten(),
+        messages,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Lists one read-only page of durable conversation history.
+///
+/// # Errors
+///
+/// Returns an error when the history database cannot be queried.
+pub fn list_conversation_log(
+    layout: State<'_, AppDataLayout>,
+    before_message_id: Option<i64>,
+    query: Option<String>,
+) -> Result<ConversationLogPageDto, String> {
+    list_conversation_log_at(&path(&layout), before_message_id, query.as_deref())
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -180,11 +278,60 @@ pub fn delete_memories(
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_history_core, execute_delete_history, export_database, validated_export_path,
+        delete_history_core, execute_delete_history, export_database, list_conversation_log_at,
+        validated_export_path,
     };
     use pw_application::history::{ConversationHistory, StoredConversation};
     use pw_contracts::{ConversationHistoryDeletedEventDto, SCHEMA_VERSION};
     use pw_storage::{Database, SqliteConversationHistory};
+
+    #[test]
+    fn conversation_log_pages_latest_messages_and_searches_literal_wildcards() {
+        let root = std::env::temp_dir().join(format!("pw-conversation-log-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("history.sqlite3");
+        let database = Database::open(&path).unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations (id, created_at, updated_at) VALUES ('default', 1, 1)",
+                [],
+            )
+            .unwrap();
+        for index in 1..=105 {
+            let content = if index == 42 {
+                "needle%_literal".to_owned()
+            } else {
+                format!("message-{index}")
+            };
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO messages (conversation_id, turn_id, role, content, created_at)
+                     VALUES ('default', ?1, 'user', ?2, ?1)",
+                    (index, content),
+                )
+                .unwrap();
+        }
+        drop(database);
+
+        let first = list_conversation_log_at(&path, None, None).unwrap();
+        assert_eq!(first.messages.len(), 100);
+        assert_eq!(first.messages.first().unwrap().message_id, 6);
+        assert_eq!(first.messages.last().unwrap().message_id, 105);
+        assert_eq!(first.next_before_message_id, Some(6));
+
+        let older = list_conversation_log_at(&path, first.next_before_message_id, None).unwrap();
+        assert_eq!(older.messages.len(), 5);
+        assert_eq!(older.next_before_message_id, None);
+
+        let searched = list_conversation_log_at(&path, None, Some("%_")).unwrap();
+        assert_eq!(searched.messages.len(), 1);
+        assert_eq!(searched.messages[0].text, "needle%_literal");
+        assert!(list_conversation_log_at(&path, None, Some(&"x".repeat(201))).is_err());
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn canonicalization_rejects_parent_alias_and_hardlink() {
         let root = std::env::temp_dir().join(format!("pw-export-{}", std::process::id()));

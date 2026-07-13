@@ -4,10 +4,12 @@ import type {
   ConversationHistoryDeletedEventDto,
   ConversationStateEventDto,
   TtsStateEventDto,
+  UiPreferencesDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
+import { applyThemePreference } from '../../shared/ui-preferences';
 
 const STATE_LABELS: Partial<Record<ConversationStateEventDto['state'], string>> =
   {
@@ -31,13 +33,18 @@ type DisplayMessage = {
  * arrives as `conversation-state` events. The stop button cancels
  * the in-flight turn.
  */
-export function ChatWindow() {
+export function ChatWindow({ placementControl = 'popout' }: { placementControl?: 'popout' | 'dock' }) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [stateLabel, setStateLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+    const stopPreferences = subscribeEvent<UiPreferencesDto>(
+      'ui-preferences-changed',
+      (preferences) => applyThemePreference(preferences.theme),
+    );
     const stopMessages = subscribeEvent<ChatMessageEventDto>(
       'chat-message',
       (payload) => {
@@ -60,6 +67,11 @@ export function ChatWindow() {
         return [...durable, ...current];
       });
     }).catch((problem: unknown) => setError(`履歴を読み込めませんでした: ${String(problem)}`));
+    invoke<UiPreferencesDto>('get_ui_preferences')
+      .then((preferences) => {
+        if (mounted) applyThemePreference(preferences.theme);
+      })
+      .catch(() => {});
     const stopState = subscribeEvent<ConversationStateEventDto>(
       'conversation-state',
       (payload) => {
@@ -80,6 +92,8 @@ export function ChatWindow() {
     });
     const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>('conversation-history-deleted', () => setMessages([]));
     return () => {
+      mounted = false;
+      stopPreferences();
       stopMessages();
       stopState();
       stopTts();
@@ -103,8 +117,27 @@ export function ChatWindow() {
     invoke('cancel_turn').catch(() => {});
   };
 
+  const setPlacement = (placement: 'docked' | 'popped') => {
+    invoke('set_chat_placement', { placement }).catch((problem: unknown) => {
+      setError(String(problem));
+    });
+  };
+
   return (
-    <main aria-label="チャット">
+    <section aria-label="チャット" className="chat-surface">
+      <header className="surface-heading">
+        <div>
+          <p className="eyebrow">Conversation</p>
+          <h2>会話</h2>
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => setPlacement(placementControl === 'dock' ? 'docked' : 'popped')}
+        >
+          {placementControl === 'dock' ? '再格納' : 'ポップアウト'}
+        </button>
+      </header>
       <section aria-live="polite" aria-label="会話履歴">
         {messages.length === 0 ? (
           <p>まだメッセージはありません。</p>
@@ -121,7 +154,7 @@ export function ChatWindow() {
         {stateLabel !== null && <p role="status">{stateLabel}</p>}
         {error !== null && <p role="alert">{error}</p>}
       </section>
-      <form
+      <form className="chat-composer"
         onSubmit={(event) => {
           event.preventDefault();
           send();
@@ -146,6 +179,6 @@ export function ChatWindow() {
           停止
         </button>
       </form>
-    </main>
+    </section>
   );
 }

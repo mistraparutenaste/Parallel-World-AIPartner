@@ -8,12 +8,13 @@ pub mod dto;
 
 pub use dto::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
-    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DeviceFallbackEventDto, DiagnosticReportDto, FailureClassDto, FrontendDiagnosticDto,
-    FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto,
-    QueueMetricsDto, RUNTIME_HEALTH_EVENT, RuntimeDiagnosticsDto, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto,
-    SttStateEventDto, TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UpdateStateDto, UpdateStatusDto, UserDictWordDto,
+    CharacterManifestDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
+    ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationMessageDto,
+    ConversationStateDto, ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto,
+    FailureClassDto, FrontendDiagnosticDto, FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto,
+    MotionGroupDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
+    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SCHEMA_VERSION,
+    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
+    TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto,
+    TtsStateEventDto, UiPreferencesDto, UpdateStateDto, UpdateStatusDto, UserDictWordDto,
 };

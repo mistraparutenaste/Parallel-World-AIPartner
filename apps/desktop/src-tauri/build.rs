@@ -38,6 +38,11 @@ fn main() {
             "get_update_state",
             "check_for_updates",
             "install_update",
+            "get_ui_preferences",
+            "set_theme_preference",
+            "set_chat_placement",
+            "list_conversation_log",
+            "read_technical_log",
         ]),
     ))
     .expect("failed to run tauri build script");

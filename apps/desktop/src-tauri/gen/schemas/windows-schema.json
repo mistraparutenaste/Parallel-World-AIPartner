@@ -261,6 +261,12 @@
           "markdownDescription": "Enables the get_tts_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_ui_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-ui-preferences",
+          "markdownDescription": "Enables the get_ui_preferences command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_update_state command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-update-state",
@@ -277,6 +283,12 @@
           "type": "string",
           "const": "allow-list-conversation-history",
           "markdownDescription": "Enables the list_conversation_history command."
+        },
+        {
+          "description": "Enables the list_conversation_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-conversation-log",
+          "markdownDescription": "Enables the list_conversation_log command without any pre-configured scope."
         },
         {
           "description": "Enables the list_diagnostic_reports command without any pre-configured scope.",
@@ -301,6 +313,12 @@
           "type": "string",
           "const": "allow-list-user-dict",
           "markdownDescription": "Enables the list_user_dict command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the read_technical_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-read-technical-log",
+          "markdownDescription": "Enables the read_technical_log command without any pre-configured scope."
         },
         {
           "description": "Enables the rearm_managed_process command without any pre-configured scope.",
@@ -351,6 +369,12 @@
           "markdownDescription": "Enables the set_capture_enabled command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_chat_placement command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-chat-placement",
+          "markdownDescription": "Enables the set_chat_placement command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_click_through command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-click-through",
@@ -373,6 +397,12 @@
           "type": "string",
           "const": "allow-set-speech-playback",
           "markdownDescription": "Enables the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_theme_preference command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-theme-preference",
+          "markdownDescription": "Enables the set_theme_preference command without any pre-configured scope."
         },
         {
           "description": "Enables the set_tts_settings command without any pre-configured scope.",
@@ -483,6 +513,12 @@
           "markdownDescription": "Denies the get_tts_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_ui_preferences command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-ui-preferences",
+          "markdownDescription": "Denies the get_ui_preferences command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_update_state command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-update-state",
@@ -499,6 +535,12 @@
           "type": "string",
           "const": "deny-list-conversation-history",
           "markdownDescription": "Denies the list_conversation_history command."
+        },
+        {
+          "description": "Denies the list_conversation_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-conversation-log",
+          "markdownDescription": "Denies the list_conversation_log command without any pre-configured scope."
         },
         {
           "description": "Denies the list_diagnostic_reports command without any pre-configured scope.",
@@ -523,6 +565,12 @@
           "type": "string",
           "const": "deny-list-user-dict",
           "markdownDescription": "Denies the list_user_dict command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_technical_log command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-read-technical-log",
+          "markdownDescription": "Denies the read_technical_log command without any pre-configured scope."
         },
         {
           "description": "Denies the rearm_managed_process command without any pre-configured scope.",
@@ -573,6 +621,12 @@
           "markdownDescription": "Denies the set_capture_enabled command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_chat_placement command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-chat-placement",
+          "markdownDescription": "Denies the set_chat_placement command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_click_through command without any pre-configured scope.",
           "type": "string",
           "const": "deny-set-click-through",
@@ -595,6 +649,12 @@
           "type": "string",
           "const": "deny-set-speech-playback",
           "markdownDescription": "Denies the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_theme_preference command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-theme-preference",
+          "markdownDescription": "Denies the set_theme_preference command without any pre-configured scope."
         },
         {
           "description": "Denies the set_tts_settings command without any pre-configured scope.",

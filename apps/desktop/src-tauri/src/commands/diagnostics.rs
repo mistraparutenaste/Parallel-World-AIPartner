@@ -10,10 +10,25 @@ use std::path::Path;
 use tauri::State;
 
 use crate::{
+    bootstrap::TechnicalLogAccess,
     chat::ChatService,
     supervisor::{FrontendRuntimeHealth, ManagedProcesses},
     tts::TtsService,
 };
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Reads a bounded chunk from the current technical log.
+///
+/// # Errors
+///
+/// Returns an error when the active log cannot be inspected or read.
+pub fn read_technical_log(
+    access: State<'_, TechnicalLogAccess>,
+    cursor: Option<pw_contracts::TechnicalLogCursorDto>,
+) -> Result<pw_contracts::TechnicalLogChunkDto, String> {
+    access.read(cursor)
+}
 
 #[tauri::command]
 #[must_use]

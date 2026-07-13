@@ -27,3 +27,20 @@ pub struct FrontendDiagnosticDto {
     pub line: Option<u32>,
     pub column: Option<u32>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "TechnicalLogCursorDto.ts")]
+pub struct TechnicalLogCursorDto {
+    pub generation: u64,
+    pub offset: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "TechnicalLogChunkDto.ts")]
+pub struct TechnicalLogChunkDto {
+    pub schema_version: u16,
+    pub lines: Vec<String>,
+    pub next_cursor: TechnicalLogCursorDto,
+    pub reset: bool,
+    pub has_more: bool,
+}

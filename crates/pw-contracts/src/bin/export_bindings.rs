@@ -8,14 +8,15 @@ use std::path::Path;
 
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
-    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DeviceFallbackEventDto, DiagnosticReportDto, FailureClassDto, FrontendDiagnosticDto,
-    FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto,
-    QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
-    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
-    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UpdateStateDto, UpdateStatusDto,
-    UserDictWordDto,
+    CharacterManifestDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
+    ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationMessageDto,
+    ConversationStateDto, ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto,
+    FailureClassDto, FrontendDiagnosticDto, FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto,
+    MotionGroupDto, ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
+    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
+    TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto, UpdateStateDto,
+    UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -39,6 +40,7 @@ fn main() {
     ChatMessageEventDto::export_all(&config).expect("export ChatMessageEventDto bindings");
     ChatRoleDto::export_all(&config).expect("export ChatRoleDto bindings");
     ConversationMessageDto::export_all(&config).expect("export ConversationMessageDto bindings");
+    ConversationLogPageDto::export_all(&config).expect("export ConversationLogPageDto bindings");
     ConversationHistoryDeletedEventDto::export_all(&config)
         .expect("export deletion event bindings");
     ConversationStateEventDto::export_all(&config)
@@ -60,6 +62,11 @@ fn main() {
     DiagnosticReportDto::export_all(&config).expect("export DiagnosticReportDto bindings");
     FrontendDiagnosticDto::export_all(&config).expect("export FrontendDiagnosticDto bindings");
     FrontendErrorKindDto::export_all(&config).expect("export FrontendErrorKindDto bindings");
+    TechnicalLogCursorDto::export_all(&config).expect("export TechnicalLogCursorDto bindings");
+    TechnicalLogChunkDto::export_all(&config).expect("export TechnicalLogChunkDto bindings");
+    ThemePreferenceDto::export_all(&config).expect("export ThemePreferenceDto bindings");
+    ChatPlacementDto::export_all(&config).expect("export ChatPlacementDto bindings");
+    UiPreferencesDto::export_all(&config).expect("export UiPreferencesDto bindings");
     UpdateStatusDto::export_all(&config).expect("export UpdateStatusDto bindings");
     UpdateStateDto::export_all(&config).expect("export UpdateStateDto bindings");
 

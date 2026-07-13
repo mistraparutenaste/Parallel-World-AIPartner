@@ -6,7 +6,7 @@ use pw_platform::diagnostics::{
 use pw_platform::paths::AppDataLayout;
 use std::{
     fs,
-    io::Write,
+    io::{Read, Seek, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -15,6 +15,8 @@ use tauri::{AppHandle, Manager, Runtime};
 use crate::error::AppError;
 
 const LOG_FILE_LIMIT: u64 = 5 * 1024 * 1024;
+const LOG_READ_LIMIT: u64 = 128 * 1024;
+const LOG_LINE_LIMIT: usize = 16 * 1024;
 #[derive(Clone)]
 struct BoundedLogMakeWriter {
     state: Arc<Mutex<BoundedLogState>>,
@@ -22,6 +24,87 @@ struct BoundedLogMakeWriter {
 struct BoundedLogState {
     directory: PathBuf,
     sequence: u64,
+    generation: u64,
+}
+
+#[derive(Clone)]
+pub struct TechnicalLogAccess {
+    state: Arc<Mutex<BoundedLogState>>,
+}
+
+impl TechnicalLogAccess {
+    fn new(state: Arc<Mutex<BoundedLogState>>) -> Self {
+        Self { state }
+    }
+
+    /// Reads a bounded chunk from the current application log.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current log cannot be inspected or read.
+    pub fn read(
+        &self,
+        cursor: Option<pw_contracts::TechnicalLogCursorDto>,
+    ) -> Result<pw_contracts::TechnicalLogChunkDto, String> {
+        let (path, generation) = {
+            let state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (state.directory.join("parallel-world.log"), state.generation)
+        };
+        let mut file = match fs::File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(pw_contracts::TechnicalLogChunkDto {
+                    schema_version: pw_contracts::SCHEMA_VERSION,
+                    lines: Vec::new(),
+                    next_cursor: pw_contracts::TechnicalLogCursorDto {
+                        generation,
+                        offset: 0,
+                    },
+                    reset: cursor.is_some_and(|value| value.generation != generation),
+                    has_more: false,
+                });
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let length = file.metadata().map_err(|error| error.to_string())?.len();
+        let reset =
+            cursor.is_some_and(|value| value.generation != generation || value.offset > length);
+        let initial = cursor.is_none() || reset;
+        let offset = if initial {
+            length.saturating_sub(LOG_READ_LIMIT)
+        } else {
+            cursor.map_or(0, |value| value.offset)
+        };
+        file.seek(std::io::SeekFrom::Start(offset))
+            .map_err(|error| error.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(LOG_READ_LIMIT)
+            .read_to_end(&mut bytes)
+            .map_err(|error| error.to_string())?;
+        let next_offset = offset + u64::try_from(bytes.len()).unwrap_or(LOG_READ_LIMIT);
+        let text = String::from_utf8_lossy(&bytes);
+        let mut lines = text.lines();
+        if initial && offset > 0 {
+            let _ = lines.next();
+        }
+        let lines = lines
+            .map(pw_domain::runtime_health::redact_credentials)
+            .map(|line| line.chars().take(LOG_LINE_LIMIT).collect())
+            .collect();
+        Ok(pw_contracts::TechnicalLogChunkDto {
+            schema_version: pw_contracts::SCHEMA_VERSION,
+            lines,
+            next_cursor: pw_contracts::TechnicalLogCursorDto {
+                generation,
+                offset: next_offset,
+            },
+            reset,
+            has_more: next_offset < length,
+        })
+    }
 }
 struct BoundedLogWriter {
     state: Arc<Mutex<BoundedLogState>>,
@@ -55,6 +138,7 @@ impl Write for BoundedLogWriter {
             state.sequence = state.sequence.wrapping_add(1);
             fs::rename(&active, rotated)?;
             length = 0;
+            state.generation = state.generation.wrapping_add(1);
         }
         let remaining =
             usize::try_from(LOG_FILE_LIMIT.saturating_sub(length)).unwrap_or(usize::MAX);
@@ -142,12 +226,15 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<AppDataLayout, AppEr
     configure_panic_store(crash_store.clone());
     prune_directory(&layout.logs, RetentionPolicy::default()).map_err(std::io::Error::other)?;
 
+    let log_state = Arc::new(Mutex::new(BoundedLogState {
+        directory: layout.logs.clone(),
+        sequence: 0,
+        generation: 0,
+    }));
     let writer = BoundedLogMakeWriter {
-        state: Arc::new(Mutex::new(BoundedLogState {
-            directory: layout.logs.clone(),
-            sequence: 0,
-        })),
+        state: Arc::clone(&log_state),
     };
+    app.manage(TechnicalLogAccess::new(log_state));
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -179,12 +266,53 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<AppDataLayout, AppEr
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundedLogMakeWriter, BoundedLogState, LOG_FILE_LIMIT};
+    use super::{BoundedLogMakeWriter, BoundedLogState, LOG_FILE_LIMIT, TechnicalLogAccess};
     use std::{
         io::Write,
         sync::{Arc, Mutex},
     };
     use tracing_subscriber::fmt::MakeWriter;
+
+    #[test]
+    fn technical_log_reads_deltas_redacts_and_resets_after_rotation() {
+        let root = std::env::temp_dir().join(format!("pw-log-read-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(Mutex::new(BoundedLogState {
+            directory: root.clone(),
+            sequence: 0,
+            generation: 0,
+        }));
+        let make = BoundedLogMakeWriter {
+            state: Arc::clone(&state),
+        };
+        let access = TechnicalLogAccess::new(state);
+        let long = "x".repeat(20 * 1024);
+        make.make_writer()
+            .write_all(format!("token=abc\n{long}\n").as_bytes())
+            .unwrap();
+
+        let first = access.read(None).unwrap();
+        assert!(first.lines.iter().any(|line| line.contains("[REDACTED]")));
+        assert!(!first.lines.iter().any(|line| line.contains("abc")));
+        assert!(first.lines.iter().all(|line| line.len() <= 16 * 1024));
+
+        make.make_writer().write_all(b"next-line\n").unwrap();
+        let delta = access.read(Some(first.next_cursor)).unwrap();
+        assert_eq!(delta.lines, ["next-line"]);
+        assert!(!delta.reset);
+
+        std::fs::write(
+            root.join("parallel-world.log"),
+            vec![b'x'; usize::try_from(LOG_FILE_LIMIT).expect("log limit fits usize")],
+        )
+        .unwrap();
+        make.make_writer().write_all(b"fresh-generation\n").unwrap();
+        let reset = access.read(Some(delta.next_cursor)).unwrap();
+        assert!(reset.reset);
+        assert_eq!(reset.lines, ["fresh-generation"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn writer_rotates_before_active_log_exceeds_limit() {
@@ -195,6 +323,7 @@ mod tests {
             state: Arc::new(Mutex::new(BoundedLogState {
                 directory: root.clone(),
                 sequence: 0,
+                generation: 0,
             })),
         };
         let chunk = vec![b'x'; (usize::try_from(LOG_FILE_LIMIT).unwrap() / 2) + 1];
@@ -227,6 +356,7 @@ mod tests {
             state: Arc::new(Mutex::new(BoundedLogState {
                 directory: root.clone(),
                 sequence: 0,
+                generation: 0,
             })),
         };
         let huge = vec![b'x'; usize::try_from(LOG_FILE_LIMIT * 6).unwrap()];

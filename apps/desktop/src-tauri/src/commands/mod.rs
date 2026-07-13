@@ -7,4 +7,5 @@ pub mod chat;
 pub mod data;
 pub mod diagnostics;
 pub mod tts;
+pub mod ui;
 pub mod updates;
