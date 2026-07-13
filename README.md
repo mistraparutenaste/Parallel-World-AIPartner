@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/logo.png" width="480" alt="Parallel World">
+</p>
+
 # Parallel World
 
 > Phase 0〜6は実装済み・実機soakゲート待ち。Phase 6の自動受け入れ検証は完了し、実時間2時間soakのみ残っています。
