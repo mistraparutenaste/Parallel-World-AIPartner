@@ -196,15 +196,15 @@ impl ManagedProcesses {
             return Err("process supervision is shut down");
         }
         let bit = feature_bit(feature);
-        if self.circuits.fetch_and(!bit, Ordering::AcqRel) & bit == 0 {
-            return Err("feature circuit is not open");
-        }
         let config = self
             .configs
             .iter()
             .find(|config| config.feature == feature)
             .cloned()
             .ok_or("feature is not configured")?;
+        if self.circuits.fetch_and(!bit, Ordering::AcqRel) & bit == 0 {
+            return Err("feature circuit is not open");
+        }
         let handle = spawn_monitor(
             config.name,
             config.spec,
@@ -232,6 +232,48 @@ const fn feature_bit(feature: RuntimeFeature) -> u64 {
         RuntimeFeature::TextToSpeech => 4,
         RuntimeFeature::Live2D => 8,
         RuntimeFeature::AudioInput => 16,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MonitorDecision {
+    Continue,
+    Healthy,
+    Restart,
+}
+
+#[derive(Default)]
+struct MonitorCore {
+    ready: bool,
+    consecutive_probe_failures: u8,
+}
+
+impl MonitorCore {
+    fn readiness(&mut self, healthy: bool) -> MonitorDecision {
+        self.ready = healthy;
+        if healthy {
+            MonitorDecision::Healthy
+        } else {
+            MonitorDecision::Restart
+        }
+    }
+    fn steady_probe(&mut self, healthy: bool) -> MonitorDecision {
+        if healthy {
+            self.consecutive_probe_failures = 0;
+            return MonitorDecision::Continue;
+        }
+        self.consecutive_probe_failures = self.consecutive_probe_failures.saturating_add(1);
+        if self.consecutive_probe_failures >= 3 {
+            MonitorDecision::Restart
+        } else {
+            MonitorDecision::Continue
+        }
+    }
+    const fn child_status(status: Result<bool, ()>) -> MonitorDecision {
+        match status {
+            Ok(true) => MonitorDecision::Continue,
+            Ok(false) | Err(()) => MonitorDecision::Restart,
+        }
     }
 }
 
@@ -293,14 +335,7 @@ fn spawn_monitor(
         while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
             match ProcessSupervisor::spawn(&spec) {
                 Ok(child) => {
-                    publish_health(
-                        sink.as_ref(),
-                        feature,
-                        ProcessOwnershipDto::Managed,
-                        true,
-                        0,
-                        false,
-                    );
+                    let mut core = MonitorCore::default();
                     tracing::info!(
                         process = name,
                         pid = child.pid(),
@@ -316,15 +351,30 @@ fn spawn_monitor(
                     {
                         thread::sleep(Duration::from_millis(100));
                     }
-                    if !probe_ready(probe, probe_paths) {
+                    if core.readiness(probe_ready(probe, probe_paths)) == MonitorDecision::Restart {
                         tracing::warn!(process=name, %probe, "readiness probe failed");
                         let _ = child.stop(Duration::from_secs(5));
+                    } else {
+                        publish_health(
+                            sink.as_ref(),
+                            feature,
+                            ProcessOwnershipDto::Managed,
+                            true,
+                            backoff.attempts(),
+                            false,
+                        );
                     }
+                    let mut next_probe = std::time::Instant::now() + Duration::from_secs(1);
                     while !stop.load(Ordering::Acquire)
                         && generations.load(Ordering::Acquire) == generation
                     {
                         match child.try_wait() {
-                            Ok(None) => {}
+                            Ok(None) => {
+                                debug_assert_eq!(
+                                    MonitorCore::child_status(Ok(true)),
+                                    MonitorDecision::Continue
+                                );
+                            }
                             Ok(Some(_)) => break,
                             Err(error) => {
                                 tracing::error!(process=name, %error, "managed process status query failed");
@@ -334,6 +384,22 @@ fn spawn_monitor(
                                     ProcessOwnershipDto::Managed,
                                     false,
                                     1,
+                                    false,
+                                );
+                                let _ = child.stop(Duration::from_secs(5));
+                                break;
+                            }
+                        }
+                        if std::time::Instant::now() >= next_probe {
+                            next_probe += Duration::from_secs(1);
+                            let healthy = probe_ready(probe, probe_paths);
+                            if core.steady_probe(healthy) == MonitorDecision::Restart {
+                                publish_health(
+                                    sink.as_ref(),
+                                    feature,
+                                    ProcessOwnershipDto::Managed,
+                                    false,
+                                    backoff.attempts().saturating_add(1),
                                     false,
                                 );
                                 let _ = child.stop(Duration::from_secs(5));
@@ -356,6 +422,14 @@ fn spawn_monitor(
                     tracing::warn!(process = name, %error, "managed process spawn failed");
                 }
             }
+            publish_health(
+                sink.as_ref(),
+                feature,
+                ProcessOwnershipDto::Managed,
+                false,
+                backoff.attempts().saturating_add(1),
+                false,
+            );
             match backoff.record_failure() {
                 BackoffDecision::RetryAfter(delay) => sleep_interruptibly(&stop, delay),
                 BackoffDecision::CircuitOpen => {
@@ -515,6 +589,54 @@ fn sleep_interruptibly(stop: &AtomicBool, duration: Duration) {
 mod tests {
     use super::*;
     use std::net::TcpListener;
+
+    #[test]
+    fn core_does_not_report_healthy_before_readiness() {
+        let core = MonitorCore::default();
+        assert!(!core.ready);
+    }
+    #[test]
+    fn core_reports_healthy_after_successful_readiness() {
+        let mut core = MonitorCore::default();
+        assert_eq!(core.readiness(true), MonitorDecision::Healthy);
+    }
+    #[test]
+    fn core_restarts_after_failed_readiness() {
+        let mut core = MonitorCore::default();
+        assert_eq!(core.readiness(false), MonitorDecision::Restart);
+    }
+    #[test]
+    fn core_tolerates_two_steady_probe_failures() {
+        let mut core = MonitorCore::default();
+        assert_eq!(core.steady_probe(false), MonitorDecision::Continue);
+        assert_eq!(core.steady_probe(false), MonitorDecision::Continue);
+    }
+    #[test]
+    fn core_restarts_on_third_steady_probe_failure() {
+        let mut core = MonitorCore::default();
+        core.steady_probe(false);
+        core.steady_probe(false);
+        assert_eq!(core.steady_probe(false), MonitorDecision::Restart);
+    }
+    #[test]
+    fn core_success_resets_probe_failure_threshold() {
+        let mut core = MonitorCore::default();
+        core.steady_probe(false);
+        core.steady_probe(false);
+        core.steady_probe(true);
+        assert_eq!(core.steady_probe(false), MonitorDecision::Continue);
+    }
+    #[test]
+    fn core_restarts_when_child_exits() {
+        assert_eq!(
+            MonitorCore::child_status(Ok(false)),
+            MonitorDecision::Restart
+        );
+    }
+    #[test]
+    fn core_restarts_when_child_status_query_fails() {
+        assert_eq!(MonitorCore::child_status(Err(())), MonitorDecision::Restart);
+    }
 
     fn serve_once(response: &'static [u8]) -> SocketAddr {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
