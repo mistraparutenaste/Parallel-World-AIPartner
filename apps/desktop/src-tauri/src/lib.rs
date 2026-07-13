@@ -63,6 +63,7 @@ pub fn run() {
             supervisor::rearm_managed_process,
             supervisor::report_runtime_failure,
             supervisor::report_runtime_success,
+            supervisor::retry_live2d_runtime,
             supervisor::rearm_runtime_feature
         ])
         .setup(|app| {

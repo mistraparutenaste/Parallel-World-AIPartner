@@ -24,6 +24,48 @@ trait RuntimeHealthSink: Send + Sync {
     fn publish(&self, event: RuntimeHealthEventDto);
 }
 
+#[derive(Default)]
+struct ManagedHealthRegistry {
+    latest: Mutex<Vec<RuntimeHealthEventDto>>,
+}
+
+impl ManagedHealthRegistry {
+    fn record(&self, event: RuntimeHealthEventDto) {
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = latest.iter_mut().find(|existing| {
+            existing.feature == event.feature && existing.ownership == event.ownership
+        }) {
+            if event.changed_at_ms >= existing.changed_at_ms {
+                *existing = event;
+            }
+        } else {
+            latest.push(event);
+        }
+    }
+
+    fn snapshots(&self) -> Vec<RuntimeHealthEventDto> {
+        self.latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+struct RecordingRuntimeHealthSink {
+    registry: Arc<ManagedHealthRegistry>,
+    downstream: Arc<dyn RuntimeHealthSink>,
+}
+
+impl RuntimeHealthSink for RecordingRuntimeHealthSink {
+    fn publish(&self, event: RuntimeHealthEventDto) {
+        self.registry.record(event.clone());
+        self.downstream.publish(event);
+    }
+}
+
 struct AppRuntimeHealthSink(tauri::AppHandle);
 impl RuntimeHealthSink for AppRuntimeHealthSink {
     fn publish(&self, event: RuntimeHealthEventDto) {
@@ -65,6 +107,7 @@ pub struct ManagedProcesses {
     lifecycle: Mutex<LifecycleState>,
     circuits: Arc<AtomicU64>,
     sink: Arc<dyn RuntimeHealthSink>,
+    health: Arc<ManagedHealthRegistry>,
     diagnostics: Arc<ProcessDiagnostics>,
 }
 
@@ -226,7 +269,11 @@ impl ManagedProcesses {
                 feature,
             });
         }
-        let sink: Arc<dyn RuntimeHealthSink> = Arc::new(AppRuntimeHealthSink(app));
+        let health = Arc::new(ManagedHealthRegistry::default());
+        let sink: Arc<dyn RuntimeHealthSink> = Arc::new(RecordingRuntimeHealthSink {
+            registry: Arc::clone(&health),
+            downstream: Arc::new(AppRuntimeHealthSink(app)),
+        });
         let circuits = Arc::new(AtomicU64::new(0));
         let diagnostics = Arc::new(ProcessDiagnostics::default());
         let handles = spawn_monitors(&configs, &stop, &generation, &sink, &circuits, &diagnostics);
@@ -240,6 +287,7 @@ impl ManagedProcesses {
             }),
             circuits,
             sink,
+            health,
             diagnostics,
         }
     }
@@ -288,13 +336,7 @@ impl ManagedProcesses {
 
     #[must_use]
     pub fn health_snapshots(&self) -> Vec<RuntimeHealthEventDto> {
-        let circuits = self.circuits.load(Ordering::Relaxed);
-        self.configs
-            .iter()
-            .filter_map(|config| {
-                managed_circuit_event(config.feature, circuits & feature_bit(config.feature) != 0)
-            })
-            .collect()
+        self.health.snapshots()
     }
 
     /// Rearms a configured feature only when its circuit is open.
@@ -337,24 +379,6 @@ impl ManagedProcesses {
         lifecycle.handles.push(handle);
         Ok(())
     }
-}
-
-fn managed_circuit_event(
-    feature: RuntimeFeature,
-    circuit_open: bool,
-) -> Option<RuntimeHealthEventDto> {
-    if !circuit_open {
-        return None;
-    }
-    let mut health = RuntimeHealth::new(feature);
-    health.mark_degraded(
-        &RuntimeFailure::transient(FailureCode::Unavailable),
-        SystemClock.now_ms(),
-    );
-    let mut event = RuntimeHealthEventDto::from((&health, 8));
-    event.ownership = ProcessOwnershipDto::Managed;
-    event.circuit_open = true;
-    Some(event)
 }
 
 const fn feature_bit(feature: RuntimeFeature) -> u64 {
@@ -563,6 +587,34 @@ pub fn report_runtime_success<R: tauri::Runtime>(
     Ok(())
 }
 
+fn retry_live2d<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    health: &FrontendRuntimeHealth,
+) -> Result<(), String> {
+    let mut supervisor = health
+        .live2d
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let transition = supervisor.retry_now().map_err(str::to_owned)?;
+    emit_transition(app, transition, supervisor.circuit_open());
+    drop(supervisor);
+    let mut windows = app;
+    crate::commands::character::apply_live2d_window_mode(&mut windows, true)
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Retries only the frontend `Live2D` runtime.
+///
+/// # Errors
+/// Returns an error when the `Live2D` circuit cannot be retried.
+pub fn retry_live2d_runtime<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    health: tauri::State<'_, FrontendRuntimeHealth>,
+) -> Result<(), String> {
+    retry_live2d(&app, &health)
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 /// Rearms a supported managed process or the frontend `Live2D` circuit.
@@ -596,17 +648,7 @@ pub fn rearm_runtime_feature<R: tauri::Runtime>(
             }
             Ok(())
         }
-        pw_contracts::RuntimeFeatureDto::Live2D => {
-            let mut supervisor = health
-                .live2d
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let transition = supervisor.retry_now().map_err(str::to_owned)?;
-            emit_transition(&app, transition, supervisor.circuit_open());
-            drop(supervisor);
-            crate::commands::character::apply_live2d_window_mode(&mut &app, true)?;
-            Ok(())
-        }
+        pw_contracts::RuntimeFeatureDto::Live2D => retry_live2d(&app, &health),
         _ => Err("feature cannot be rearmed from Settings".into()),
     }
 }
@@ -961,10 +1003,34 @@ mod tests {
 
     #[test]
     fn managed_open_circuit_is_available_to_late_settings_snapshots() {
-        let event = super::managed_circuit_event(RuntimeFeature::LanguageModel, true).unwrap();
-        assert_eq!(event.ownership, ProcessOwnershipDto::Managed);
-        assert!(event.circuit_open);
-        assert_eq!(event.attempts, 8);
+        let registry = super::ManagedHealthRegistry::default();
+        let mut event =
+            RuntimeHealthEventDto::from((&RuntimeHealth::new(RuntimeFeature::LanguageModel), 8));
+        event.ownership = ProcessOwnershipDto::Managed;
+        event.circuit_open = true;
+        registry.record(event.clone());
+
+        assert_eq!(registry.snapshots(), vec![event]);
+    }
+
+    #[test]
+    fn managed_registry_preserves_latest_event_by_feature_and_ownership() {
+        let registry = super::ManagedHealthRegistry::default();
+        let mut managed =
+            RuntimeHealthEventDto::from((&RuntimeHealth::new(RuntimeFeature::LanguageModel), 3));
+        managed.ownership = ProcessOwnershipDto::Managed;
+        managed.changed_at_ms = 42;
+        let mut application = managed.clone();
+        application.ownership = ProcessOwnershipDto::NotApplicable;
+        application.changed_at_ms = 43;
+
+        registry.record(managed.clone());
+        registry.record(application.clone());
+
+        let snapshots = registry.snapshots();
+        assert_eq!(snapshots.len(), 2);
+        assert!(snapshots.contains(&managed));
+        assert!(snapshots.contains(&application));
     }
 
     #[test]

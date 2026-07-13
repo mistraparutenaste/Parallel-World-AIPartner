@@ -19,21 +19,22 @@ function ownership(event: RuntimeHealthEventDto) {
 }
 
 export function mergeHealthEvents(
-  current: Partial<Record<RuntimeHealthEventDto['feature'], RuntimeHealthEventDto>>,
+  current: Record<string, RuntimeHealthEventDto>,
   incoming: RuntimeHealthEventDto[],
 ) {
   const merged = { ...current };
   for (const event of incoming) {
-    const existing = merged[event.feature];
+    const key = `${event.feature}:${event.ownership ?? 'not_applicable'}`;
+    const existing = merged[key];
     if (!existing || event.changed_at_ms >= existing.changed_at_ms) {
-      merged[event.feature] = event;
+      merged[key] = event;
     }
   }
   return merged;
 }
 
 export function RuntimeHealthPanel() {
-  const [health, setHealth] = useState<Partial<Record<RuntimeHealthEventDto['feature'], RuntimeHealthEventDto>>>({});
+  const [health, setHealth] = useState<Record<string, RuntimeHealthEventDto>>({});
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnosticsDto | null>(null);
 
   useEffect(() => {
@@ -69,8 +70,8 @@ export function RuntimeHealthPanel() {
       <h2 id="runtime-health-heading">Runtime Health</h2>
       {Object.values(health).length === 0 ? <p>状態イベントを待機中</p> : null}
       <ul>
-        {Object.values(health).map((event) => event && (
-          <li key={event.feature}>
+        {Object.values(health).map((event) => (
+          <li key={`${event.feature}:${event.ownership ?? 'not_applicable'}`}>
             <strong>{LABELS[event.feature]}</strong>{' '}
             <span>{ownership(event)}</span>{' '}
             <span>{event.circuit_open ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>

@@ -11,7 +11,7 @@
     "allow-set-speech-playback",
     "allow-report-runtime-failure",
     "allow-report-runtime-success",
-    "allow-rearm-runtime-feature",
+    "allow-retry-live2d-runtime",
     "allow-report-frontend-error"
   ]
 }

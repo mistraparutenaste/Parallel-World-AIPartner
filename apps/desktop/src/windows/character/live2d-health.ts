@@ -25,7 +25,7 @@ export function reportLive2DSuccess(): Promise<void> {
 }
 
 export function rearmLive2D(): Promise<void> {
-  return invoke('rearm_runtime_feature', { feature: 'live2d' });
+  return invoke('retry_live2d_runtime');
 }
 
 export function retryLive2D(): Promise<void> {

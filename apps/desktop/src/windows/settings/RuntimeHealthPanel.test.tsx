@@ -148,7 +148,34 @@ test('loads current circuit state when Settings opens after the event', async ()
 });
 
 test('older service snapshot does not overwrite a newer managed circuit event', () => {
-  const managed = { feature: 'language_model', changed_at_ms: 100, circuit_open: true } as any;
-  const service = { feature: 'language_model', changed_at_ms: 50, circuit_open: false } as any;
-  expect(mergeHealthEvents({ language_model: managed }, [service]).language_model).toBe(managed);
+  const managed = { feature: 'language_model', ownership: 'managed', changed_at_ms: 100, circuit_open: true } as any;
+  const olderManaged = { ...managed, changed_at_ms: 50, circuit_open: false } as any;
+  expect(mergeHealthEvents({ 'language_model:managed': managed }, [olderManaged])['language_model:managed']).toBe(managed);
+});
+
+test('managed and application health for one feature remain separate', () => {
+  const managed = { feature: 'language_model', ownership: 'managed', changed_at_ms: 100 } as any;
+  const application = { feature: 'language_model', ownership: 'not_applicable', changed_at_ms: 101 } as any;
+  const merged = mergeHealthEvents({}, [managed, application]);
+  expect(Object.values(merged)).toEqual(expect.arrayContaining([managed, application]));
+  expect(Object.values(merged)).toHaveLength(2);
+});
+
+test('loads a recovering managed process when Settings opens after its event', async () => {
+  invokeMock.mockImplementation((command) => command === 'get_runtime_diagnostics'
+    ? Promise.resolve({ schema_version: 1, queues: [], health: [{
+      schema_version: 1,
+      feature: 'language_model',
+      status: 'recovering',
+      failure_class: 'transient',
+      last_error: 'process unavailable',
+      attempts: 3,
+      ownership: 'managed',
+      circuit_open: false,
+      changed_at_ms: 88,
+    }] })
+    : Promise.resolve(undefined));
+  render(<RuntimeHealthPanel />);
+  expect(await screen.findByText(/managed/)).toBeInTheDocument();
+  expect(screen.getByText(/retry 3/)).toBeInTheDocument();
 });

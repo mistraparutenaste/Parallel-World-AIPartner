@@ -53,5 +53,5 @@ test('reports successful Live2D boot through the Rust supervisor', async () => {
 
 test('rearms Live2D before retrying its renderer', async () => {
   await rearmLive2D();
-  expect(invoke).toHaveBeenCalledWith('rearm_runtime_feature', { feature: 'live2d' });
+  expect(invoke).toHaveBeenCalledWith('retry_live2d_runtime');
 });

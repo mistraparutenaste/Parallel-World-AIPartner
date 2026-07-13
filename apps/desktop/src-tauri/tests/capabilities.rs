@@ -67,7 +67,7 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
             "allow-set-speech-playback",
             "allow-report-runtime-failure",
             "allow-report-runtime-success",
-            "allow-rearm-runtime-feature",
+            "allow-retry-live2d-runtime",
             "allow-report-frontend-error"
         ]
     );
@@ -136,13 +136,21 @@ fn settings_capability_exposes_status_character_and_audio_control() {
 }
 
 #[test]
-fn runtime_rearm_is_exposed_only_to_settings_and_character() {
-    let (_, permissions) = capability_permissions("chat");
+fn common_runtime_rearm_is_settings_only_and_character_gets_live2d_retry_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("rearm-runtime-feature")),
+            "common runtime rearm leaked into {capability}"
+        );
+    }
+    let (_, character) = capability_permissions("character");
     assert!(
-        !permissions
+        character
             .iter()
-            .any(|permission| permission.contains("rearm-runtime-feature")),
-        "runtime rearm leaked into chat"
+            .any(|permission| permission == "allow-retry-live2d-runtime")
     );
 }
 
