@@ -88,7 +88,7 @@
 - [x] GREEN: 1〜5秒sampling、RSS/handle/thread/queue/drop/cache/log/restart/fault timelineをJSONLへ保存し、最終summaryを生成。
 - [x] SCRIPT: 既定2時間、短縮時間指定、build hash/OS/device/seedを成果物へ記録。fault注入は明示opt-in。
 - [x] VERIFY: short soakを自動実行し、PowerShell 5.1 parseとUTF-8 BOMを確認。
-- [x] COMMIT: `test(stability): add bounded soak harness`（`a060453`、process安全修正は`38e4106`まで）。
+- [x] COMMIT: `test(stability): add bounded soak harness`（`a060453`、PID/lineage安全修正は`38e4106`まで）。実時間run前の再検証で検出した終了時再spawn競合はWindows Job Object containmentで解消。
 
 ### Task 8: Phase 6受け入れ検証
 

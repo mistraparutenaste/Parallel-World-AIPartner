@@ -43,10 +43,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.
 
 - `cargo fmt --all --check`: 成功
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 成功
-- `cargo test --workspace`: 274 passed、7 ignored（外部model/server/hardware依存）
+- `cargo test --workspace`: 278 passed、7 ignored（外部model/server/hardware依存）
 - `corepack pnpm build`: 成功
 - `corepack pnpm typecheck`: 成功
-- `corepack pnpm test`: 81 passed（Live2D 27、desktop 54）
+- `corepack pnpm test`: 83 passed（Live2D 27、desktop 56）
 - `corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle`: 成功
 - `tools/scripts/soak-test.ps1 -SelfTest`: 成功、終了コード0、`passed=true`、violations / orphan空
 - `tools/scripts/soak-test.ps1 -SelfTest -SelfTestRootChild`: 期待終了コード4、`root_child_rejection.passed=true`、unexpected / orphan空

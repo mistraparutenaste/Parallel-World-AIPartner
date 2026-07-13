@@ -23,6 +23,8 @@ $ExitThreshold = 4
 $ExitArtifact = 5
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $startedProcess = $null
+$jobHandle = [IntPtr]::Zero
+$jobTerminated = $false
 $selfTestLateMarker = ""
 $selfTestSpawnLog = ""
 
@@ -30,8 +32,193 @@ Add-Type -TypeDefinition @'
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace ParallelWorld.Soak {
+    public static class ProcessJob {
+        private const uint KillOnJobClose = 0x00002000;
+        private const uint CreateSuspended = 0x00000004;
+        private const uint CreateNoWindow = 0x08000000;
+        private const uint StartfUseShowWindow = 0x00000001;
+
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct StartupInformation {
+            public uint Size;
+            public string Reserved;
+            public string Desktop;
+            public string Title;
+            public uint X;
+            public uint Y;
+            public uint XSize;
+            public uint YSize;
+            public uint XCountChars;
+            public uint YCountChars;
+            public uint FillAttribute;
+            public uint Flags;
+            public short ShowWindow;
+            public short Reserved2Size;
+            public IntPtr Reserved2;
+            public IntPtr StandardInput;
+            public IntPtr StandardOutput;
+            public IntPtr StandardError;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ProcessInformation {
+            public IntPtr Process;
+            public IntPtr Thread;
+            public uint ProcessId;
+            public uint ThreadId;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime {
+            public uint Low;
+            public uint High;
+        }
+
+        public sealed class StartedProcessIdentity {
+            public int ProcessId { get; private set; }
+            public long StartTicks { get; private set; }
+
+            public StartedProcessIdentity(int processId, long startTicks) {
+                ProcessId = processId;
+                StartTicks = startTicks;
+            }
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BasicLimitInformation {
+            public long PerProcessUserTimeLimit;
+            public long PerJobUserTimeLimit;
+            public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize;
+            public UIntPtr MaximumWorkingSetSize;
+            public uint ActiveProcessLimit;
+            public IntPtr Affinity;
+            public uint PriorityClass;
+            public uint SchedulingClass;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct IoCounters {
+            public ulong ReadOperationCount;
+            public ulong WriteOperationCount;
+            public ulong OtherOperationCount;
+            public ulong ReadTransferCount;
+            public ulong WriteTransferCount;
+            public ulong OtherTransferCount;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ExtendedLimitInformation {
+            public BasicLimitInformation BasicLimitInformation;
+            public IoCounters IoInfo;
+            public UIntPtr ProcessMemoryLimit;
+            public UIntPtr JobMemoryLimit;
+            public UIntPtr PeakProcessMemoryUsed;
+            public UIntPtr PeakJobMemoryUsed;
+        }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool CreateProcess(
+            string applicationName,
+            StringBuilder commandLine,
+            IntPtr processAttributes,
+            IntPtr threadAttributes,
+            bool inheritHandles,
+            uint creationFlags,
+            IntPtr environment,
+            string currentDirectory,
+            ref StartupInformation startupInformation,
+            out ProcessInformation processInformation);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetInformationJobObject(IntPtr job, int informationClass, ref ExtendedLimitInformation information, uint length);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern uint ResumeThread(IntPtr thread);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetProcessTimes(IntPtr process, out FileTime creation, out FileTime exit, out FileTime kernel, out FileTime user);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool CloseHandle(IntPtr handle);
+
+        private static void ThrowLastError(string operation) {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), operation);
+        }
+
+        public static IntPtr CreateKillOnClose() {
+            IntPtr job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) ThrowLastError("CreateJobObject failed");
+            var information = new ExtendedLimitInformation();
+            information.BasicLimitInformation.LimitFlags = KillOnJobClose;
+            uint size = (uint)Marshal.SizeOf(typeof(ExtendedLimitInformation));
+            if (!SetInformationJobObject(job, 9, ref information, size)) {
+                int error = Marshal.GetLastWin32Error();
+                CloseHandle(job);
+                throw new System.ComponentModel.Win32Exception(error, "SetInformationJobObject failed");
+            }
+            return job;
+        }
+
+        private static long ToDateTimeTicks(FileTime value) {
+            long fileTime = ((long)value.High << 32) | value.Low;
+            return DateTime.FromFileTimeUtc(fileTime).Ticks;
+        }
+
+        public static StartedProcessIdentity StartSuspendedInJob(IntPtr job, string executable, string commandLine, string currentDirectory) {
+            var startup = new StartupInformation();
+            startup.Size = (uint)Marshal.SizeOf(typeof(StartupInformation));
+            startup.Flags = StartfUseShowWindow;
+            startup.ShowWindow = 0;
+            ProcessInformation process;
+            if (!CreateProcess(executable, new StringBuilder(commandLine), IntPtr.Zero, IntPtr.Zero, false,
+                CreateSuspended | CreateNoWindow, IntPtr.Zero, currentDirectory, ref startup, out process)) {
+                ThrowLastError("CreateProcessW failed");
+            }
+            try {
+                FileTime creation;
+                FileTime exit;
+                FileTime kernel;
+                FileTime user;
+                if (!GetProcessTimes(process.Process, out creation, out exit, out kernel, out user)) {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(process.Process, 1);
+                    throw new System.ComponentModel.Win32Exception(error, "GetProcessTimes failed");
+                }
+                if (!AssignProcessToJobObject(job, process.Process)) {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(process.Process, 1);
+                    throw new System.ComponentModel.Win32Exception(error, "AssignProcessToJobObject failed");
+                }
+                if (ResumeThread(process.Thread) == UInt32.MaxValue) {
+                    int error = Marshal.GetLastWin32Error();
+                    TerminateProcess(process.Process, 1);
+                    throw new System.ComponentModel.Win32Exception(error, "ResumeThread failed");
+                }
+                return new StartedProcessIdentity((int)process.ProcessId, ToDateTimeTicks(creation));
+            }
+            finally {
+                CloseHandle(process.Thread);
+                CloseHandle(process.Process);
+            }
+        }
+
+        public static void Terminate(IntPtr job) {
+            if (job != IntPtr.Zero && !TerminateJobObject(job, 1)) ThrowLastError("TerminateJobObject failed");
+        }
+
+        public static void Close(IntPtr job) {
+            if (job != IntPtr.Zero && !CloseHandle(job)) ThrowLastError("CloseHandle(job) failed");
+        }
+    }
+
     public static class ProcessTree {
         private const uint SnapshotProcesses = 0x00000002;
         private static readonly IntPtr InvalidHandle = new IntPtr(-1);
@@ -427,7 +614,7 @@ $restart=0;$fault=0;$child=$null
 $started=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();$runId="$PID-$started";$watch=[Diagnostics.Stopwatch]::StartNew();$late=$null;Start-Sleep -Seconds 2
 while($true){
  if($null -eq $child -or $child.HasExited){if($null -ne $child){$restart++;$fault++};$child=Start-Process powershell.exe -ArgumentList '-NoProfile -Command "Start-Sleep -Seconds 30"' -PassThru -WindowStyle Hidden;$spawn=@{ProcessId=$child.Id;StartTicks=$child.StartTime.ToUniversalTime().Ticks};[IO.File]::AppendAllText($SpawnLog,($spawn|ConvertTo-Json -Compress)+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))}
- if($null -eq $late -and $watch.ElapsedMilliseconds -ge 6500){$late=Start-Process powershell.exe -ArgumentList @('-NoProfile','-File',$LateSpawner,'-Marker',$LateMarker) -PassThru -WindowStyle Hidden}
+ if($null -eq $late -and $watch.ElapsedMilliseconds -ge 4500){$late=Start-Process powershell.exe -ArgumentList @('-NoProfile','-File',$LateSpawner,'-Marker',$LateMarker) -PassThru -WindowStyle Hidden}
  $childIds=if($IncludeRoot){@($PID,$child.Id)}else{@($child.Id)}
  $value=@{schema_version=1;process_id=$PID;run_id=$runId;started_timestamp_ms=$started;timestamp_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();audio_device='self-test-device';supervisor_healthy=$true;input_queue_depth=7;output_queue_depth=8;dropped_items=2;cache_file_count=9;log_bytes=1024;restart_count=$restart;panic_count=0;fault_count=$fault;child_process_ids=$childIds}
  $tmp=$Heartbeat+'.tmp';[IO.File]::WriteAllText($tmp,($value|ConvertTo-Json -Compress),(New-Object Text.UTF8Encoding($false)));Move-Item -LiteralPath $tmp -Destination $Heartbeat -Force
@@ -477,10 +664,16 @@ while($true){
     $faultDeadline = $null
     $samples = @()
 
+    $jobHandle = [ParallelWorld.Soak.ProcessJob]::CreateKillOnClose()
     $serializedArguments = Join-WindowsCommandLine $ArgumentList
-    $startedProcess = Start-Process -FilePath $resolvedExecutable -ArgumentList $serializedArguments -PassThru -WindowStyle Hidden
-    $rootIdentity = Get-ProcessIdentity $startedProcess.Id
-    if ($null -eq $rootIdentity) { throw "Started process identity could not be captured." }
+    $rootCommandLine = (ConvertTo-WindowsCommandLineArgument $resolvedExecutable) + $(if($serializedArguments){" " + $serializedArguments}else{""})
+    $nativeRootIdentity = [ParallelWorld.Soak.ProcessJob]::StartSuspendedInJob($jobHandle, $resolvedExecutable, $rootCommandLine, (Get-Location).ProviderPath)
+    $rootIdentity = Get-ProcessIdentity $nativeRootIdentity.ProcessId
+    if ($null -eq $rootIdentity -or [long]$rootIdentity.StartTicks -ne [long]$nativeRootIdentity.StartTicks) {
+        throw "Started process identity changed after resume."
+    }
+    $startedProcess = Get-MatchingProcess $rootIdentity
+    if ($null -eq $startedProcess) { throw "Started process exited before monitoring began." }
     Write-JsonLine $jsonlPath ([ordered]@{
         type = "metadata"; schema_version = 1; run_id = $runId; build_hash = $gitHash;
         os = $os; audio_device = $audioDevice; seed = $seedValue; fault_injection = [bool]$FaultInjection;
@@ -596,7 +789,8 @@ while($true){
     $knownByKey = @{}
     foreach($identity in $knownIdentities){if($null -ne $identity){$knownByKey[([string]$identity.ProcessId + ":" + [string]$identity.StartTicks)] = $identity}}
     $knownByKey[([string]$rootIdentity.ProcessId + ":" + [string]$rootIdentity.StartTicks)]=$rootIdentity
-    Stop-ProcessTree $rootIdentity $knownByKey
+    [ParallelWorld.Soak.ProcessJob]::Terminate($jobHandle)
+    $jobTerminated = $true
     $startedProcess = $null
     $orphanIds = @(Wait-ResidualProcessIdentities $knownByKey 5000 | ForEach-Object { $_.ProcessId } | Select-Object -Unique)
     if ($orphanIds.Count -gt 0) { $violations += "orphan_process" }
@@ -605,8 +799,8 @@ while($true){
         $lateIdentity=Get-Content -LiteralPath $selfTestLateMarker -Raw|ConvertFrom-Json
         if(Test-ProcessIdentity $lateIdentity){$orphanIds+= [int]$lateIdentity.ProcessId;$violations+="late_grandchild_orphan";Stop-ProcessIdentity $lateIdentity}
         $spawned=@(Get-Content -LiteralPath $selfTestSpawnLog|ForEach-Object{$_|ConvertFrom-Json})
-        $minimumSpawns=if($SelfTestRootChild){2}else{3}
-        if($spawned.Count -lt $minimumSpawns){$violations+="cleanup_respawn_not_observed"}
+        $minimumSpawns=if($SelfTestRootChild){1}else{2}
+        if($spawned.Count -lt $minimumSpawns){$violations+="expected_child_spawn_not_observed"}
         foreach($spawnIdentity in $spawned){if(Test-ProcessIdentity $spawnIdentity){$orphanIds+=[int]$spawnIdentity.ProcessId;$violations+="cleanup_respawn_orphan";Stop-ProcessIdentity $spawnIdentity}}
     }
     $rootChildRejection=$null
@@ -651,6 +845,13 @@ catch {
     exit $ExitArtifact
 }
 finally {
+    if ($jobHandle -ne [IntPtr]::Zero) {
+        if (-not $jobTerminated) {
+            try { [ParallelWorld.Soak.ProcessJob]::Terminate($jobHandle) } catch { }
+        }
+        try { [ParallelWorld.Soak.ProcessJob]::Close($jobHandle) } catch { }
+        $jobHandle = [IntPtr]::Zero
+    }
     if ($null -ne $startedProcess) {
         $finalCleanup = @{}
         Stop-ProcessTree $rootIdentity $finalCleanup
