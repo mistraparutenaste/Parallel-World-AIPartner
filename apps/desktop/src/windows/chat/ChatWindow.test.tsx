@@ -66,6 +66,29 @@ describe('ChatWindow', () => {
     expect(screen.getAllByText(/saved$/)).toHaveLength(1);
   });
 
+  it('keeps identical text from different turns', async () => {
+    invokeMock.mockResolvedValueOnce([]);
+    render(<ChatWindow />); await act(async () => {});
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'user', text: 'same' });
+    fireMessage({ schema_version: 1, turn_id: 2, role: 'user', text: 'same' });
+    expect(screen.getAllByText(/same$/)).toHaveLength(2);
+  });
+
+  it('combines assistant sentence events for one turn', async () => {
+    invokeMock.mockResolvedValueOnce([]);
+    render(<ChatWindow />); await act(async () => {});
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'assistant', text: 'one' });
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'assistant', text: 'two' });
+    expect(screen.getByText('onetwo')).toBeInTheDocument();
+  });
+
+  it('shows history load failure as a nonfatal alert', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('sqlite unavailable'));
+    render(<ChatWindow />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('sqlite unavailable');
+    expect(screen.getByLabelText('メッセージ')).toBeEnabled();
+  });
+
   it('sends the draft through send_chat_message', async () => {
     render(<ChatWindow />);
     await act(async () => {});

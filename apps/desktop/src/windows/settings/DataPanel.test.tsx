@@ -23,9 +23,17 @@ describe('DataPanel', () => {
   });
 
   it('exports only to the explicitly entered path', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<DataPanel />);
     fireEvent.change(screen.getByLabelText('保存先'), { target: { value: 'C:/backup/user-data.sqlite3' } });
     fireEvent.click(screen.getByRole('button', { name: 'エクスポート' }));
-    expect(invokeMock).toHaveBeenCalledWith('export_user_data', { destination: 'C:/backup/user-data.sqlite3' });
+    expect(invokeMock).toHaveBeenCalledWith('export_user_data', { destination: 'C:/backup/user-data.sqlite3', allowOverwrite: false });
+  });
+
+  it('shows command failures as alerts', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('busy'));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<DataPanel />); fireEvent.click(screen.getByRole('button', { name: '記憶を削除' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('busy');
   });
 });

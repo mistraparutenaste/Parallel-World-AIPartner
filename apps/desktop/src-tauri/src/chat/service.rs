@@ -363,6 +363,7 @@ impl Worker {
 
 /// Managed state: at most one conversation worker.
 pub struct ChatService {
+    operation: Mutex<()>,
     worker: Mutex<Option<Worker>>,
     cancel: Arc<AtomicBool>,
     fallback_turn_id: AtomicU64,
@@ -371,6 +372,7 @@ pub struct ChatService {
 impl Default for ChatService {
     fn default() -> Self {
         Self {
+            operation: Mutex::new(()),
             worker: Mutex::new(None),
             cancel: Arc::new(AtomicBool::new(false)),
             fallback_turn_id: AtomicU64::new(1_u64 << 63),
@@ -396,12 +398,36 @@ impl ChatService {
     /// # Errors
     /// Returns an error if a worker thread panicked while shutting down.
     pub fn reset(&self) -> Result<(), String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.reset_locked()
+    }
+
+    fn reset_locked(&self) -> Result<(), String> {
         self.cancel.store(true, Ordering::SeqCst);
         if let Some(worker) = self.lock().take() {
             worker.shutdown()?;
         }
         self.cancel.store(false, Ordering::SeqCst);
         Ok(())
+    }
+
+    /// Runs a destructive operation while submissions are excluded.
+    ///
+    /// # Errors
+    /// Returns a worker shutdown error or the operation's error.
+    pub fn with_exclusive_reset<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        let _guard = self
+            .operation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.reset_locked()?;
+        operation()
     }
     fn reserve_turn_id(&self, database_path: &Path) -> u64 {
         let durable = Database::open(database_path)
@@ -433,6 +459,10 @@ impl ChatService {
     ///
     /// Returns an error message when the worker cannot be started.
     pub fn submit<R: Runtime>(&self, app: &AppHandle<R>, text: String) -> Result<(), String> {
+        let _operation = self
+            .operation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_llm_settings(&layout);
         let wanted = fingerprint(&settings);
@@ -681,6 +711,41 @@ mod tests {
     use pw_storage::{Database, SqliteConversationHistory};
 
     use super::*;
+
+    #[test]
+    fn destructive_operation_excludes_competing_operation_until_commit_boundary() {
+        let service = Arc::new(ChatService::default());
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let first = Arc::clone(&service);
+        let thread = std::thread::spawn(move || {
+            first
+                .with_exclusive_reset(|| {
+                    entered_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        entered_rx.recv().unwrap();
+        let second = Arc::clone(&service);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let waiter = std::thread::spawn(move || {
+            second.with_exclusive_reset(|| Ok(())).unwrap();
+            done_tx.send(()).unwrap();
+        });
+        assert!(
+            done_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err()
+        );
+        release_tx.send(()).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        thread.join().unwrap();
+        waiter.join().unwrap();
+    }
 
     #[derive(Default)]
     struct NoopEvents {

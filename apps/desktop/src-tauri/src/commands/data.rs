@@ -50,13 +50,28 @@ pub fn list_conversation_history(
 pub fn export_user_data(
     layout: State<'_, AppDataLayout>,
     destination: String,
+    allow_overwrite: bool,
 ) -> Result<(), String> {
     if destination.trim().is_empty() {
         return Err("保存先を指定してください".into());
     }
-    Database::open(path(&layout))
+    let source = path(&layout);
+    let destination = PathBuf::from(destination.trim());
+    if source == destination {
+        return Err("保存先に使用中のデータベースは指定できません".into());
+    }
+    if destination.is_dir() {
+        return Err("保存先にはファイルを指定してください".into());
+    }
+    if destination.exists() && !allow_overwrite {
+        return Err("保存先は既に存在します".into());
+    }
+    if destination.parent().is_none_or(|parent| !parent.is_dir()) {
+        return Err("保存先ディレクトリが存在しません".into());
+    }
+    Database::open(source)
         .map_err(|e| e.to_string())?
-        .backup_to(destination.trim())
+        .backup_to(destination)
         .map_err(|e| e.to_string())
 }
 #[tauri::command]
@@ -69,15 +84,16 @@ pub fn delete_conversation_history(
     layout: State<'_, AppDataLayout>,
     chat: State<'_, ChatService>,
 ) -> Result<(), String> {
-    chat.reset()?;
-    let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
-    let tx = db
-        .connection_mut()
-        .transaction()
-        .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
-        .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    chat.with_exclusive_reset(|| {
+        let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
+        let tx = db
+            .connection_mut()
+            .transaction()
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    })
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -89,15 +105,16 @@ pub fn delete_memories(
     layout: State<'_, AppDataLayout>,
     chat: State<'_, ChatService>,
 ) -> Result<(), String> {
-    chat.reset()?;
-    let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
-    let tx = db
-        .connection_mut()
-        .transaction()
-        .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM conversation_summaries", [])
-        .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM memories", [])
-        .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())
+    chat.with_exclusive_reset(|| {
+        let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
+        let tx = db
+            .connection_mut()
+            .transaction()
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM conversation_summaries", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM memories", [])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())
+    })
 }

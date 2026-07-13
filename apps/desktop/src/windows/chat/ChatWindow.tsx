@@ -19,6 +19,7 @@ type DisplayMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  turnId?: number;
 };
 
 /**
@@ -36,22 +37,28 @@ export function ChatWindow() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    invoke<ConversationMessageDto[]>('list_conversation_history').then((history) => {
-      if (!Array.isArray(history)) return;
-      setMessages((current) => {
-        const liveKeys = new Set(current.map((m) => `${m.role}:${m.text}`));
-        return [...history.filter((m) => !liveKeys.has(`${m.role}:${m.text}`)).map((m) => ({ id: `db:${m.message_id}`, role: m.role, text: m.text })), ...current];
-      });
-    }).catch(() => {});
     const stopMessages = subscribeEvent<ChatMessageEventDto>(
       'chat-message',
       (payload) => {
         setMessages((current) => {
-          const id = payload.message_id == null ? `live:${payload.turn_id}:${payload.role}:${payload.text}` : `db:${payload.message_id}`;
-          return current.some((m) => m.id === id || (m.role === payload.role && m.text === payload.text)) ? current : [...current, { id, role: payload.role, text: payload.text }];
+          const id = payload.message_id == null ? `live:${payload.turn_id}:${payload.role}` : `db:${payload.message_id}`;
+          const existing = current.findIndex((m) => m.id === id);
+          if (existing >= 0) {
+            if (payload.role !== 'assistant') return current;
+            const next = [...current]; const prior = next[existing]!; next[existing] = { ...prior, text: prior.text + payload.text }; return next;
+          }
+          return [...current, { id, turnId: payload.turn_id, role: payload.role, text: payload.text }];
         });
       },
     );
+    invoke<ConversationMessageDto[]>('list_conversation_history').then((history) => {
+      if (!Array.isArray(history)) return;
+      setMessages((current) => {
+        const liveTurns = new Set(current.filter((m) => m.turnId != null).map((m) => `${m.turnId}:${m.role}`));
+        const durable = history.filter((m) => !liveTurns.has(`${m.turn_id}:${m.role}`)).map((m) => ({ id: `db:${m.message_id}`, turnId: m.turn_id ?? undefined, role: m.role, text: m.text }));
+        return [...durable, ...current];
+      });
+    }).catch((problem: unknown) => setError(`履歴を読み込めませんでした: ${String(problem)}`));
     const stopState = subscribeEvent<ConversationStateEventDto>(
       'conversation-state',
       (payload) => {
