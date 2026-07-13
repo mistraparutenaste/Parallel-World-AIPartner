@@ -8,13 +8,16 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use crate::diagnostics::QueueMetrics;
+use pw_application::recovery::{
+    FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
+};
 use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue};
 use pw_contracts::{
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
     SpeechStopEventDto, TtsSettingsDto, TtsStateEventDto,
 };
 use pw_domain::reply::TurnId;
-use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
+use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_platform::paths::AppDataLayout;
 use pw_tts::{
     AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, SynthesisParams,
@@ -71,7 +74,7 @@ pub struct TtsService {
     invalid_up_to: Arc<AtomicU64>,
     dropped_sentences: AtomicU64,
     text_only_turn: AtomicU64,
-    health: Arc<Mutex<RuntimeHealth>>,
+    health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
     queue_metrics: Arc<QueueMetrics>,
 }
 
@@ -83,7 +86,11 @@ impl Default for TtsService {
             invalid_up_to: Arc::new(AtomicU64::new(0)),
             dropped_sentences: AtomicU64::new(0),
             text_only_turn: AtomicU64::new(0),
-            health: Arc::new(Mutex::new(RuntimeHealth::new(RuntimeFeature::TextToSpeech))),
+            health: Arc::new(Mutex::new(FeatureHealthSupervisor::new(
+                RuntimeFeature::TextToSpeech,
+                SystemClock,
+                TimeJitter::default(),
+            ))),
             queue_metrics: Arc::new(QueueMetrics::new("tts", TTS_QUEUE_CAPACITY)),
         }
     }
@@ -274,29 +281,34 @@ fn emit_state<R: Runtime>(app: &AppHandle<R>, available: bool, message: Option<S
     );
 }
 
-fn emit_tts_health<R: Runtime>(app: &AppHandle<R>, registry: &Mutex<RuntimeHealth>, healthy: bool) {
+fn emit_tts_health<R: Runtime>(
+    app: &AppHandle<R>,
+    registry: &Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>,
+    healthy: bool,
+) {
     let mut health = registry
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        });
-    if healthy {
-        health.mark_healthy(now);
+    let transition = if healthy {
+        health.record_success()
     } else {
-        health.mark_failed(&RuntimeFailure::transient(FailureCode::Unavailable), now);
+        let failed = health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable));
+        HealthTransition::Changed {
+            health: failed.health,
+            attempts: failed.attempts,
+        }
+    };
+    if let HealthTransition::Changed { health, attempts } = transition {
+        let _ = app.emit(
+            RUNTIME_HEALTH_EVENT,
+            RuntimeHealthEventDto::from((&health, attempts)),
+        );
     }
-    let _ = app.emit(
-        RUNTIME_HEALTH_EVENT,
-        RuntimeHealthEventDto::from((&*health, u8::from(!healthy))),
-    );
 }
 
 struct TauriSpeechAudioSink<R: Runtime> {
     app: AppHandle<R>,
-    health: Arc<Mutex<RuntimeHealth>>,
+    health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
     invalid: Arc<AtomicU64>,
 }
 

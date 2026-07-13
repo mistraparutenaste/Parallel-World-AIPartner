@@ -110,7 +110,7 @@ struct FailureOutcome {
     decision: BackoffDecision,
 }
 struct FailureCycle<'a, C, R> {
-    policy: BackoffPolicy<'a, C, R>,
+    policy: BackoffPolicy<&'a C, R>,
 }
 impl<'a, C: Clock, R: RandomSource> FailureCycle<'a, C, R> {
     const fn new(clock: &'a C, rng: R) -> Self {

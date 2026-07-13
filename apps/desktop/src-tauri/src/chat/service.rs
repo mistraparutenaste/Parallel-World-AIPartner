@@ -18,13 +18,16 @@ use pw_application::memory::{
     PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator, is_safe_persistent_content,
     redact_persistent_content,
 };
+use pw_application::recovery::{
+    FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
+};
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto,
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION,
 };
 use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, TurnId};
-use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
+use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
@@ -462,7 +465,7 @@ pub struct ChatService {
     worker: Mutex<Option<Worker>>,
     cancel: Arc<AtomicBool>,
     fallback_turn_id: AtomicU64,
-    health: Arc<Mutex<RuntimeHealth>>,
+    health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
     submit_metrics: Arc<QueueMetrics>,
     context_metrics: Arc<QueueMetrics>,
     conversation_metrics: Arc<QueueMetrics>,
@@ -476,8 +479,10 @@ impl Default for ChatService {
             worker: Mutex::new(None),
             cancel: Arc::new(AtomicBool::new(false)),
             fallback_turn_id: AtomicU64::new(1_u64 << 63),
-            health: Arc::new(Mutex::new(RuntimeHealth::new(
+            health: Arc::new(Mutex::new(FeatureHealthSupervisor::new(
                 RuntimeFeature::LanguageModel,
+                SystemClock,
+                TimeJitter::default(),
             ))),
             submit_metrics: Arc::new(QueueMetrics::new("chat_submit", SUBMIT_QUEUE_CAPACITY)),
             context_metrics: Arc::new(QueueMetrics::new("chat_context", SUBMIT_QUEUE_CAPACITY)),
@@ -759,7 +764,7 @@ fn with_character_abilities<R: Runtime>(app: &AppHandle<R>, base: String) -> Str
 
 struct TauriConversationEvents<R: Runtime> {
     app: AppHandle<R>,
-    health: Arc<Mutex<RuntimeHealth>>,
+    health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
 }
 
 impl<R: Runtime> TauriConversationEvents<R> {
@@ -768,21 +773,21 @@ impl<R: Runtime> TauriConversationEvents<R> {
             .health
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_millis()),
-        )
-        .unwrap_or(u64::MAX);
-        if healthy {
-            health.mark_healthy(now);
+        let transition = if healthy {
+            health.record_success()
         } else {
-            health.mark_failed(&RuntimeFailure::transient(FailureCode::Unavailable), now);
+            let failed = health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable));
+            HealthTransition::Changed {
+                health: failed.health,
+                attempts: failed.attempts,
+            }
+        };
+        if let HealthTransition::Changed { health, attempts } = transition {
+            let _ = self.app.emit(
+                RUNTIME_HEALTH_EVENT,
+                RuntimeHealthEventDto::from((&health, attempts)),
+            );
         }
-        let _ = self.app.emit(
-            RUNTIME_HEALTH_EVENT,
-            RuntimeHealthEventDto::from((&*health, u8::from(!healthy))),
-        );
     }
     fn emit_message(&self, turn: TurnId, role: ChatRoleDto, text: &str) {
         let payload = ChatMessageEventDto {
@@ -826,12 +831,6 @@ impl<R: Runtime> TauriConversationEvents<R> {
 
 impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
     fn on_state(&self, state: ConversationState) {
-        if matches!(
-            state,
-            ConversationState::Thinking | ConversationState::Speaking | ConversationState::Idle
-        ) {
-            self.emit_health(true);
-        }
         self.emit_state(state, None);
     }
 
@@ -867,7 +866,9 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
             .enqueue(&self.app, turn, sentence);
     }
 
-    fn on_reply_complete(&self, _turn: TurnId, _speech_text: &str) {}
+    fn on_reply_complete(&self, _turn: TurnId, _speech_text: &str) {
+        self.emit_health(true);
+    }
 
     fn on_cancelled(&self, _turn: TurnId) {}
 

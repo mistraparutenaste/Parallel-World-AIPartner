@@ -152,6 +152,20 @@ impl RuntimeHealth {
         self.stable_since_ms = None;
         self.changed_at_ms = now_ms;
     }
+    pub fn mark_degraded(&mut self, failure: &RuntimeFailure, now_ms: u64) {
+        self.status = HealthStatus::Degraded;
+        self.failure_class = Some(failure.class);
+        self.last_error = Some(failure.safe_message());
+        self.stable_since_ms = None;
+        self.changed_at_ms = now_ms;
+    }
+    pub fn mark_starting(&mut self, now_ms: u64) {
+        self.status = HealthStatus::Starting;
+        self.failure_class = None;
+        self.last_error = None;
+        self.stable_since_ms = None;
+        self.changed_at_ms = now_ms;
+    }
 }
 
 /// Replaces credential values without changing unrelated text or imposing a length limit.
