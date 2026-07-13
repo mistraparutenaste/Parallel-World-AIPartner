@@ -52,4 +52,34 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.
 - `tools/scripts/soak-test.ps1 -SelfTest -SelfTestRootChild`: 期待終了コード4、`root_child_rejection.passed=true`、unexpected / orphan空
 - `git diff --check`: 成功
 
+## 2026-07-14 Phase 6 完了判定
+
+実時間2時間soakを短縮せず実行し、Phase 6を完了と判定した。
+
+- run ID: `20260713T155540Z-424242`
+- 実行時間: `2026-07-13T15:55:40.4448976Z` から `2026-07-13T17:55:44.9796965Z`
+- summary: `artifacts/soak/20260713T155540Z-424242-summary.json`
+- samples: 1,389、`passed=true`、heartbeat取得済み、supervisor unhealthy未検出
+- violations: 0、unexpected exit: 0、panic: 0、orphan process: 0
+- queue最大値: input 0 / output 0、drop 0、restart 0、fault 0
+- RSS: slope 4,672,904 bytes/hour、growth 10,813,440 bytes、最大567,898,112 bytes
+- Private bytes: slope -61,239 bytes/hour、growth -753,664 bytes、最大299,732,992 bytes
+- handle: slope 0.581/hour、growth -61、最大5,142
+- thread: slope -0.849/hour、growth -15、最大220
+
+実行前にPhase 7で追加されたupdater pluginが、ローカル設定に`plugins.updater`を持たず起動時にデシリアライズ失敗する問題を検出した。base設定へ空endpoint・空公開鍵の無効状態を明示し、Windows/macOSローカルoverlayの回帰テストを追加した。release overlayのHTTPS endpoint・非fixture公開鍵必須というfail-closed条件は維持している。
+
+完了時の再検証:
+
+- `cargo fmt --all --check`: 成功
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 成功
+- `cargo test --workspace`: 成功（外部service/model依存を除く）
+- 実ReazonSpeech/Silero試験: 3件成功
+- `corepack pnpm build && corepack pnpm typecheck && corepack pnpm test`: 成功（85件）
+- 配布設定試験: 17件成功
+- `corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle`: 成功
+- `git diff --check`: 成功
+
+AivisSpeech Engineと応答可能な実LLM serverが起動していなかったため、その2種類の外部結合試験は引き続き任意の環境依存試験として扱う。Phase 6の必須受け入れ条件には含めず、mock契約・timeout・縮退・復旧試験は全件成功している。
+
 実測toolchainはNode.js `24.15.0` / Corepack pnpm `11.11.0`。Codex runtimeのfallback pnpm `11.7.0`が先に解決される環境では、PATH先頭の書込み可能なruntime overrideへ`corepack enable --install-directory <override> pnpm`を実行した。`pnpm --version`、`corepack pnpm --version`、rootと3 workspace子processのpnpmがすべて`11.11.0`、Nodeがすべて`24.15.0`で一致し、`Unsupported engine`警告は発生しなかった。Phase 6の状態は引き続き「実装済み・実機soakゲート待ち」であり、2時間run完走とは扱わない。
