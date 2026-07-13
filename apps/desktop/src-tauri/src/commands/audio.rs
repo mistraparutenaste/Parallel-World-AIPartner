@@ -3,22 +3,29 @@
 use pw_audio::devices::list_input_devices;
 use pw_contracts::{AudioDeviceDto, AudioDiagnosticsDto};
 use pw_platform::paths::AppDataLayout;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::speech::{SpeechService, SttModelPaths};
 
 /// Lists selectable microphones.
+///
+/// # Errors
+///
+/// Returns an error when the blocking command worker cannot be joined.
 #[tauri::command]
-#[must_use]
-pub fn list_microphones() -> Vec<AudioDeviceDto> {
-    list_input_devices()
-        .into_iter()
-        .map(|device| AudioDeviceDto {
-            id: device.id,
-            name: device.name,
-            is_default: device.is_default,
-        })
-        .collect()
+pub async fn list_microphones() -> Result<Vec<AudioDeviceDto>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        list_input_devices()
+            .into_iter()
+            .map(|device| AudioDeviceDto {
+                id: device.id,
+                name: device.name,
+                is_default: device.is_default,
+            })
+            .collect()
+    })
+    .await
+    .map_err(|error| format!("audio command worker failed: {error}"))
 }
 
 /// Starts the speech pipeline (model loading happens asynchronously;
@@ -29,45 +36,78 @@ pub fn list_microphones() -> Vec<AudioDeviceDto> {
 /// Returns an error message when a pipeline is already running or
 /// the worker cannot be spawned.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn start_listening<R: Runtime>(
+pub async fn start_listening<R: Runtime>(
     app: AppHandle<R>,
-    layout: State<'_, AppDataLayout>,
-    service: State<'_, SpeechService>,
     device_id: Option<String>,
 ) -> Result<(), String> {
-    let paths = SttModelPaths::under(&layout);
-    service.start(app, paths, device_id)
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = SttModelPaths::under(&app.state::<AppDataLayout>());
+        let service = app.state::<SpeechService>();
+        service.start(app.clone(), paths, device_id)
+    })
+    .await
+    .map_err(|error| format!("audio command worker failed: {error}"))?
 }
 
 /// Stops the running speech pipeline.
+///
+/// # Errors
+///
+/// Returns an error when the blocking command worker cannot be joined.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn stop_listening(service: State<'_, SpeechService>) {
-    service.stop();
+pub async fn stop_listening<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<SpeechService>().stop())
+        .await
+        .map_err(|error| format!("audio command worker failed: {error}"))
 }
 
 /// Mutes or unmutes capture without tearing the pipeline down
 /// (also used while TTS is playing).
+///
+/// # Errors
+///
+/// Returns an error when the blocking command worker cannot be joined.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn set_capture_enabled(service: State<'_, SpeechService>, enabled: bool) {
-    service.set_capture_enabled(enabled);
+pub async fn set_capture_enabled<R: Runtime>(
+    app: AppHandle<R>,
+    enabled: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<SpeechService>().set_capture_enabled(enabled);
+    })
+    .await
+    .map_err(|error| format!("audio command worker failed: {error}"))
 }
 
 /// Reported by the character window around speech playback: capture
 /// is muted while TTS audio is playing so the assistant does not hear
 /// itself (基本設計 Phase 2完了条件).
+///
+/// # Errors
+///
+/// Returns an error when the blocking command worker cannot be joined.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn set_speech_playback(service: State<'_, SpeechService>, active: bool) {
-    service.set_capture_enabled(!active);
+pub async fn set_speech_playback<R: Runtime>(
+    app: AppHandle<R>,
+    active: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<SpeechService>().set_capture_enabled(!active);
+    })
+    .await
+    .map_err(|error| format!("audio command worker failed: {error}"))
 }
 
 /// Returns the pipeline counters for the diagnostics panel.
+///
+/// # Errors
+///
+/// Returns an error when the blocking command worker cannot be joined.
 #[tauri::command]
-#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-#[must_use]
-pub fn get_audio_diagnostics(service: State<'_, SpeechService>) -> AudioDiagnosticsDto {
-    service.diagnostics()
+pub async fn get_audio_diagnostics<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<AudioDiagnosticsDto, String> {
+    tauri::async_runtime::spawn_blocking(move || app.state::<SpeechService>().diagnostics())
+        .await
+        .map_err(|error| format!("audio command worker failed: {error}"))
 }

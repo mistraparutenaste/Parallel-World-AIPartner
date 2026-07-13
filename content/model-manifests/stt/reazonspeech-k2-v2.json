@@ -11,9 +11,9 @@
   "license_url": "https://huggingface.co/reazon-research/reazonspeech-k2-v2",
   "install_dir": "models/stt/reazonspeech-k2-v2",
   "files": [
-    "encoder-epoch-99-avg-1.onnx",
-    "decoder-epoch-99-avg-1.onnx",
-    "joiner-epoch-99-avg-1.onnx",
+    "encoder-epoch-99-avg-1.int8.onnx",
+    "decoder-epoch-99-avg-1.int8.onnx",
+    "joiner-epoch-99-avg-1.int8.onnx",
     "tokens.txt"
   ]
 }

@@ -11,6 +11,15 @@ use crate::SherpaError;
 
 const SAMPLE_RATE: i32 = 16_000;
 
+fn preferred_model_path(dir: &Path, component: &str) -> PathBuf {
+    let int8 = dir.join(format!("{component}-epoch-99-avg-1.int8.onnx"));
+    if int8.is_file() {
+        int8
+    } else {
+        dir.join(format!("{component}-epoch-99-avg-1.onnx"))
+    }
+}
+
 /// File layout of the sherpa-onnx `ReazonSpeech` zipformer package.
 #[derive(Debug, Clone)]
 pub struct RecognizerModelPaths {
@@ -26,9 +35,9 @@ impl RecognizerModelPaths {
     #[must_use]
     pub fn in_directory(dir: &Path) -> Self {
         Self {
-            encoder: dir.join("encoder-epoch-99-avg-1.onnx"),
-            decoder: dir.join("decoder-epoch-99-avg-1.onnx"),
-            joiner: dir.join("joiner-epoch-99-avg-1.onnx"),
+            encoder: preferred_model_path(dir, "encoder"),
+            decoder: preferred_model_path(dir, "decoder"),
+            joiner: preferred_model_path(dir, "joiner"),
             tokens: dir.join("tokens.txt"),
         }
     }
@@ -87,11 +96,73 @@ impl SpeechRecognizer for ReazonSpeechRecognizer {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use pw_application::speech::SpeechRecognizer;
 
     use super::{ReazonSpeechRecognizer, RecognizerModelPaths};
+
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock is before Unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "pw-stt-sherpa-recognizer-{}-{unique}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).expect("remove test directory");
+        }
+    }
+
+    #[test]
+    fn model_paths_prefer_int8_files_when_present() {
+        let dir = TestDirectory::new();
+        for component in ["encoder", "decoder", "joiner"] {
+            fs::write(
+                dir.0.join(format!("{component}-epoch-99-avg-1.int8.onnx")),
+                [],
+            )
+            .expect("create int8 model file");
+        }
+
+        let paths = RecognizerModelPaths::in_directory(&dir.0);
+
+        assert_eq!(
+            paths.encoder,
+            dir.0.join("encoder-epoch-99-avg-1.int8.onnx")
+        );
+        assert_eq!(
+            paths.decoder,
+            dir.0.join("decoder-epoch-99-avg-1.int8.onnx")
+        );
+        assert_eq!(paths.joiner, dir.0.join("joiner-epoch-99-avg-1.int8.onnx"));
+    }
+
+    #[test]
+    fn model_paths_fall_back_to_fp32_files_when_int8_is_missing() {
+        let dir = TestDirectory::new();
+
+        let paths = RecognizerModelPaths::in_directory(&dir.0);
+
+        assert_eq!(paths.encoder, dir.0.join("encoder-epoch-99-avg-1.onnx"));
+        assert_eq!(paths.decoder, dir.0.join("decoder-epoch-99-avg-1.onnx"));
+        assert_eq!(paths.joiner, dir.0.join("joiner-epoch-99-avg-1.onnx"));
+    }
 
     /// Integration test against the real model. Run manually:
     /// `PW_STT_MODEL_DIR=... cargo test -p pw-stt-sherpa -- --ignored`
