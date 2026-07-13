@@ -10,6 +10,7 @@ pub mod commands;
 pub mod diagnostics;
 pub mod error;
 pub mod speech;
+pub mod stability_heartbeat;
 pub mod supervisor;
 pub mod tts;
 pub mod windows;
@@ -69,7 +70,12 @@ pub fn run() {
                 app.handle().clone(),
             ));
             let layout = bootstrap::initialize(app.handle())?;
+            let heartbeat_path = layout.logs.join("soak-heartbeat.json");
             app.manage(layout);
+            app.manage(stability_heartbeat::StabilityHeartbeatService::start(
+                app.handle().clone(),
+                heartbeat_path,
+            )?);
             windows::create_missing_windows(app.handle())?;
             restore_window_states(app.handle());
             windows::spawn_cursor_watcher(app.handle().clone());
@@ -82,6 +88,8 @@ pub fn run() {
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
             ) {
+                app.state::<stability_heartbeat::StabilityHeartbeatService>()
+                    .shutdown();
                 app.state::<supervisor::ManagedProcesses>().shutdown();
             }
         });

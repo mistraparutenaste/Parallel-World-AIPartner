@@ -50,6 +50,7 @@ impl SttModelPaths {
 }
 
 struct RunningPipeline {
+    active_device_id: String,
     cancel: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
     diagnostics: Arc<PipelineDiagnostics>,
@@ -367,7 +368,7 @@ impl SpeechService {
         let worker = PipelineWorker {
             app,
             paths,
-            device_id,
+            device_id: device_id.clone(),
             cancel: Arc::clone(&cancel),
             capture_enabled: Arc::clone(&capture_enabled),
             diagnostics: Arc::clone(&diagnostics),
@@ -383,6 +384,7 @@ impl SpeechService {
             .map_err(|error| format!("failed to spawn speech worker: {error}"))?;
 
         *guard = Some(RunningPipeline {
+            active_device_id: device_id.unwrap_or_else(|| "default".to_owned()),
             cancel,
             capture_enabled,
             diagnostics,
@@ -461,6 +463,14 @@ impl SpeechService {
                 failure_queue_dropped: 0,
             },
         }
+    }
+
+    #[must_use]
+    pub fn active_device_id(&self) -> String {
+        self.lock().as_ref().map_or_else(
+            || "inactive".to_owned(),
+            |running| running.active_device_id.clone(),
+        )
     }
 }
 

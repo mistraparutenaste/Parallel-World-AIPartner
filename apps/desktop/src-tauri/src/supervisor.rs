@@ -64,6 +64,22 @@ pub struct ManagedProcesses {
     lifecycle: Mutex<LifecycleState>,
     circuits: Arc<AtomicU64>,
     sink: Arc<dyn RuntimeHealthSink>,
+    diagnostics: Arc<ProcessDiagnostics>,
+}
+
+#[derive(Default)]
+struct ProcessDiagnostics {
+    owned_pids: Mutex<Vec<u32>>,
+    restarts: AtomicU64,
+    faults: AtomicU64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedProcessSnapshot {
+    pub owned_child_pids: Vec<u32>,
+    pub restart_count: u64,
+    pub fault_count: u64,
+    pub healthy: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -211,7 +227,8 @@ impl ManagedProcesses {
         }
         let sink: Arc<dyn RuntimeHealthSink> = Arc::new(AppRuntimeHealthSink(app));
         let circuits = Arc::new(AtomicU64::new(0));
-        let handles = spawn_monitors(&configs, &stop, &generation, &sink, &circuits);
+        let diagnostics = Arc::new(ProcessDiagnostics::default());
+        let handles = spawn_monitors(&configs, &stop, &generation, &sink, &circuits, &diagnostics);
         Self {
             stop,
             generation,
@@ -222,6 +239,7 @@ impl ManagedProcesses {
             }),
             circuits,
             sink,
+            diagnostics,
         }
     }
 
@@ -250,6 +268,21 @@ impl ManagedProcesses {
             .core
             .lifecycle
             == Lifecycle::Running
+    }
+
+    #[must_use]
+    pub fn diagnostics(&self) -> ManagedProcessSnapshot {
+        ManagedProcessSnapshot {
+            owned_child_pids: self
+                .diagnostics
+                .owned_pids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
+            restart_count: self.diagnostics.restarts.load(Ordering::Relaxed),
+            fault_count: self.diagnostics.faults.load(Ordering::Relaxed),
+            healthy: self.is_running() && self.circuits.load(Ordering::Relaxed) == 0,
+        }
     }
 
     /// Rearms a configured feature only when its circuit is open.
@@ -287,6 +320,7 @@ impl ManagedProcesses {
             config.feature,
             self.sink.clone(),
             self.circuits.clone(),
+            self.diagnostics.clone(),
         );
         lifecycle.handles.push(handle);
         Ok(())
@@ -514,6 +548,7 @@ fn spawn_monitor(
     feature: RuntimeFeature,
     sink: Arc<dyn RuntimeHealthSink>,
     circuits: Arc<AtomicU64>,
+    diagnostics: Arc<ProcessDiagnostics>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         if probe_ready(probe, probe_paths) {
@@ -536,6 +571,11 @@ fn spawn_monitor(
         while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
             match ProcessSupervisor::spawn(&spec) {
                 Ok(child) => {
+                    diagnostics
+                        .owned_pids
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .push(child.pid());
                     let mut core = MonitorCore::default();
                     tracing::info!(
                         process = name,
@@ -614,14 +654,27 @@ fn spawn_monitor(
                         || generations.load(Ordering::Acquire) != generation
                     {
                         let _ = child.stop(Duration::from_secs(5));
+                        diagnostics
+                            .owned_pids
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .retain(|pid| *pid != child.pid());
                         break;
                     }
                     tracing::warn!(process = name, "managed process exited unexpectedly");
+                    diagnostics
+                        .owned_pids
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .retain(|pid| *pid != child.pid());
+                    diagnostics.faults.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(error) => {
                     tracing::warn!(process = name, %error, "managed process spawn failed");
+                    diagnostics.faults.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            diagnostics.restarts.fetch_add(1, Ordering::Relaxed);
             let outcome = failure_cycle.failure();
             publish_health(
                 sink.as_ref(),
@@ -649,6 +702,7 @@ fn spawn_monitors(
     generations: &Arc<AtomicU64>,
     sink: &Arc<dyn RuntimeHealthSink>,
     circuits: &Arc<AtomicU64>,
+    diagnostics: &Arc<ProcessDiagnostics>,
 ) -> Vec<JoinHandle<()>> {
     spawn_monitors_at(
         configs,
@@ -657,6 +711,7 @@ fn spawn_monitors(
         generations.load(Ordering::Acquire),
         sink,
         circuits,
+        diagnostics,
     )
 }
 
@@ -667,6 +722,7 @@ fn spawn_monitors_at(
     generation: u64,
     sink: &Arc<dyn RuntimeHealthSink>,
     circuits: &Arc<AtomicU64>,
+    diagnostics: &Arc<ProcessDiagnostics>,
 ) -> Vec<JoinHandle<()>> {
     configs
         .iter()
@@ -682,6 +738,7 @@ fn spawn_monitors_at(
                 config.feature,
                 sink.clone(),
                 circuits.clone(),
+                diagnostics.clone(),
             )
         })
         .collect()

@@ -8,5 +8,6 @@ mod port_error;
 pub mod recovery;
 pub mod speech;
 pub mod speech_synthesis;
+pub mod stability;
 
 pub use port_error::PortError;
