@@ -26,21 +26,21 @@
 
 **Files:** `crates/pw-domain/src/runtime_health.rs`、`crates/pw-application/src/recovery/`、`crates/pw-contracts/src/dto/runtime_health.rs`、生成bindings。
 
-- [ ] RED: health遷移、明示停止、full-jitter範囲、cap、安定reset、8回circuit open、秘密除去済みlast_errorのテストを追加して失敗確認。
-- [ ] GREEN: clock/RNG注入可能な `BackoffPolicy` と機能別 `RuntimeHealth` を最小実装。
-- [ ] DTO: schema version付きhealth/diagnostic eventを生成しTypeScript型検査。
-- [ ] VERIFY: domain/application/contracts tests、fmt、clippy。
-- [ ] COMMIT: `feat(recovery): add runtime health and backoff policy`。
+- [x] RED: health遷移、明示停止、full-jitter範囲、cap、安定reset、8回circuit open、秘密除去済みlast_errorのテストを追加して失敗確認。
+- [x] GREEN: clock/RNG注入可能な `BackoffPolicy` と機能別 `RuntimeHealth` を最小実装。
+- [x] DTO: schema version付きhealth/diagnostic eventを生成しTypeScript型検査。
+- [x] VERIFY: domain/application/contracts tests、fmt、clippy。
+- [x] COMMIT: `feat(recovery): add runtime health and backoff policy`。
 
 ### Task 2: 外部process supervisor
 
 **Files:** `crates/pw-platform/src/process/`、desktop `supervisor/`、設定DTO/UI。
 
-- [ ] RED: helper childで即死、遅延終了、stderr flood、hang、起動不能、停止race、stale generation、retry capを検証。
-- [ ] GREEN: Child ownership、bounded stdout/stderr drain、health probe、shutdown/kill/wait、backoffを実装。
-- [ ] INTEGRATE: AivisSpeechと任意設定されたllama-server executableをRust AppStateから監視。接続のみの既存外部serverは勝手にkillしない。
-- [ ] VERIFY: supervisor tests、capability、fmt/clippy。
-- [ ] COMMIT: `feat(recovery): supervise local ai processes`。
+- [x] RED: helper childで即死、遅延終了、stderr flood、hang、起動不能、停止race、stale generation、retry capを検証。
+- [x] GREEN: Child ownership、bounded stdout/stderr drain、health probe、shutdown/kill/wait、backoffを実装。
+- [x] INTEGRATE: AivisSpeechと任意設定されたllama-server executableをRust AppStateから監視。接続のみの既存外部serverは勝手にkillしない。
+- [x] VERIFY: supervisor tests、capability、fmt/clippy。
+- [x] COMMIT: `feat(recovery): supervise local ai processes`。
 
 ### Task 3: Audio device切断検知とstream復旧
 
@@ -59,43 +59,43 @@
 - [x] RED: VAD/STT build失敗、一時runtime失敗、モデル恒久不足、cancel、mute保持、retry cap、worker join/thread leakを検証。
 - [x] GREEN: typed failure、bounded retry、JoinHandle管理、mirror thread統合、設定変更と明示停止の区別を実装。
 - [x] VERIFY: speech tests、実モデルignored test、fmt/clippy。
-- [ ] COMMIT: `feat(stt): reinitialize failed speech pipelines`。
+- [x] COMMIT: `feat(stt): reinitialize failed speech pipelines`。
 
 ### Task 5: LLM/TTS/Live2D縮退統合とbounded queues
 
 **Files:** ChatService、TtsService、Live2D controller/window、RuntimeHealth UI。
 
-- [ ] RED: LLM停止→履歴維持/再接続、TTS停止→text-only/復帰、Live2D例外→通常chat継続、queue overflow/drop metricsを検証。
-- [ ] GREEN: 既存縮退eventを共通healthへ統合し、unbounded mpscをbounded化、overflow policyを定義。
-- [ ] VERIFY: Rust/frontend tests、typecheck/build。
-- [ ] COMMIT: `feat(recovery): unify feature degradation states`。
+- [x] RED: LLM停止→履歴維持/再接続、TTS停止→text-only/復帰、Live2D例外→通常chat継続、queue overflow/drop metricsを検証。
+- [x] GREEN: 既存縮退eventを共通healthへ統合し、unbounded mpscをbounded化、overflow policyを定義。
+- [x] VERIFY: Rust/frontend tests、typecheck/build。
+- [x] COMMIT: `feat(recovery): unify feature degradation states`（`754a1a7`）。
 
 ### Task 6: Crash diagnosticsと保持制限
 
 **Files:** `pw-platform/src/diagnostics/`、bootstrap panic hook、frontend error bridge、Settings Diagnostics panel。
 
-- [ ] RED: panic payload/location/backtrace metadata、credential/prompt redaction、atomic write、最大20件/20MiB保持、frontend error受付、report exportを検証。
-- [ ] GREEN: non-panicking panic hook、structured crash report、frontend `error`/`unhandledrejection` command、診断一覧/exportを実装。
-- [ ] DOC: Windows WER LocalDumpsは任意の診断モードとして手順化し、dump機密性と保持を明記。
-- [ ] VERIFY: Rust/frontend/capability tests。
-- [ ] COMMIT: `feat(diagnostics): capture redacted crash reports`。
+- [x] RED: panic payload/location/backtrace metadata、credential/prompt redaction、atomic write、最大20件/20MiB保持、frontend error受付、report exportを検証。
+- [x] GREEN: non-panicking panic hook、structured crash report、frontend `error`/`unhandledrejection` command、診断一覧/exportを実装。
+- [x] DOC: Windows WER LocalDumpsは任意の診断モードとして手順化し、dump機密性と保持を明記。
+- [x] VERIFY: Rust/frontend/capability tests。
+- [x] COMMIT: `feat(diagnostics): capture redacted crash reports`（`af696ac`、review修正は`d5963c1`まで）。
 
 ### Task 7: Soak harnessと資源上限
 
 **Files:** `crates/pw-application/tests/stability.rs`、`tools/scripts/soak-test.ps1`、`docs/development/soak-test.md`。
 
-- [ ] RED: fake clockの短縮stressでqueue/task/cache/log上限またはresource slope違反を検出するテストを先に失敗確認。
-- [ ] GREEN: 1〜5秒sampling、RSS/handle/thread/queue/drop/cache/log/restart/fault timelineをJSONLへ保存し、最終summaryを生成。
-- [ ] SCRIPT: 既定2時間、短縮時間指定、build hash/OS/device/seedを成果物へ記録。fault注入は明示opt-in。
-- [ ] VERIFY: short soakを自動実行し、PowerShell 5.1 parseとUTF-8 BOMを確認。
-- [ ] COMMIT: `test(stability): add bounded soak harness`。
+- [x] RED: fake clockの短縮stressでqueue/task/cache/log上限またはresource slope違反を検出するテストを先に失敗確認。
+- [x] GREEN: 1〜5秒sampling、RSS/handle/thread/queue/drop/cache/log/restart/fault timelineをJSONLへ保存し、最終summaryを生成。
+- [x] SCRIPT: 既定2時間、短縮時間指定、build hash/OS/device/seedを成果物へ記録。fault注入は明示opt-in。
+- [x] VERIFY: short soakを自動実行し、PowerShell 5.1 parseとUTF-8 BOMを確認。
+- [x] COMMIT: `test(stability): add bounded soak harness`（`a060453`、process安全修正は`38e4106`まで）。
 
 ### Task 8: Phase 6受け入れ検証
 
 **Files:** acceptance tests、README、getting-started、handoff、作業内容.md。
 
-- [ ] FAULT MATRIX: STT/LLM/TTS/Live2D個別停止、device disconnect、child crash cap、crash secret absenceをmock/ignored実環境テストで検証。
-- [ ] SOAK: short CI相当をpass。実時間2時間版をユーザー実機で実行できる正確なコマンドと成果物パスを記録。
-- [ ] FULL GATE: Rust fmt/clippy/test、pnpm build/typecheck/test、Tauri debug build。
-- [ ] REVIEW: Phase 6仕様横断レビューでCritical/Important 0を確認。
-- [ ] COMMIT: `docs: complete phase 6 stability and recovery`。
+- [x] FAULT MATRIX: STT/LLM/TTS/Live2D個別停止、device disconnect、child crash cap、crash secret absenceをmock/ignored実環境テストで検証。
+- [x] SOAK: short CI相当とRootChild negative testをpass。実時間2時間版をユーザー実機で実行できる正確なコマンドと成果物パスを記録（2時間run自体は未実施）。
+- [x] FULL GATE: Rust fmt/clippy/test、pnpm build/typecheck/test、Tauri debug build。
+- [x] REVIEW: Phase 6仕様横断レビューでCritical/Important 0を確認。
+- [x] COMMIT: acceptance codeは`ea2bf9e`、toolchain / 文書は`docs: prepare phase 6 soak acceptance`。

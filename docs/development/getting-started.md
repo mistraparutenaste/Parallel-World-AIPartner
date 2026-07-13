@@ -27,6 +27,8 @@ cargo test --workspace
 
 `corepack pnpm build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
 
+root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`も`corepack pnpm`を呼ぶため、子processでも`packageManager: pnpm@11.11.0`が適用される。直接`pnpm`を実行しない。
+
 ## 開発用Live2Dモデルの配置
 
 モデル（Live2Dサンプルデータ）はリポジトリにコミットされない。開発時は次でapp dataへコピーする。
@@ -93,7 +95,10 @@ cargo test --workspace
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
+corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle
 ```
+
+Phase 6の自動障害マトリクスと実時間2時間soakは [phase6-acceptance.md](phase6-acceptance.md) にまとめている。2時間試験は短縮runで代替できない実機ゲートとして扱う。
 
 ## IPC契約の変更
 

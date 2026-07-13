@@ -6,8 +6,8 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "build": "corepack pnpm -r build"
   }
 }

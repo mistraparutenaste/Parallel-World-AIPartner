@@ -1,0 +1,55 @@
+# Phase 6 受け入れ検証
+
+## 自動障害マトリクス
+
+受け入れテストはテスト専用の縮退ロジックを複製せず、製品のservice、supervisor、recovery core、Tauri commandを直接使用する。
+
+| 障害 | 期待する縮退・復旧 | 自動検証 |
+| --- | --- | --- |
+| STT初期化・runtime失敗 | テキスト入力を維持し、恒久的モデル欠落はcircuit、一時障害は再初期化 | `parallel-world-desktop speech::service`、`pw-audio recovery` |
+| 音声device切断 | 旧streamを停止し、既定deviceへfallback、選択device復帰時に再構築 | `parallel-world-desktop speech::service::production_recovery_cycle_stops_old_session_and_preserves_runtime_state`、frontend `MicrophonePanel` |
+| LLM停止・hung | 履歴・設定を維持して縮退、8回でcircuit、Settingsからrearm | `parallel-world-desktop chat::service`、`pw-application feature_health_supervisor`、frontend `RuntimeHealthPanel` |
+| TTS停止 | 応答本文を表示したまま当該turnをtext-only化し、後続turnで復旧可能 | `parallel-world-desktop tts::service`、frontend `ChatWindow` |
+| Live2D boot失敗 | character surfaceを隠して通常chatを表示し、Settingsからattemptを維持した明示retryで再boot | `parallel-world-desktop supervisor` / `commands::character`、`pw-application feature_health_supervisor`、frontend `live2d-health` / `RuntimeHealthPanel` |
+| owned process crash | full-jitter backoff、8回でcircuit、明示rearm、shutdown時tree回収 | `pw-platform process_supervisor`、`parallel-world-desktop supervisor`、`pw-application feature_health_supervisor` |
+| SQLite障害 | 一時履歴へ縮退し、Phase 5の履歴・設定・backup契約を維持 | `parallel-world-desktop chat::service::allocator_falls_back_on_database_failure_and_never_collides_after_recovery`、`pw-storage` |
+| crash report | credential、prompt本文、生音声を保存せず、保持上限とatomic writeを維持 | `pw-platform diagnostics`、`parallel-world-desktop diagnostics`、frontend `DiagnosticsPanel` |
+
+一括実行は `cargo test --workspace` と `corepack pnpm test`。外部STT model、LLM server、AivisSpeechを使うignored試験は `getting-started.md` のコマンドで個別実行する。
+
+## Soak
+
+短時間のharness自己診断:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.ps1 -SelfTest
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.ps1 -SelfTest -SelfTestRootChild
+```
+
+RootChildはheartbeat受付拒否を検証するnegative testで、終了コード4が期待値。summaryの`root_child_rejection.passed=true`、fault 0、root victim false、orphan / unexpected violation空を確認する。
+
+実時間2時間の受け入れ試験（短縮不可）:
+
+```powershell
+corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tools/scripts/soak-test.ps1 -DurationMinutes 120 -SampleSeconds 5 -OutputDir artifacts/soak -DiagnosticsHeartbeat "$env:APPDATA/com.parallelworld.desktop/logs/soak-heartbeat.json"
+```
+
+成果物は `artifacts/soak/<UTC>-<seed>.jsonl` と `artifacts/soak/<UTC>-<seed>-summary.json`。summaryの終了コードが0で、`violations`と`orphan_process_ids`が空であることを確認する。詳細な閾値、任意のowned-child障害注入、終了コードは [soak-test.md](soak-test.md) を参照。
+
+2時間runを実際に完走するまでは、Phase 6を「実装済み・実機soakゲート待ち」と表記し、短時間runを2時間結果として扱わない。
+
+## 2026-07-13 自動ゲート実測
+
+- `cargo fmt --all --check`: 成功
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 成功
+- `cargo test --workspace`: 274 passed、7 ignored（外部model/server/hardware依存）
+- `corepack pnpm build`: 成功
+- `corepack pnpm typecheck`: 成功
+- `corepack pnpm test`: 81 passed（Live2D 27、desktop 54）
+- `corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle`: 成功
+- `tools/scripts/soak-test.ps1 -SelfTest`: 成功、終了コード0、`passed=true`、violations / orphan空
+- `tools/scripts/soak-test.ps1 -SelfTest -SelfTestRootChild`: 期待終了コード4、`root_child_rejection.passed=true`、unexpected / orphan空
+- `git diff --check`: 成功
+
+実測toolchainはNode.js `24.15.0` / Corepack pnpm `11.11.0`。rootと3 workspace子processで一致し、`Unsupported engine`警告は発生しなかった。Phase 6の状態は引き続き「実装済み・実機soakゲート待ち」であり、2時間run完走とは扱わない。
