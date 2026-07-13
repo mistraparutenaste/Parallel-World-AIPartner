@@ -93,7 +93,6 @@ impl LifecycleCore {
         if self.lifecycle == Lifecycle::Shutdown {
             return Err("process supervision is shut down");
         }
-        self.generation = self.generation.saturating_add(1);
         Ok(self.generation)
     }
 }
@@ -689,14 +688,23 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_shutdown_is_terminal_and_rearm_uses_a_new_generation() {
+    fn lifecycle_rearm_keeps_the_shutdown_generation() {
         let mut lifecycle = LifecycleCore::new();
         let first = lifecycle.generation();
         let replacement = lifecycle.rearm().unwrap();
-        assert!(replacement > first);
+        assert_eq!(replacement, first);
         lifecycle.shutdown();
         assert!(lifecycle.rearm().is_err());
-        assert_eq!(lifecycle.generation(), replacement + 1);
+        assert_eq!(lifecycle.generation(), first + 1);
+    }
+
+    #[test]
+    fn rearming_one_feature_does_not_invalidate_another_feature_monitor() {
+        let mut lifecycle = LifecycleCore::new();
+        let language_model_generation = lifecycle.generation();
+        let text_to_speech_generation = lifecycle.rearm().unwrap();
+        assert_eq!(language_model_generation, text_to_speech_generation);
+        assert_eq!(lifecycle.generation(), language_model_generation);
     }
 
     #[test]
