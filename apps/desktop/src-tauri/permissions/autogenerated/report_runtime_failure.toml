@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-report-runtime-failure"
+description = "Enables the report_runtime_failure command without any pre-configured scope."
+commands.allow = ["report_runtime_failure"]
+
+[[permission]]
+identifier = "deny-report-runtime-failure"
+description = "Denies the report_runtime_failure command without any pre-configured scope."
+commands.deny = ["report_runtime_failure"]

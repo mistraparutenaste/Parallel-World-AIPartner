@@ -51,7 +51,7 @@ test('eight attempts are shown as an open circuit', async () => {
   expect(screen.getByText(/external/)).toBeInTheDocument();
 });
 
-test('settings can rearm only a circuit-open managed process', async () => {
+test('settings rearms a circuit-open runtime feature', async () => {
   render(<RuntimeHealthPanel />);
   await publish({
     schema_version: 1,
@@ -66,7 +66,7 @@ test('settings can rearm only a circuit-open managed process', async () => {
   });
 
   fireEvent.click(await screen.findByRole('button', { name: 'LLM を再起動' }));
-  expect(invokeMock).toHaveBeenCalledWith('rearm_managed_process', {
+  expect(invokeMock).toHaveBeenCalledWith('rearm_runtime_feature', {
     feature: 'language_model',
   });
 

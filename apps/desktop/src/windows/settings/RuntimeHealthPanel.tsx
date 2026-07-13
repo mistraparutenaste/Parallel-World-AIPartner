@@ -51,10 +51,10 @@ export function RuntimeHealthPanel() {
             <strong>{LABELS[event.feature]}</strong>{' '}
             <span>{ownership(event)}</span>{' '}
             <span>{event.attempts >= 8 ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>
-            {event.ownership === 'managed' && event.circuit_open ? (
+            {event.circuit_open && (event.ownership === 'managed' || event.feature === 'live2d') ? (
               <button
                 type="button"
-                onClick={() => void invoke('rearm_managed_process', { feature: event.feature })}
+                onClick={() => void invoke('rearm_runtime_feature', { feature: event.feature })}
               >
                 {LABELS[event.feature]} を再起動
               </button>

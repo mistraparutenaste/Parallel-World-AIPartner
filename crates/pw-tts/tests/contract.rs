@@ -96,6 +96,25 @@ fn client_for(port: u16) -> AivisSpeechClient {
 }
 
 #[test]
+fn hung_server_is_bounded_by_the_production_client_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let _connection = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+    });
+    let client = AivisSpeechClient::new(&TtsClientConfig {
+        base_url: format!("http://127.0.0.1:{port}"),
+        timeout: Duration::from_millis(100),
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    assert!(client.speakers().is_err());
+    assert!(started.elapsed() < Duration::from_millis(400));
+    server.join().unwrap();
+}
+
+#[test]
 fn speakers_parses_styles() {
     let server = spawn_server(vec![json_response(
         r#"[

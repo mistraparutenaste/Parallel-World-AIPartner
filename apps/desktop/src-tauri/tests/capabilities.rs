@@ -64,7 +64,10 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
         [
             "allow-get-character-manifest",
             "allow-set-click-through",
-            "allow-set-speech-playback"
+            "allow-set-speech-playback",
+            "allow-report-runtime-failure",
+            "allow-report-runtime-success",
+            "allow-rearm-runtime-feature"
         ]
     );
 }
@@ -122,22 +125,20 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-export-user-data",
             "allow-delete-conversation-history",
             "allow-delete-memories",
-            "allow-rearm-managed-process"
+            "allow-rearm-runtime-feature"
         ]
     );
 }
 
 #[test]
-fn process_rearm_is_exposed_only_to_settings() {
-    for capability in ["character", "chat"] {
-        let (_, permissions) = capability_permissions(capability);
-        assert!(
-            !permissions
-                .iter()
-                .any(|permission| permission.contains("rearm-managed-process")),
-            "process rearm leaked into {capability}"
-        );
-    }
+fn runtime_rearm_is_exposed_only_to_settings_and_character() {
+    let (_, permissions) = capability_permissions("chat");
+    assert!(
+        !permissions
+            .iter()
+            .any(|permission| permission.contains("rearm-runtime-feature")),
+        "runtime rearm leaked into chat"
+    );
 }
 
 #[test]

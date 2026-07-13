@@ -80,6 +80,28 @@ fn messages() -> Vec<ChatMessage> {
 }
 
 #[test]
+fn hung_server_is_bounded_by_the_production_client_timeout() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let _connection = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+    });
+    let mut client = OpenAiCompatClient::new(LlmClientConfig {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        model: "test-model".into(),
+        allow_remote: false,
+        timeout: Duration::from_millis(100),
+    })
+    .unwrap();
+    let started = std::time::Instant::now();
+    let result = client.stream_chat(&messages(), &AtomicBool::new(false), &mut |_| {});
+    assert!(result.is_err());
+    assert!(started.elapsed() < Duration::from_millis(400));
+    server.join().unwrap();
+}
+
+#[test]
 fn sends_the_openai_chat_request_shape_and_joins_deltas() {
     let server = spawn_server(200, sse_body(&["こん", "にちは。"]));
     let mut client = client_for(server.port);

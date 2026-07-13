@@ -2,7 +2,6 @@ import type {
   CharacterCursorEventDto,
   CharacterManifestDto,
   ConversationStateDto,
-  RuntimeHealthEventDto,
   SpeechAudioEventDto,
   SpeechStopEventDto,
 } from '@parallel-world/contracts';
@@ -13,30 +12,13 @@ import {
   WebAudioSink,
 } from '@parallel-world/live2d-runtime';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
-import { emit } from '@tauri-apps/api/event';
 import { useEffect, useRef, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
 import { StatusBadge } from '../../shared/components/StatusBadge';
 import { createModelSource } from './model-source';
+import { reportLive2DFailure, reportLive2DSuccess, rearmLive2D } from './live2d-health';
 
 const SHADER_PATH = '/live2d/shaders/';
-
-function reportLive2DHealth(healthy: boolean) {
-  const payload: RuntimeHealthEventDto = {
-    schema_version: 1,
-    feature: 'live2d',
-    status: healthy ? 'healthy' : 'degraded',
-    failure_class: healthy ? null : 'transient',
-    last_error: healthy ? null : 'service unavailable',
-    attempts: healthy ? 0 : 1,
-    ownership: 'not_applicable',
-    circuit_open: false,
-    changed_at_ms: Date.now(),
-  };
-  void emit('runtime-health', payload).catch((error: unknown) => {
-    console.error('failed to report Live2D health', error);
-  });
-}
 
 function toBadgeState(state: Live2DControllerState): ConversationStateDto {
   switch (state) {
@@ -86,7 +68,7 @@ export function CharacterWindow() {
       if (!('Live2DCubismCore' in globalThis)) {
         setLoadError('Cubism Core script is not loaded');
         setState('unavailable');
-        reportLive2DHealth(false);
+        void reportLive2DFailure('core_missing');
         return;
       }
       const { CubismFrameworkRuntime } = await import(
@@ -99,8 +81,8 @@ export function CharacterWindow() {
         new CubismFrameworkRuntime({ shaderPath: SHADER_PATH }),
         (nextState) => {
           setState(nextState);
-          if (nextState === 'model-loaded') reportLive2DHealth(true);
-          if (nextState === 'unavailable') reportLive2DHealth(false);
+          if (nextState === 'model-loaded') void reportLive2DSuccess();
+          if (nextState === 'unavailable') void reportLive2DFailure('renderer_initialization_failed');
         },
       );
       controller = instance;
@@ -123,7 +105,7 @@ export function CharacterWindow() {
         console.error('failed to load the character model', error);
         setLoadError(String(error));
         setState('unavailable');
-        reportLive2DHealth(false);
+        void reportLive2DFailure('model_load_failed');
         return;
       }
       const stopExpression = subscribeEvent<string>(
@@ -202,7 +184,7 @@ export function CharacterWindow() {
       console.error('failed to initialize Live2D', error);
       setLoadError(String(error));
       setState('unavailable');
-      reportLive2DHealth(false);
+      void reportLive2DFailure('renderer_initialization_failed');
     });
 
     window.addEventListener('resize', resize);
@@ -240,6 +222,7 @@ export function CharacterWindow() {
           <section aria-label="キャラクター表示フォールバック">
             <p>キャラクター表示を利用できません。チャットは通常どおり利用できます。</p>
             <button type="button" onClick={() => {
+              void rearmLive2D();
               setLoadError(null);
               setState('idle');
               setRetryGeneration((generation) => generation + 1);

@@ -10,10 +10,13 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use pw_application::recovery::{BackoffDecision, BackoffPolicy, Clock, RandomSource};
+use pw_application::recovery::{
+    BackoffDecision, BackoffPolicy, Clock, FeatureHealthSupervisor, HealthTransition, RandomSource,
+};
 use pw_contracts::{ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto};
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
 use pw_platform::process::{ProcessSpec, ProcessSupervisor};
+use serde::Deserialize;
 use tauri::Emitter;
 
 trait RuntimeHealthSink: Send + Sync {
@@ -366,6 +369,139 @@ pub fn rearm_managed_process(
     processes.rearm(feature).map_err(str::to_owned)
 }
 
+/// Rust-owned health state for frontend runtimes which cannot own policy state.
+pub struct FrontendRuntimeHealth {
+    live2d: Mutex<FeatureHealthSupervisor<SystemClock, Jitter>>,
+}
+
+impl Default for FrontendRuntimeHealth {
+    fn default() -> Self {
+        Self {
+            live2d: Mutex::new(FeatureHealthSupervisor::new(
+                RuntimeFeature::Live2D,
+                SystemClock,
+                Jitter(SystemClock.now_ms().max(1)),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrontendFailureCode {
+    CoreMissing,
+    RendererInitializationFailed,
+    ModelLoadFailed,
+}
+
+impl FrontendFailureCode {
+    const fn domain(self) -> FailureCode {
+        match self {
+            Self::CoreMissing | Self::ModelLoadFailed => FailureCode::MissingModel,
+            Self::RendererInitializationFailed => FailureCode::Internal,
+        }
+    }
+}
+
+fn require_live2d(feature: pw_contracts::RuntimeFeatureDto) -> Result<(), String> {
+    if feature == pw_contracts::RuntimeFeatureDto::Live2D {
+        Ok(())
+    } else {
+        Err("frontend runtime reporting is restricted to Live2D".into())
+    }
+}
+
+fn emit_transition<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    transition: HealthTransition,
+    circuit_open: bool,
+) {
+    if let HealthTransition::Changed { health, attempts } = transition {
+        let mut event = RuntimeHealthEventDto::from((&health, attempts));
+        event.circuit_open = circuit_open;
+        let _ = app.emit(RUNTIME_HEALTH_EVENT, event);
+    }
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Records a safe typed `Live2D` failure and emits the resulting health transition.
+///
+/// # Errors
+/// Returns an error when a non-Live2D feature attempts to use this scoped bridge.
+pub fn report_runtime_failure<R: tauri::Runtime>(
+    feature: pw_contracts::RuntimeFeatureDto,
+    code: FrontendFailureCode,
+    app: tauri::AppHandle<R>,
+    health: tauri::State<'_, FrontendRuntimeHealth>,
+) -> Result<(), String> {
+    require_live2d(feature)?;
+    let mut supervisor = health
+        .live2d
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let failed = supervisor.record_failure(RuntimeFailure::transient(code.domain()));
+    let transition = HealthTransition::Changed {
+        health: failed.health,
+        attempts: failed.attempts,
+    };
+    emit_transition(&app, transition, supervisor.circuit_open());
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Records a successful `Live2D` boot and emits at most one health transition.
+///
+/// # Errors
+/// Returns an error when a non-Live2D feature attempts to use this scoped bridge.
+pub fn report_runtime_success<R: tauri::Runtime>(
+    feature: pw_contracts::RuntimeFeatureDto,
+    app: tauri::AppHandle<R>,
+    health: tauri::State<'_, FrontendRuntimeHealth>,
+) -> Result<(), String> {
+    require_live2d(feature)?;
+    let mut supervisor = health
+        .live2d
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let transition = supervisor.record_success();
+    emit_transition(&app, transition, supervisor.circuit_open());
+    Ok(())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Rearms a supported managed process or the frontend `Live2D` circuit.
+///
+/// # Errors
+/// Returns an error for unsupported features or when the selected circuit is not open.
+pub fn rearm_runtime_feature<R: tauri::Runtime>(
+    feature: pw_contracts::RuntimeFeatureDto,
+    app: tauri::AppHandle<R>,
+    processes: tauri::State<'_, ManagedProcesses>,
+    health: tauri::State<'_, FrontendRuntimeHealth>,
+) -> Result<(), String> {
+    match feature {
+        pw_contracts::RuntimeFeatureDto::LanguageModel => processes
+            .rearm(RuntimeFeature::LanguageModel)
+            .map_err(str::to_owned),
+        pw_contracts::RuntimeFeatureDto::TextToSpeech => processes
+            .rearm(RuntimeFeature::TextToSpeech)
+            .map_err(str::to_owned),
+        pw_contracts::RuntimeFeatureDto::Live2D => {
+            let mut supervisor = health
+                .live2d
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let transition = supervisor.rearm().map_err(str::to_owned)?;
+            emit_transition(&app, transition, supervisor.circuit_open());
+            Ok(())
+        }
+        _ => Err("feature cannot be rearmed from Settings".into()),
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn spawn_monitor(
     name: &'static str,
@@ -658,6 +794,25 @@ mod tests {
         fn uniform_inclusive(&mut self, upper: u64) -> u64 {
             upper
         }
+    }
+
+    #[test]
+    fn live2d_health_opens_once_rearms_and_returns_to_healthy_once() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut health = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+        for _ in 0..8 {
+            let _ = health.record_failure(RuntimeFailure::transient(FailureCode::Internal));
+        }
+        assert!(health.circuit_open());
+        let HealthTransition::Changed { attempts, .. } = health.rearm().unwrap() else {
+            panic!("rearm must emit one changed transition");
+        };
+        assert_eq!(attempts, 0);
+        assert!(matches!(
+            health.record_success(),
+            HealthTransition::Changed { .. }
+        ));
+        assert_eq!(health.record_success(), HealthTransition::Unchanged);
     }
 
     #[test]

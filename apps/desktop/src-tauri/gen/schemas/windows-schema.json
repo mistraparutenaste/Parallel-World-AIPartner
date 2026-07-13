@@ -279,6 +279,24 @@
           "markdownDescription": "Enables the rearm_managed_process command without any pre-configured scope."
         },
         {
+          "description": "Enables the rearm_runtime_feature command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rearm-runtime-feature",
+          "markdownDescription": "Enables the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the report_runtime_failure command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-report-runtime-failure",
+          "markdownDescription": "Enables the report_runtime_failure command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the report_runtime_success command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-report-runtime-success",
+          "markdownDescription": "Enables the report_runtime_success command without any pre-configured scope."
+        },
+        {
           "description": "Enables the send_chat_message command without any pre-configured scope.",
           "type": "string",
           "const": "allow-send-chat-message",
@@ -439,6 +457,24 @@
           "type": "string",
           "const": "deny-rearm-managed-process",
           "markdownDescription": "Denies the rearm_managed_process command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rearm_runtime_feature command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rearm-runtime-feature",
+          "markdownDescription": "Denies the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the report_runtime_failure command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-report-runtime-failure",
+          "markdownDescription": "Denies the report_runtime_failure command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the report_runtime_success command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-report-runtime-success",
+          "markdownDescription": "Denies the report_runtime_success command without any pre-configured scope."
         },
         {
           "description": "Denies the send_chat_message command without any pre-configured scope.",

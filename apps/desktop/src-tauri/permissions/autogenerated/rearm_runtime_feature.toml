@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-rearm-runtime-feature"
+description = "Enables the rearm_runtime_feature command without any pre-configured scope."
+commands.allow = ["rearm_runtime_feature"]
+
+[[permission]]
+identifier = "deny-rearm-runtime-feature"
+description = "Denies the rearm_runtime_feature command without any pre-configured scope."
+commands.deny = ["rearm_runtime_feature"]

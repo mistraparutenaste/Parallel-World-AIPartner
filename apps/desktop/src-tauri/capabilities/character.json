@@ -8,6 +8,9 @@
     "core:window:allow-start-dragging",
     "allow-get-character-manifest",
     "allow-set-click-through",
-    "allow-set-speech-playback"
+    "allow-set-speech-playback",
+    "allow-report-runtime-failure",
+    "allow-report-runtime-success",
+    "allow-rearm-runtime-feature"
   ]
 }
