@@ -4,24 +4,22 @@
 
 # Parallel World
 
-> Phase 0〜6は実装済み・実機soakゲート待ち。Phase 6の自動受け入れ検証は完了し、実時間2時間soakのみ残っています。
+> Phase 0〜6は完了（Phase 6は2026-07-14に実機2時間soakパス）。現在はPhase 7 配布を進行中（Task 2 署名必須updaterまで完了）。
 
 Live2Dキャラクターをデスクトップに常駐させ、音声またはテキストで会話できるローカル優先のAIパートナーアプリケーション。
 
 ## 現在の状態
 
-Phase 0（アプリケーション基盤）実装済み。
-
 | Phase | 内容 | 状態 |
 | --- | --- | --- |
-| 0 | workspace、3ウィンドウ、型付きIPC、Capability、ログ、CI | 実装済み |
-| 1 | Live2D表示 | 実装済み |
-| 2 | マイク入力、VAD、STT | 実装済み |
-| 3 | LLM、会話状態機械 | 実装済み |
-| 4 | TTS、リップシンク | 実装済み |
-| 5 | 履歴、記憶（SQLite） | 実装済み |
-| 6 | 障害処理、縮退、安定性 | 実装済み・実機soakゲート待ち（2時間） |
-| 7 | installer、自動更新、配布 | 未着手 |
+| 0 | workspace、3ウィンドウ、型付きIPC、Capability、ログ、CI | 完了 |
+| 1 | Live2D表示 | 完了 |
+| 2 | マイク入力、VAD、STT | 完了 |
+| 3 | LLM、会話状態機械 | 完了 |
+| 4 | TTS、リップシンク | 完了 |
+| 5 | 履歴、記憶（SQLite） | 完了 |
+| 6 | 障害処理、縮退、安定性 | 完了（実機2時間soakパス、[記録](docs/development/phase6-acceptance.md)） |
+| 7 | installer、自動更新、配布 | 進行中（Task 2 署名必須updaterまで完了） |
 
 ## アーキテクチャ
 
