@@ -34,6 +34,7 @@ pub const STATE_EVENT: &str = "tts-state";
 
 const CHARACTER_WINDOW: &str = "character";
 const TTS_QUEUE_CAPACITY: usize = 8;
+const ADAPTER_TIMEOUT: Duration = Duration::from_secs(5);
 
 enum Command {
     Sentence { turn: TurnId, text: String },
@@ -51,13 +52,9 @@ impl Worker {
         self.cancel.store(true, Ordering::SeqCst);
         drop(self.tx);
         if let Some(thread) = self.thread.take() {
-            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-            while !thread.is_finished() && std::time::Instant::now() < deadline {
-                std::thread::yield_now();
-            }
-            if thread.is_finished() {
-                let _ = thread.join();
-            }
+            // The adapter has a finite total timeout. Never detach a stale
+            // synthesis worker that could emit audio after its replacement.
+            let _ = thread.join();
         }
     }
 }
@@ -104,6 +101,26 @@ fn fingerprint(settings: &TtsSettingsDto) -> String {
 }
 
 impl TtsService {
+    /// Clears the application-owned TTS circuit.
+    ///
+    /// # Errors
+    /// Returns an error when the circuit is not open.
+    pub fn rearm(&self) -> Result<HealthTransition, &'static str> {
+        self.health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rearm()
+    }
+    #[must_use]
+    pub fn health_snapshot(&self) -> RuntimeHealthEventDto {
+        let health = self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut event = RuntimeHealthEventDto::from((health.health(), health.attempts()));
+        event.circuit_open = health.circuit_open();
+        event
+    }
     pub fn queue_metrics(&self) -> pw_contracts::QueueMetricsDto {
         self.queue_metrics.snapshot()
     }
@@ -119,6 +136,20 @@ impl TtsService {
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_tts_settings(&layout);
         if !settings.enabled {
+            return;
+        }
+        if !self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .can_attempt()
+        {
+            self.text_only_turn.store(turn.value(), Ordering::Relaxed);
+            emit_state(
+                app,
+                false,
+                Some("tts is recovering; continuing this turn text-only".to_owned()),
+            );
             return;
         }
         self.latest_turn.store(turn.value(), Ordering::Relaxed);
@@ -160,6 +191,7 @@ impl TtsService {
                 turn,
                 text: text.to_owned(),
             }) {
+                let adapter_failure = enqueue_error_is_adapter_failure(&error);
                 self.queue_metrics.dequeued();
                 match error {
                     TrySendError::Full(_) => {
@@ -177,14 +209,15 @@ impl TtsService {
                                     "tts queue is busy; continuing this turn text-only".to_owned(),
                                 ),
                             );
-                            emit_tts_health(app, &self.health, false);
                         }
                     }
                     TrySendError::Disconnected(_) => {
                         self.queue_metrics.dropped();
                         emit_state(app, false, Some("tts worker is not available".to_owned()));
-                        emit_tts_health(app, &self.health, false);
                     }
+                }
+                if adapter_failure {
+                    emit_tts_health(app, &self.health, false);
                 }
             }
         }
@@ -205,7 +238,7 @@ impl TtsService {
     ) -> Result<Worker, String> {
         let client = AivisSpeechClient::new(&TtsClientConfig {
             base_url: settings.base_url.clone(),
-            timeout: Duration::from_secs(5),
+            timeout: ADAPTER_TIMEOUT,
         })
         .map_err(|error| error.to_string())?;
         let layout = app.state::<AppDataLayout>();
@@ -260,6 +293,10 @@ impl TtsService {
     }
 }
 
+fn enqueue_error_is_adapter_failure(error: &TrySendError<Command>) -> bool {
+    matches!(error, TrySendError::Disconnected(_))
+}
+
 fn emit_stop<R: Runtime>(app: &AppHandle<R>) {
     let _ = app.emit_to(
         EventTarget::webview_window(CHARACTER_WINDOW),
@@ -292,10 +329,11 @@ fn emit_tts_health<R: Runtime>(
     let transition = if healthy {
         health.record_success()
     } else {
-        let failed = health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable));
-        HealthTransition::Changed {
-            health: failed.health,
-            attempts: failed.attempts,
+        match health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable)) {
+            pw_application::recovery::HealthUpdate::Changed {
+                health, attempts, ..
+            } => HealthTransition::Changed { health, attempts },
+            pw_application::recovery::HealthUpdate::Unchanged { .. } => HealthTransition::Unchanged,
         }
     };
     if let HealthTransition::Changed { health, attempts } = transition {
@@ -341,5 +379,52 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
         tracing::warn!(%message, "tts synthesis failed; continuing text-only");
         emit_state(&self.app, false, Some(message.to_owned()));
         emit_tts_health(&self.app, &self.health, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_tts_timeout_allows_local_synthesis() {
+        assert!(ADAPTER_TIMEOUT >= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn queue_backpressure_is_not_classified_as_an_adapter_failure() {
+        let full = TrySendError::Full(Command::Sentence {
+            turn: pw_domain::reply::TurnTracker::new().begin_turn(),
+            text: "busy".into(),
+        });
+        assert!(!enqueue_error_is_adapter_failure(&full));
+    }
+
+    struct ActiveGuard(Arc<AtomicU64>);
+    impl Drop for ActiveGuard {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn shutdown_joins_a_slow_adapter_worker_instead_of_detaching_it() {
+        let (tx, _rx) = sync_channel(1);
+        let active = Arc::new(AtomicU64::new(1));
+        let worker_active = Arc::clone(&active);
+        let thread = std::thread::spawn(move || {
+            let _guard = ActiveGuard(worker_active);
+            std::thread::sleep(Duration::from_millis(2_050));
+        });
+        let worker = Worker {
+            tx,
+            settings_fingerprint: "test".into(),
+            cancel: Arc::new(AtomicBool::new(false)),
+            thread: Some(thread),
+        };
+
+        worker.shutdown();
+
+        assert_eq!(active.load(Ordering::SeqCst), 0);
     }
 }

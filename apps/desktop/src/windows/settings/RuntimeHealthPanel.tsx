@@ -18,17 +18,39 @@ function ownership(event: RuntimeHealthEventDto) {
   return 'runtime';
 }
 
+export function mergeHealthEvents(
+  current: Partial<Record<RuntimeHealthEventDto['feature'], RuntimeHealthEventDto>>,
+  incoming: RuntimeHealthEventDto[],
+) {
+  const merged = { ...current };
+  for (const event of incoming) {
+    const existing = merged[event.feature];
+    if (!existing || event.changed_at_ms >= existing.changed_at_ms) {
+      merged[event.feature] = event;
+    }
+  }
+  return merged;
+}
+
 export function RuntimeHealthPanel() {
   const [health, setHealth] = useState<Partial<Record<RuntimeHealthEventDto['feature'], RuntimeHealthEventDto>>>({});
   const [diagnostics, setDiagnostics] = useState<RuntimeDiagnosticsDto | null>(null);
 
   useEffect(() => {
-    void invoke<RuntimeDiagnosticsDto>('get_runtime_diagnostics').then(setDiagnostics).catch(() => undefined);
     let active = true;
+    const refresh = () => void invoke<RuntimeDiagnosticsDto>('get_runtime_diagnostics')
+      .then((value) => {
+        if (!active || !value) return;
+        setDiagnostics(value);
+        setHealth((current) => mergeHealthEvents(current, value.health ?? []));
+      })
+      .catch(() => undefined);
+    refresh();
+    const poll = window.setInterval(refresh, 5_000);
     let dispose: (() => void) | undefined;
     void Promise.resolve()
       .then(() => listen<RuntimeHealthEventDto>('runtime-health', ({ payload }) => {
-        if (active) setHealth((current) => ({ ...current, [payload.feature]: payload }));
+        if (active) setHealth((current) => mergeHealthEvents(current, [payload]));
       }))
       .then((unlisten) => {
         if (active) dispose = unlisten;
@@ -37,6 +59,7 @@ export function RuntimeHealthPanel() {
       .catch(() => undefined);
     return () => {
       active = false;
+      window.clearInterval(poll);
       dispose?.();
     };
   }, []);
@@ -50,8 +73,9 @@ export function RuntimeHealthPanel() {
           <li key={event.feature}>
             <strong>{LABELS[event.feature]}</strong>{' '}
             <span>{ownership(event)}</span>{' '}
-            <span>{event.attempts >= 8 ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>
-            {event.circuit_open && (event.ownership === 'managed' || event.feature === 'live2d') ? (
+            <span>{event.circuit_open ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>
+            {((event.circuit_open && ['language_model', 'text_to_speech', 'live2d'].includes(event.feature))
+              || (event.feature === 'live2d' && event.status === 'recovering')) ? (
               <button
                 type="button"
                 onClick={() => void invoke('rearm_runtime_feature', { feature: event.feature })}

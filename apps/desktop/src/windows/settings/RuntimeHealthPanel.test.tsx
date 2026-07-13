@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { act } from 'react';
 import { vi } from 'vitest';
-import { RuntimeHealthPanel } from './RuntimeHealthPanel';
+import { mergeHealthEvents, RuntimeHealthPanel } from './RuntimeHealthPanel';
 
 let listener: ((event: { payload: any }) => void) | undefined;
 const { invokeMock } = vi.hoisted(() => ({
@@ -45,6 +45,7 @@ test('eight attempts are shown as an open circuit', async () => {
     failure_class: 'persistent',
     last_error: 'external endpoint unavailable',
     attempts: 8,
+    circuit_open: true,
     changed_at_ms: 43,
   });
   expect(await screen.findByText(/circuit open/)).toBeInTheDocument();
@@ -81,7 +82,25 @@ test('settings rearms a circuit-open runtime feature', async () => {
     circuit_open: true,
     changed_at_ms: 45,
   });
-  expect(screen.queryByRole('button', { name: /音声合成.*再起動/ })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: /音声合成.*再起動/ })).toBeInTheDocument();
+});
+
+test('settings exposes Live2D retry after the first failed boot', async () => {
+  render(<RuntimeHealthPanel />);
+  await publish({
+    schema_version: 1,
+    feature: 'live2d',
+    status: 'recovering',
+    failure_class: 'transient',
+    last_error: 'renderer initialization failed',
+    attempts: 1,
+    ownership: 'not_applicable',
+    circuit_open: false,
+    changed_at_ms: 46,
+  });
+
+  fireEvent.click(await screen.findByRole('button', { name: 'Live2D を再起動' }));
+  expect(invokeMock).toHaveBeenCalledWith('rearm_runtime_feature', { feature: 'live2d' });
 });
 
 test('renders all bounded queue diagnostics', async () => {
@@ -94,4 +113,42 @@ test('renders all bounded queue diagnostics', async () => {
   render(<RuntimeHealthPanel />);
   expect(await screen.findByText(/chat_submit.*2 \/ 8.*dropped 1.*busy 1/)).toBeInTheDocument();
   expect(screen.getByText(/tts.*0 \/ 8.*dropped 3.*busy 2/)).toBeInTheDocument();
+});
+
+test('refreshes queue diagnostics periodically and stops after unmount', async () => {
+  vi.useFakeTimers();
+  invokeMock.mockResolvedValue({ schema_version: 1, queues: [] });
+  const view = render(<RuntimeHealthPanel />);
+  await act(async () => { await Promise.resolve(); });
+  const before = invokeMock.mock.calls.filter(([name]) => name === 'get_runtime_diagnostics').length;
+  await act(async () => { vi.advanceTimersByTime(5_000); await Promise.resolve(); });
+  expect(invokeMock.mock.calls.filter(([name]) => name === 'get_runtime_diagnostics')).toHaveLength(before + 1);
+  view.unmount();
+  vi.advanceTimersByTime(10_000);
+  expect(invokeMock.mock.calls.filter(([name]) => name === 'get_runtime_diagnostics')).toHaveLength(before + 1);
+  vi.useRealTimers();
+});
+
+test('loads current circuit state when Settings opens after the event', async () => {
+  invokeMock.mockImplementation((command) => command === 'get_runtime_diagnostics'
+    ? Promise.resolve({ schema_version: 1, queues: [], health: [{
+      schema_version: 1,
+      feature: 'language_model',
+      status: 'degraded',
+      failure_class: 'transient',
+      last_error: 'endpoint unavailable',
+      attempts: 8,
+      ownership: 'not_applicable',
+      circuit_open: true,
+      changed_at_ms: 47,
+    }] })
+    : Promise.resolve(undefined));
+  render(<RuntimeHealthPanel />);
+  expect(await screen.findByRole('button', { name: 'LLM を再起動' })).toBeInTheDocument();
+});
+
+test('older service snapshot does not overwrite a newer managed circuit event', () => {
+  const managed = { feature: 'language_model', changed_at_ms: 100, circuit_open: true } as any;
+  const service = { feature: 'language_model', changed_at_ms: 50, circuit_open: false } as any;
+  expect(mergeHealthEvents({ language_model: managed }, [service]).language_model).toBe(managed);
 });

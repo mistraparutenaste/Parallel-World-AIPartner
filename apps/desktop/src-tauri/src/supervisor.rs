@@ -11,7 +11,8 @@ use std::{
 };
 
 use pw_application::recovery::{
-    BackoffDecision, BackoffPolicy, Clock, FeatureHealthSupervisor, HealthTransition, RandomSource,
+    BackoffDecision, BackoffPolicy, Clock, FeatureHealthSupervisor, HealthTransition, HealthUpdate,
+    RandomSource,
 };
 use pw_contracts::{ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto};
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
@@ -285,6 +286,17 @@ impl ManagedProcesses {
         }
     }
 
+    #[must_use]
+    pub fn health_snapshots(&self) -> Vec<RuntimeHealthEventDto> {
+        let circuits = self.circuits.load(Ordering::Relaxed);
+        self.configs
+            .iter()
+            .filter_map(|config| {
+                managed_circuit_event(config.feature, circuits & feature_bit(config.feature) != 0)
+            })
+            .collect()
+    }
+
     /// Rearms a configured feature only when its circuit is open.
     ///
     /// # Errors
@@ -325,6 +337,24 @@ impl ManagedProcesses {
         lifecycle.handles.push(handle);
         Ok(())
     }
+}
+
+fn managed_circuit_event(
+    feature: RuntimeFeature,
+    circuit_open: bool,
+) -> Option<RuntimeHealthEventDto> {
+    if !circuit_open {
+        return None;
+    }
+    let mut health = RuntimeHealth::new(feature);
+    health.mark_degraded(
+        &RuntimeFailure::transient(FailureCode::Unavailable),
+        SystemClock.now_ms(),
+    );
+    let mut event = RuntimeHealthEventDto::from((&health, 8));
+    event.ownership = ProcessOwnershipDto::Managed;
+    event.circuit_open = true;
+    Some(event)
 }
 
 const fn feature_bit(feature: RuntimeFeature) -> u64 {
@@ -420,6 +450,19 @@ impl Default for FrontendRuntimeHealth {
     }
 }
 
+impl FrontendRuntimeHealth {
+    #[must_use]
+    pub fn snapshot(&self) -> RuntimeHealthEventDto {
+        let health = self
+            .live2d
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut event = RuntimeHealthEventDto::from((health.health(), health.attempts()));
+        event.circuit_open = health.circuit_open();
+        event
+    }
+}
+
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FrontendFailureCode {
@@ -457,6 +500,17 @@ fn emit_transition<R: tauri::Runtime>(
     }
 }
 
+fn resolve_application_rearm(
+    service: Result<HealthTransition, &'static str>,
+    managed: Result<(), &'static str>,
+) -> Result<Option<HealthTransition>, String> {
+    match (service, managed) {
+        (Ok(transition), _) => Ok(Some(transition)),
+        (Err(_), Ok(())) => Ok(None),
+        (Err(error), Err(_)) => Err(error.to_owned()),
+    }
+}
+
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 /// Records a safe typed `Live2D` failure and emits the resulting health transition.
@@ -474,12 +528,15 @@ pub fn report_runtime_failure<R: tauri::Runtime>(
         .live2d
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let failed = supervisor.record_failure(RuntimeFailure::transient(code.domain()));
-    let transition = HealthTransition::Changed {
-        health: failed.health,
-        attempts: failed.attempts,
+    let transition = match supervisor.record_failure(RuntimeFailure::transient(code.domain())) {
+        HealthUpdate::Changed {
+            health, attempts, ..
+        } => HealthTransition::Changed { health, attempts },
+        HealthUpdate::Unchanged { .. } => HealthTransition::Unchanged,
     };
     emit_transition(&app, transition, supervisor.circuit_open());
+    drop(supervisor);
+    crate::commands::character::apply_live2d_window_mode(&mut &app, false)?;
     Ok(())
 }
 
@@ -501,6 +558,8 @@ pub fn report_runtime_success<R: tauri::Runtime>(
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let transition = supervisor.record_success();
     emit_transition(&app, transition, supervisor.circuit_open());
+    drop(supervisor);
+    crate::commands::character::apply_live2d_window_mode(&mut &app, true)?;
     Ok(())
 }
 
@@ -515,21 +574,37 @@ pub fn rearm_runtime_feature<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     processes: tauri::State<'_, ManagedProcesses>,
     health: tauri::State<'_, FrontendRuntimeHealth>,
+    chat: tauri::State<'_, crate::chat::ChatService>,
+    tts: tauri::State<'_, crate::tts::TtsService>,
 ) -> Result<(), String> {
     match feature {
-        pw_contracts::RuntimeFeatureDto::LanguageModel => processes
-            .rearm(RuntimeFeature::LanguageModel)
-            .map_err(str::to_owned),
-        pw_contracts::RuntimeFeatureDto::TextToSpeech => processes
-            .rearm(RuntimeFeature::TextToSpeech)
-            .map_err(str::to_owned),
+        pw_contracts::RuntimeFeatureDto::LanguageModel => {
+            if let Some(transition) = resolve_application_rearm(
+                chat.rearm(),
+                processes.rearm(RuntimeFeature::LanguageModel),
+            )? {
+                emit_transition(&app, transition, false);
+            }
+            Ok(())
+        }
+        pw_contracts::RuntimeFeatureDto::TextToSpeech => {
+            if let Some(transition) = resolve_application_rearm(
+                tts.rearm(),
+                processes.rearm(RuntimeFeature::TextToSpeech),
+            )? {
+                emit_transition(&app, transition, false);
+            }
+            Ok(())
+        }
         pw_contracts::RuntimeFeatureDto::Live2D => {
             let mut supervisor = health
                 .live2d
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let transition = supervisor.rearm().map_err(str::to_owned)?;
+            let transition = supervisor.retry_now().map_err(str::to_owned)?;
             emit_transition(&app, transition, supervisor.circuit_open());
+            drop(supervisor);
+            crate::commands::character::apply_live2d_window_mode(&mut &app, true)?;
             Ok(())
         }
         _ => Err("feature cannot be rearmed from Settings".into()),
@@ -870,6 +945,26 @@ mod tests {
             HealthTransition::Changed { .. }
         ));
         assert_eq!(health.record_success(), HealthTransition::Unchanged);
+    }
+
+    #[test]
+    fn application_rearm_preserves_the_service_transition_for_runtime_health() {
+        let health = RuntimeHealth::new(RuntimeFeature::LanguageModel);
+        let transition = HealthTransition::Changed {
+            health,
+            attempts: 0,
+        };
+        let selected = super::resolve_application_rearm(Ok(transition.clone()), Err("external"))
+            .expect("application-owned circuit may be rearmed without a managed process");
+        assert_eq!(selected, Some(transition));
+    }
+
+    #[test]
+    fn managed_open_circuit_is_available_to_late_settings_snapshots() {
+        let event = super::managed_circuit_event(RuntimeFeature::LanguageModel, true).unwrap();
+        assert_eq!(event.ownership, ProcessOwnershipDto::Managed);
+        assert!(event.circuit_open);
+        assert_eq!(event.attempts, 8);
     }
 
     #[test]

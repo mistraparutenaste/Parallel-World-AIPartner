@@ -17,6 +17,7 @@ fn runtime_diagnostics_exposes_bounded_queue_metrics() {
     let dto = RuntimeDiagnosticsDto {
         schema_version: SCHEMA_VERSION,
         queues: vec![queue.clone()],
+        health: Vec::new(),
     };
     assert_eq!(dto.queues, vec![queue]);
 }

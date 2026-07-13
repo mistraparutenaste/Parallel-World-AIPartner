@@ -19,6 +19,7 @@ pub struct QueueMetricsDto {
 pub struct RuntimeDiagnosticsDto {
     pub schema_version: u16,
     pub queues: Vec<QueueMetricsDto>,
+    pub health: Vec<RuntimeHealthEventDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

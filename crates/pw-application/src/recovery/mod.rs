@@ -41,10 +41,15 @@ impl<T: Clock + ?Sized> Clock for &T {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FailureTransition {
-    pub health: RuntimeHealth,
-    pub attempts: u8,
-    pub decision: BackoffDecision,
+pub enum HealthUpdate {
+    Changed {
+        health: RuntimeHealth,
+        attempts: u8,
+        decision: BackoffDecision,
+    },
+    Unchanged {
+        decision: BackoffDecision,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +63,7 @@ pub struct FeatureHealthSupervisor<C, R> {
     policy: BackoffPolicy<C, R>,
     health: RuntimeHealth,
     circuit_open: bool,
+    next_retry_at_ms: Option<u64>,
 }
 
 impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
@@ -66,19 +72,31 @@ impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
             policy: BackoffPolicy::new(clock, rng),
             health: RuntimeHealth::new(feature),
             circuit_open: false,
+            next_retry_at_ms: None,
         }
     }
 
-    pub fn record_failure(&mut self, failure: RuntimeFailure) -> FailureTransition {
+    pub fn record_failure(&mut self, failure: RuntimeFailure) -> HealthUpdate {
+        if self.circuit_open {
+            return HealthUpdate::Unchanged {
+                decision: BackoffDecision::CircuitOpen,
+            };
+        }
         let decision = self.policy.record_failure();
         let now = self.policy.now_ms();
         if decision == BackoffDecision::CircuitOpen {
             self.circuit_open = true;
+            self.next_retry_at_ms = None;
             self.health.mark_degraded(&failure, now);
         } else {
+            let BackoffDecision::RetryAfter(delay) = decision else {
+                unreachable!()
+            };
+            self.next_retry_at_ms =
+                Some(now.saturating_add(u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)));
             self.health.mark_failed(&failure, now);
         }
-        FailureTransition {
+        HealthUpdate::Changed {
             health: self.health.clone(),
             attempts: self.policy.attempts(),
             decision,
@@ -88,6 +106,7 @@ impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
     pub fn record_success(&mut self) -> HealthTransition {
         let was_healthy = self.health.status() == pw_domain::runtime_health::HealthStatus::Healthy;
         self.policy.record_healthy();
+        self.next_retry_at_ms = None;
         let reset = self.policy.reset_if_stable();
         if was_healthy && !reset {
             return HealthTransition::Unchanged;
@@ -108,11 +127,36 @@ impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
             return Err("feature circuit is not open");
         }
         self.circuit_open = false;
+        self.next_retry_at_ms = None;
         self.policy.rearm();
         self.health.mark_starting(self.policy.now_ms());
         Ok(HealthTransition::Changed {
             health: self.health.clone(),
             attempts: 0,
+        })
+    }
+
+    /// Explicitly retries a failed frontend runtime before its circuit opens.
+    /// Automatic callers must continue to respect [`Self::can_attempt`].
+    ///
+    /// # Errors
+    /// Returns an error while the feature is already healthy or starting.
+    pub fn retry_now(&mut self) -> Result<HealthTransition, &'static str> {
+        if self.circuit_open {
+            return self.rearm();
+        }
+        if matches!(
+            self.health.status(),
+            pw_domain::runtime_health::HealthStatus::Healthy
+                | pw_domain::runtime_health::HealthStatus::Starting
+        ) {
+            return Err("feature is not waiting for retry");
+        }
+        self.next_retry_at_ms = None;
+        self.health.mark_starting(self.policy.now_ms());
+        Ok(HealthTransition::Changed {
+            health: self.health.clone(),
+            attempts: self.policy.attempts(),
         })
     }
 
@@ -127,6 +171,17 @@ impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
     #[must_use]
     pub const fn circuit_open(&self) -> bool {
         self.circuit_open
+    }
+    #[must_use]
+    pub fn can_attempt(&self) -> bool {
+        !self.circuit_open
+            && self
+                .next_retry_at_ms
+                .is_none_or(|deadline| self.policy.now_ms() >= deadline)
+    }
+    #[must_use]
+    pub const fn next_retry_at_ms(&self) -> Option<u64> {
+        self.next_retry_at_ms
     }
 }
 pub trait RandomSource {

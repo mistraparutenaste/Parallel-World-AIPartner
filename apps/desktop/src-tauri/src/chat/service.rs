@@ -45,6 +45,8 @@ const DEFAULT_CONVERSATION_ID: &str = "default";
 const SUBMIT_QUEUE_CAPACITY: usize = 8;
 const CONVERSATION_QUEUE_CAPACITY: usize = 8;
 const ENRICHMENT_QUEUE_CAPACITY: usize = 1;
+const ENRICHMENT_PENDING_CAPACITY: usize = 64;
+const ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
 fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
     let memories = memory
@@ -149,7 +151,7 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 #[derive(Clone)]
 struct EnrichmentSender {
     wake: SyncSender<()>,
-    pending: Arc<Mutex<Option<String>>>,
+    pending: Arc<Mutex<Option<Vec<String>>>>,
     metrics: Arc<QueueMetrics>,
 }
 
@@ -159,21 +161,35 @@ impl EnrichmentSender {
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if pending.replace(text).is_some() {
+        let batch = pending.get_or_insert_with(Vec::new);
+        if batch.iter().any(|existing| existing == &text) {
             self.metrics.coalesced();
+            return Ok(());
+        } else if batch.len() < ENRICHMENT_PENDING_CAPACITY {
+            batch.push(text);
+            self.metrics.enqueued();
+        } else {
+            self.metrics.dropped();
+            return Err(());
         }
         drop(pending);
-        self.metrics.enqueued();
         match self.wake.try_send(()) {
             Ok(()) => Ok(()),
             Err(TrySendError::Full(())) => {
-                self.metrics.dequeued();
                 self.metrics.busy();
                 Ok(())
             }
             Err(TrySendError::Disconnected(())) => {
-                self.metrics.dequeued();
-                self.metrics.dropped();
+                let discarded = self
+                    .pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                    .map_or(0, |batch| batch.len());
+                for _ in 0..discarded {
+                    self.metrics.dequeued();
+                    self.metrics.dropped();
+                }
                 Err(())
             }
         }
@@ -184,20 +200,22 @@ impl EnrichmentSender {
 fn run_enrichment(
     database_path: &Path,
     rx: Receiver<()>,
-    pending: Arc<Mutex<Option<String>>>,
+    pending: Arc<Mutex<Option<Vec<String>>>>,
     metrics: Arc<QueueMetrics>,
 ) {
     while rx.recv().is_ok() {
-        metrics.dequeued();
-        let Some(user_text) = pending
+        let Some(user_texts) = pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             continue;
         };
-        if let Err(error) = process_enrichment_job(database_path, &user_text) {
-            tracing::warn!(%error, "memory enrichment job failed; worker remains available");
+        for user_text in user_texts {
+            metrics.dequeued();
+            if let Err(error) = process_enrichment_job(database_path, &user_text) {
+                tracing::warn!(%error, "memory enrichment job failed; worker remains available");
+            }
         }
     }
 }
@@ -433,27 +451,19 @@ impl Worker {
         // Dropping the sole submit sender disconnects the bounded queue even when full.
         // The context worker then drops its conversation sender, cascading shutdown.
         drop(self.tx);
-        let result = join_with_deadline(self.context_thread.take(), "context");
-        let conversation = join_with_deadline(self.thread.take(), "conversation");
-        let enrichment = join_with_deadline(self.enrichment_thread.take(), "enrichment");
+        let result = join_worker(self.context_thread.take(), "context");
+        let conversation = join_worker(self.thread.take(), "conversation");
+        let enrichment = join_worker(self.enrichment_thread.take(), "enrichment");
         result.and(conversation).and(enrichment)
     }
 }
 
-fn join_with_deadline(
-    thread: Option<std::thread::JoinHandle<()>>,
-    name: &str,
-) -> Result<(), String> {
+fn join_worker(thread: Option<std::thread::JoinHandle<()>>, name: &str) -> Result<(), String> {
     let Some(thread) = thread else {
         return Ok(());
     };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while !thread.is_finished() && std::time::Instant::now() < deadline {
-        std::thread::yield_now();
-    }
-    if !thread.is_finished() {
-        return Err(format!("{name} worker did not stop before deadline"));
-    }
+    // Adapter I/O has a finite total timeout. Always join so a reset cannot
+    // leave stale workers mutating history after the replacement starts.
     thread
         .join()
         .map_err(|_| format!("{name} worker panicked during shutdown"))
@@ -492,7 +502,7 @@ impl Default for ChatService {
             )),
             enrichment_metrics: Arc::new(QueueMetrics::new(
                 "chat_enrichment",
-                ENRICHMENT_QUEUE_CAPACITY,
+                ENRICHMENT_PENDING_CAPACITY,
             )),
         }
     }
@@ -511,6 +521,26 @@ fn fingerprint(settings: &LlmSettingsDto) -> String {
 }
 
 impl ChatService {
+    /// Clears the application-owned LLM circuit.
+    ///
+    /// # Errors
+    /// Returns an error when the circuit is not open.
+    pub fn rearm(&self) -> Result<HealthTransition, &'static str> {
+        self.health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rearm()
+    }
+    #[must_use]
+    pub fn health_snapshot(&self) -> RuntimeHealthEventDto {
+        let health = self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut event = RuntimeHealthEventDto::from((health.health(), health.attempts()));
+        event.circuit_open = health.circuit_open();
+        event
+    }
     pub fn queue_metrics(&self) -> Vec<pw_contracts::QueueMetricsDto> {
         [
             &self.submit_metrics,
@@ -590,6 +620,14 @@ impl ChatService {
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .can_attempt()
+        {
+            return Err("language model is recovering; retry after the backoff period".to_owned());
+        }
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_llm_settings(&layout);
         let wanted = fingerprint(&settings);
@@ -628,7 +666,7 @@ impl ChatService {
             base_url: settings.base_url.clone(),
             model: settings.model.clone(),
             allow_remote: settings.allow_remote,
-            ..LlmClientConfig::default()
+            timeout: ADAPTER_TIMEOUT,
         })
         .map_err(|error| error.to_string())?;
 
@@ -776,10 +814,13 @@ impl<R: Runtime> TauriConversationEvents<R> {
         let transition = if healthy {
             health.record_success()
         } else {
-            let failed = health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable));
-            HealthTransition::Changed {
-                health: failed.health,
-                attempts: failed.attempts,
+            match health.record_failure(RuntimeFailure::transient(FailureCode::Unavailable)) {
+                pw_application::recovery::HealthUpdate::Changed {
+                    health, attempts, ..
+                } => HealthTransition::Changed { health, attempts },
+                pw_application::recovery::HealthUpdate::Unchanged { .. } => {
+                    HealthTransition::Unchanged
+                }
             }
         };
         if let HealthTransition::Changed { health, attempts } = transition {
@@ -888,6 +929,11 @@ mod tests {
     use pw_storage::{Database, SqliteConversationHistory};
 
     use super::*;
+
+    #[test]
+    fn production_llm_timeout_allows_local_streaming_inference() {
+        assert!(ADAPTER_TIMEOUT >= std::time::Duration::from_secs(30));
+    }
 
     #[test]
     fn destructive_operation_excludes_competing_operation_until_commit_boundary() {
@@ -1084,7 +1130,7 @@ mod tests {
         }
         drop(history);
         let (tx, rx) = sync_channel(8);
-        let pending = Arc::new(Mutex::new(Some("私は猫が好きです".to_owned())));
+        let pending = Arc::new(Mutex::new(Some(vec!["私は猫が好きです".to_owned()])));
         let worker_pending = Arc::clone(&pending);
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
@@ -1466,7 +1512,7 @@ mod tests {
     }
 
     #[test]
-    fn enrichment_coalescing_replaces_pending_text_with_latest() {
+    fn enrichment_coalescing_keeps_all_distinct_pending_facts() {
         let (wake, rx) = sync_channel(1);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
@@ -1477,11 +1523,36 @@ mod tests {
         sender.replace_latest("old".into()).unwrap();
         sender.replace_latest("latest".into()).unwrap();
         rx.recv().unwrap();
-        assert_eq!(pending.lock().unwrap().take().as_deref(), Some("latest"));
+        assert_eq!(
+            pending.lock().unwrap().take(),
+            Some(vec!["old".to_owned(), "latest".to_owned()])
+        );
         assert!(
             rx.try_recv().is_err(),
             "one wake coalesces multiple updates"
         );
+    }
+
+    #[test]
+    fn enrichment_metrics_track_the_bounded_pending_work_not_the_wake_token() {
+        let (wake, _rx) = sync_channel(1);
+        let metrics = Arc::new(QueueMetrics::new(
+            "test_enrichment",
+            ENRICHMENT_PENDING_CAPACITY,
+        ));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::new(Mutex::new(None)),
+            metrics: Arc::clone(&metrics),
+        };
+        for index in 0..ENRICHMENT_PENDING_CAPACITY {
+            sender.replace_latest(format!("fact-{index}")).unwrap();
+        }
+        assert!(sender.replace_latest("overflow".into()).is_err());
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.depth, ENRICHMENT_PENDING_CAPACITY);
+        assert_eq!(snapshot.capacity, ENRICHMENT_PENDING_CAPACITY);
+        assert_eq!(snapshot.dropped, 1);
     }
 
     #[test]

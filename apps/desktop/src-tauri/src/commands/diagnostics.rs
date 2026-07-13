@@ -9,7 +9,11 @@ use pw_platform::{
 use std::path::Path;
 use tauri::State;
 
-use crate::{chat::ChatService, tts::TtsService};
+use crate::{
+    chat::ChatService,
+    supervisor::{FrontendRuntimeHealth, ManagedProcesses},
+    tts::TtsService,
+};
 
 #[tauri::command]
 #[must_use]
@@ -17,12 +21,22 @@ use crate::{chat::ChatService, tts::TtsService};
 pub fn get_runtime_diagnostics(
     chat: State<'_, ChatService>,
     tts: State<'_, TtsService>,
+    frontend_health: State<'_, FrontendRuntimeHealth>,
+    processes: State<'_, ManagedProcesses>,
 ) -> RuntimeDiagnosticsDto {
     let mut queues = chat.queue_metrics();
     queues.push(tts.queue_metrics());
     RuntimeDiagnosticsDto {
         schema_version: SCHEMA_VERSION,
         queues,
+        health: [
+            chat.health_snapshot(),
+            tts.health_snapshot(),
+            frontend_health.snapshot(),
+        ]
+        .into_iter()
+        .chain(processes.health_snapshots())
+        .collect(),
     }
 }
 
