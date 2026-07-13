@@ -41,6 +41,7 @@ dist/
 *.log
 *.sqlite3
 .superpowers/
+.worktrees/
 .pnpm-store/
 
 # OneDrive同期の一時ファイル
