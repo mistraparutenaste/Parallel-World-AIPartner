@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-list-conversation-history"
+description = "Enables the list_conversation_history command."
+commands.allow = ["list_conversation_history"]
+
+[[permission]]
+identifier = "deny-list-conversation-history"
+description = "Denies the list_conversation_history command."
+commands.deny = ["list_conversation_history"]

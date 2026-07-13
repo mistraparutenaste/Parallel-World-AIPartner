@@ -1,5 +1,7 @@
 import type {
   ChatMessageEventDto,
+  ConversationMessageDto,
+  ConversationHistoryDeletedEventDto,
   ConversationStateEventDto,
   TtsStateEventDto,
 } from '@parallel-world/contracts';
@@ -15,8 +17,10 @@ const STATE_LABELS: Partial<Record<ConversationStateEventDto['state'], string>> 
   };
 
 type DisplayMessage = {
+  id: string;
   role: 'user' | 'assistant';
   text: string;
+  turnId?: number;
 };
 
 /**
@@ -37,12 +41,25 @@ export function ChatWindow() {
     const stopMessages = subscribeEvent<ChatMessageEventDto>(
       'chat-message',
       (payload) => {
-        setMessages((current) => [
-          ...current,
-          { role: payload.role, text: payload.text },
-        ]);
+        setMessages((current) => {
+          const id = payload.message_id == null ? `live:${payload.turn_id}:${payload.role}` : `db:${payload.message_id}`;
+          const existing = current.findIndex((m) => m.id === id);
+          if (existing >= 0) {
+            if (payload.role !== 'assistant') return current;
+            const next = [...current]; const prior = next[existing]!; next[existing] = { ...prior, text: prior.text + payload.text }; return next;
+          }
+          return [...current, { id, turnId: payload.turn_id, role: payload.role, text: payload.text }];
+        });
       },
     );
+    invoke<ConversationMessageDto[]>('list_conversation_history').then((history) => {
+      if (!Array.isArray(history)) return;
+      setMessages((current) => {
+        const liveTurns = new Set(current.filter((m) => m.turnId != null).map((m) => `${m.turnId}:${m.role}`));
+        const durable = history.filter((m) => !liveTurns.has(`${m.turn_id}:${m.role}`)).map((m) => ({ id: `db:${m.message_id}`, turnId: m.turn_id ?? undefined, role: m.role, text: m.text }));
+        return [...durable, ...current];
+      });
+    }).catch((problem: unknown) => setError(`履歴を読み込めませんでした: ${String(problem)}`));
     const stopState = subscribeEvent<ConversationStateEventDto>(
       'conversation-state',
       (payload) => {
@@ -61,10 +78,12 @@ export function ChatWindow() {
         setError(`音声合成に接続できません: ${payload.message ?? ''}`);
       }
     });
+    const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>('conversation-history-deleted', () => setMessages([]));
     return () => {
       stopMessages();
       stopState();
       stopTts();
+      stopDeleted();
     };
   }, []);
 
@@ -91,10 +110,8 @@ export function ChatWindow() {
           <p>まだメッセージはありません。</p>
         ) : (
           <ul>
-            {messages.map((message, index) => (
-              // History is append-only, so the index is stable.
-              // eslint-disable-next-line react/no-array-index-key
-              <li key={index} data-role={message.role}>
+            {messages.map((message) => (
+              <li key={message.id} data-role={message.role}>
                 {message.role === 'user' ? 'あなた: ' : ''}
                 {message.text}
               </li>

@@ -24,8 +24,30 @@ pub struct ChatMessageEventDto {
     /// (JSON payloads carry plain numbers, so the TS type is number.)
     #[ts(type = "number")]
     pub turn_id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[ts(type = "number")]
+    pub message_id: Option<i64>,
     pub role: ChatRoleDto,
     pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "ConversationMessageDto.ts")]
+pub struct ConversationMessageDto {
+    pub schema_version: u16,
+    #[ts(type = "number")]
+    pub message_id: i64,
+    #[ts(type = "number")]
+    pub turn_id: Option<u64>,
+    pub role: ChatRoleDto,
+    pub text: String,
+    pub created_at: i64,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "ConversationHistoryDeletedEventDto.ts")]
+pub struct ConversationHistoryDeletedEventDto {
+    pub schema_version: u16,
 }
 
 /// `conversation-state` event payload.
@@ -70,6 +92,7 @@ mod tests {
         let value = ChatMessageEventDto {
             schema_version: SCHEMA_VERSION,
             turn_id: 3,
+            message_id: None,
             role: ChatRoleDto::Assistant,
             text: "こんにちは。".into(),
         };

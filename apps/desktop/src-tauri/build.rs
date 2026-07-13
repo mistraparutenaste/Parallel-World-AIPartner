@@ -1,4 +1,11 @@
 fn main() {
+    // Windows installer detection treats test executables containing "updater"
+    // as installers unless their execution level is explicit.
+    #[cfg(target_os = "windows")]
+    {
+        println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
+        println!("cargo:rustc-link-arg-tests=/MANIFESTUAC:level='asInvoker'");
+    }
     // Register the full set of exposed commands with the app manifest so
     // the ACL can reject anything that is not explicitly listed here.
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
@@ -24,6 +31,13 @@ fn main() {
             "list_user_dict",
             "add_user_dict_word",
             "delete_user_dict_word",
+            "get_runtime_diagnostics",
+            "report_frontend_error",
+            "list_diagnostic_reports",
+            "export_diagnostic_reports",
+            "get_update_state",
+            "check_for_updates",
+            "install_update",
         ]),
     ))
     .expect("failed to run tauri build script");

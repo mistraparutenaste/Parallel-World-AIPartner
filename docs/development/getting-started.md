@@ -20,12 +20,15 @@
 ## セットアップ
 
 ```powershell
+corepack enable pnpm
 corepack pnpm install
 corepack pnpm build
 cargo test --workspace
 ```
 
 `corepack pnpm build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
+
+`corepack enable pnpm` はNodeと同じinstall先へshimを作る。管理された実行環境でそこへ書けない場合は、PATH上でfallbackより前にある書込み可能directoryを `corepack enable --install-directory <directory> pnpm` へ指定する。root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`も`corepack pnpm`を呼ぶ。`pnpm --version`、`corepack pnpm --version`、`corepack pnpm -r exec pnpm --version`がすべて`11.11.0`であることを確認する。
 
 ## 開発用Live2Dモデルの配置
 
@@ -93,7 +96,10 @@ cargo test --workspace
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
+corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle
 ```
+
+Phase 6の自動障害マトリクスと実時間2時間soakは [phase6-acceptance.md](phase6-acceptance.md) にまとめている。2時間試験は短縮runで代替できない実機ゲートとして扱う。
 
 ## IPC契約の変更
 
@@ -105,3 +111,8 @@ corepack pnpm build
 
 - `misc` / `others` / `common` / `helpers` / `temp` / `utils` のような曖昧なディレクトリを作らない。
 - 1ファイルは1つの主要責務を持つ。
+# Phase 5 データ検証
+
+会話履歴・要約・長期記憶は app-data 配下の `data/parallel-world.sqlite3` に保存されます。エクスポートは SQLite Online Backup により、単独で再open可能な整合snapshotを作ります。「会話履歴と要約を削除」は会話履歴とその会話要約を削除し、長期記憶は残します。「記憶を削除」は全要約と長期記憶を削除します。
+
+Phase 5受け入れ検証とschema v1〜v6 migration検証は `cargo test --workspace` に含まれます。

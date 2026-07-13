@@ -9,4 +9,5 @@ pub mod capture;
 pub mod devices;
 pub mod frame_source;
 pub mod mix;
+pub mod recovery;
 pub mod resample;

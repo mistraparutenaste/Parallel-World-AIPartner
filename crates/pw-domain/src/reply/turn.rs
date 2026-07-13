@@ -25,10 +25,27 @@ impl TurnTracker {
         Self::default()
     }
 
+    /// Resumes allocation after a previously persisted turn id.
+    #[must_use]
+    pub const fn after(last_turn_id: u64) -> Self {
+        Self {
+            next: last_turn_id,
+            current: None,
+        }
+    }
+
     /// Starts a new turn, invalidating the previous one.
     pub fn begin_turn(&mut self) -> TurnId {
         self.next += 1;
         let id = TurnId(self.next);
+        self.current = Some(id);
+        id
+    }
+
+    /// Adopts an id reserved by durable storage.
+    pub fn begin_reserved(&mut self, value: u64) -> TurnId {
+        self.next = self.next.max(value);
+        let id = TurnId(value);
         self.current = Some(id);
         id
     }
@@ -73,5 +90,11 @@ mod tests {
         let turn = tracker.begin_turn();
         tracker.invalidate();
         assert!(!tracker.is_current(turn));
+    }
+
+    #[test]
+    fn resumes_after_the_largest_persisted_turn_id() {
+        let mut tracker = TurnTracker::after(41);
+        assert_eq!(tracker.begin_turn().value(), 42);
     }
 }

@@ -5,4 +5,5 @@
 
 pub mod conversation;
 pub mod reply;
+pub mod runtime_health;
 pub mod speech;

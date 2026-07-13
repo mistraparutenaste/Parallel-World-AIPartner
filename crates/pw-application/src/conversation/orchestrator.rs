@@ -11,6 +11,7 @@ use pw_domain::reply::{
 
 use super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 use super::prompt::PromptBuilder;
+use crate::memory::MemoryContext;
 
 /// Tuning for [`ConversationOrchestrator`].
 #[derive(Debug, Clone)]
@@ -43,14 +44,45 @@ where
     E: ConversationEvents,
 {
     pub fn new(config: OrchestratorConfig, llm: L, events: E, cancel: Arc<AtomicBool>) -> Self {
+        Self::new_with_history(config, llm, events, cancel, Vec::new())
+    }
+
+    /// Builds an orchestrator with previously confirmed messages as prompt context.
+    pub fn new_with_history(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        history: Vec<ChatMessage>,
+    ) -> Self {
+        let mut history: VecDeque<_> = history.into();
+        while history.len() > config.max_history_messages {
+            history.pop_front();
+        }
+        Self::new_with_history_after(config, llm, events, cancel, history.into(), 0)
+    }
+
+    /// Builds with restored prompt history and the largest persisted turn id.
+    pub fn new_with_history_after(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        history: Vec<ChatMessage>,
+        last_turn_id: u64,
+    ) -> Self {
+        let mut history: VecDeque<_> = history.into();
+        while history.len() > config.max_history_messages {
+            history.pop_front();
+        }
         let orchestrator = Self {
             config,
             llm,
             events,
             cancel,
-            tracker: TurnTracker::new(),
+            tracker: TurnTracker::after(last_turn_id),
             state: ConversationState::Idle,
-            history: VecDeque::new(),
+            history,
         };
         orchestrator.events.on_state(orchestrator.state);
         orchestrator
@@ -64,12 +96,40 @@ where
     /// Runs one full turn for the given user utterance.
     pub fn submit_user_text(&mut self, text: &str) -> TurnId {
         let turn = self.tracker.begin_turn();
+        self.submit_user_text_for_turn(text, turn, &MemoryContext::default())
+    }
+
+    /// Runs a turn using an id already reserved by durable storage.
+    pub fn submit_user_text_with_id(&mut self, text: &str, turn_id: u64) -> TurnId {
+        let turn = self.tracker.begin_reserved(turn_id);
+        self.submit_user_text_for_turn(text, turn, &MemoryContext::default())
+    }
+
+    pub fn submit_user_text_with_context(
+        &mut self,
+        text: &str,
+        turn_id: u64,
+        context: &MemoryContext,
+    ) -> TurnId {
+        let turn = self.tracker.begin_reserved(turn_id);
+        self.submit_user_text_for_turn(text, turn, context)
+    }
+
+    fn submit_user_text_for_turn(
+        &mut self,
+        text: &str,
+        turn: TurnId,
+        context: &MemoryContext,
+    ) -> TurnId {
         self.cancel.store(false, Ordering::Relaxed);
         self.events.on_user_message(turn, text);
         self.set_state(ConversationState::Thinking);
 
         let history: Vec<ChatMessage> = self.history.iter().cloned().collect();
-        let messages = self.config.prompt.build(&history, text);
+        let messages = self
+            .config
+            .prompt
+            .build_with_context(&history, text, context);
 
         let mut parser = ReplyParser::new();
         let mut splitter = SentenceSplitter::new();
@@ -158,7 +218,8 @@ where
         self.tracker.invalidate();
         self.events.on_cancelled(turn);
         self.set_state(ConversationState::Cancelled);
-        self.record_turn(user_text, partial);
+        let _ = partial;
+        self.record_turn(user_text, "");
         self.set_state(ConversationState::Idle);
         turn
     }
@@ -375,6 +436,87 @@ mod tests {
                 "三つ目"
             ]
         );
+    }
+
+    #[test]
+    fn seeded_history_survives_orchestrator_reconstruction() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["new reply"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new_with_history(
+            config(),
+            llm,
+            Events(Arc::new(Recording::default())),
+            Arc::new(AtomicBool::new(false)),
+            vec![
+                ChatMessage::new(super::super::ports::ChatRole::User, "saved user"),
+                ChatMessage::new(super::super::ports::ChatRole::Assistant, "saved assistant"),
+            ],
+        );
+
+        orchestrator.submit_user_text("new user");
+
+        let prompt = &prompts.lock().unwrap()[0];
+        let contents: Vec<_> = prompt
+            .iter()
+            .map(|message| message.content.as_str())
+            .collect();
+        assert_eq!(
+            contents,
+            [
+                "規則",
+                "キャラ",
+                "saved user",
+                "saved assistant",
+                "new user"
+            ]
+        );
+    }
+
+    #[test]
+    fn restored_orchestrator_continues_after_persisted_turn_id() {
+        let llm = ScriptedLlm {
+            chunks: vec!["reply"],
+            received_prompts: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new_with_history_after(
+            config(),
+            llm,
+            Events(Arc::new(Recording::default())),
+            Arc::new(AtomicBool::new(false)),
+            Vec::new(),
+            41,
+        );
+        assert_eq!(orchestrator.submit_user_text("next").value(), 42);
+    }
+
+    #[test]
+    fn cancelled_assistant_fragment_is_not_kept_in_later_prompts() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let recording = Arc::new(Recording {
+            cancel_after_sentences: Some((1, Arc::clone(&cancel))),
+            ..Recording::default()
+        });
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["partial。", "discarded。"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator =
+            ConversationOrchestrator::new(config(), llm, Events(recording), Arc::clone(&cancel));
+
+        orchestrator.submit_user_text("cancel me");
+        cancel.store(false, Ordering::Relaxed);
+        orchestrator.recover();
+        orchestrator.submit_user_text("next");
+
+        let second = &prompts.lock().unwrap()[1];
+        assert!(second.iter().all(|message| message.content != "partial。"));
     }
 
     #[test]

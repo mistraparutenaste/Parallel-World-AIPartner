@@ -2,6 +2,9 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../../shared/styles/global.css';
 import { CharacterWindow } from './CharacterWindow';
+import { installFrontendDiagnostics } from '../../shared/frontend-diagnostics';
+
+installFrontendDiagnostics();
 
 document.body.classList.add('transparent');
 

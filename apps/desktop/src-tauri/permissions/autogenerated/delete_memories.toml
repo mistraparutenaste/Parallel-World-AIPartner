@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-delete-memories"
+description = "Enables the delete_memories command."
+commands.allow = ["delete_memories"]
+
+[[permission]]
+identifier = "deny-delete-memories"
+description = "Denies the delete_memories command."
+commands.deny = ["delete_memories"]

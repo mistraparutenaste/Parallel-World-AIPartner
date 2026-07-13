@@ -64,7 +64,11 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
         [
             "allow-get-character-manifest",
             "allow-set-click-through",
-            "allow-set-speech-playback"
+            "allow-set-speech-playback",
+            "allow-report-runtime-failure",
+            "allow-report-runtime-success",
+            "allow-retry-live2d-runtime",
+            "allow-report-frontend-error"
         ]
     );
 }
@@ -78,13 +82,19 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
         [
             "allow-get-app-status",
             "allow-send-chat-message",
-            "allow-cancel-turn"
+            "allow-cancel-turn",
+            "allow-list-conversation-history",
+            "allow-report-frontend-error"
         ]
     );
     for permission in &permissions {
         assert!(
             !permission.contains("llm-settings"),
             "llm settings command leaked into chat: {permission}"
+        );
+        assert!(
+            !permission.contains("delete-") && !permission.contains("export-user-data"),
+            "data command leaked into chat: {permission}"
         );
     }
 }
@@ -105,6 +115,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-stop-listening",
             "allow-set-capture-enabled",
             "allow-get-audio-diagnostics",
+            "allow-get-runtime-diagnostics",
             "allow-get-llm-settings",
             "allow-set-llm-settings",
             "allow-get-tts-settings",
@@ -112,9 +123,77 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-list-tts-speakers",
             "allow-list-user-dict",
             "allow-add-user-dict-word",
-            "allow-delete-user-dict-word"
+            "allow-delete-user-dict-word",
+            "allow-export-user-data",
+            "allow-delete-conversation-history",
+            "allow-delete-memories",
+            "allow-rearm-runtime-feature",
+            "allow-report-frontend-error",
+            "allow-list-diagnostic-reports",
+            "allow-export-diagnostic-reports",
+            "allow-get-update-state",
+            "allow-check-for-updates",
+            "allow-install-update"
         ]
     );
+}
+
+#[test]
+fn updater_commands_are_settings_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            permissions.iter().all(|permission| {
+                !permission.contains("update-state")
+                    && !permission.contains("check-for-updates")
+                    && !permission.contains("install-update")
+            }),
+            "updater command leaked into {capability}"
+        );
+    }
+}
+
+#[test]
+fn common_runtime_rearm_is_settings_only_and_character_gets_live2d_retry_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("rearm-runtime-feature")),
+            "common runtime rearm leaked into {capability}"
+        );
+    }
+    let (_, character) = capability_permissions("character");
+    assert!(
+        character
+            .iter()
+            .any(|permission| permission == "allow-retry-live2d-runtime")
+    );
+}
+
+#[test]
+fn runtime_diagnostics_is_exposed_only_to_settings() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("get-runtime-diagnostics"))
+        );
+    }
+}
+
+#[test]
+fn crash_report_listing_and_export_are_settings_only() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("diagnostic-reports"))
+        );
+    }
 }
 
 #[test]

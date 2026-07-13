@@ -32,6 +32,13 @@ function fireMessage(payload: ChatMessageEventDto) {
 }
 
 describe('ChatWindow', () => {
+  it('clears displayed messages after durable history deletion', async () => {
+    render(<ChatWindow />);
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'user', text: '消える' });
+    expect(await screen.findByText(/消える/)).toBeInTheDocument();
+    act(() => listenHandlers.get('conversation-history-deleted')?.({ payload: { schema_version: 1 } }));
+    expect(screen.queryByText(/消える/)).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(null);
@@ -56,6 +63,37 @@ describe('ChatWindow', () => {
 
     expect(screen.getByText(/こんにちは$/)).toBeInTheDocument();
     expect(screen.getByText('やあ、こんにちは。')).toBeInTheDocument();
+  });
+
+  it('loads persisted history and deduplicates a matching live event', async () => {
+    invokeMock.mockResolvedValueOnce([{ schema_version: 1, message_id: 7, turn_id: 1, role: 'user', text: 'saved', created_at: 1 }]);
+    render(<ChatWindow />);
+    expect(await screen.findByText(/saved$/)).toBeInTheDocument();
+    fireMessage({ schema_version: 1, message_id: 7, turn_id: 1, role: 'user', text: 'saved' });
+    expect(screen.getAllByText(/saved$/)).toHaveLength(1);
+  });
+
+  it('keeps identical text from different turns', async () => {
+    invokeMock.mockResolvedValueOnce([]);
+    render(<ChatWindow />); await act(async () => {});
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'user', text: 'same' });
+    fireMessage({ schema_version: 1, turn_id: 2, role: 'user', text: 'same' });
+    expect(screen.getAllByText(/same$/)).toHaveLength(2);
+  });
+
+  it('combines assistant sentence events for one turn', async () => {
+    invokeMock.mockResolvedValueOnce([]);
+    render(<ChatWindow />); await act(async () => {});
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'assistant', text: 'one' });
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'assistant', text: 'two' });
+    expect(screen.getByText('onetwo')).toBeInTheDocument();
+  });
+
+  it('shows history load failure as a nonfatal alert', async () => {
+    invokeMock.mockRejectedValueOnce(new Error('sqlite unavailable'));
+    render(<ChatWindow />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('sqlite unavailable');
+    expect(screen.getByLabelText('メッセージ')).toBeEnabled();
   });
 
   it('sends the draft through send_chat_message', async () => {

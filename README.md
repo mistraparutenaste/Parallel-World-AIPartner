@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="assets/branding/logo.png" width="480" alt="Parallel World">
+</p>
+
 # Parallel World
+
+> Phase 0〜6は実装済み・実機soakゲート待ち。Phase 6の自動受け入れ検証は完了し、実時間2時間soakのみ残っています。
 
 Live2Dキャラクターをデスクトップに常駐させ、音声またはテキストで会話できるローカル優先のAIパートナーアプリケーション。
 
@@ -10,11 +16,11 @@ Phase 0（アプリケーション基盤）実装済み。
 | --- | --- | --- |
 | 0 | workspace、3ウィンドウ、型付きIPC、Capability、ログ、CI | 実装済み |
 | 1 | Live2D表示 | 実装済み |
-| 2 | マイク入力、VAD、STT | 実装済み（2時間安定性試験はPhase 6で実施） |
-| 3 | LLM、会話状態機械 | 未着手 |
-| 4 | TTS、リップシンク | 未着手 |
-| 5 | 履歴、記憶（SQLite） | 未着手 |
-| 6 | 障害処理、縮退、安定性 | 未着手 |
+| 2 | マイク入力、VAD、STT | 実装済み |
+| 3 | LLM、会話状態機械 | 実装済み |
+| 4 | TTS、リップシンク | 実装済み |
+| 5 | 履歴、記憶（SQLite） | 実装済み |
+| 6 | 障害処理、縮退、安定性 | 実装済み・実機soakゲート待ち（2時間） |
 | 7 | installer、自動更新、配布 | 未着手 |
 
 ## アーキテクチャ
@@ -40,6 +46,8 @@ corepack pnpm install
 cargo test --workspace
 corepack pnpm --filter @parallel-world/desktop tauri dev
 ```
+
+Phase 6の障害マトリクスと長時間試験は [Phase 6受け入れ検証](docs/development/phase6-acceptance.md) を参照。
 
 IPC契約を変更した場合は再生成する。
 

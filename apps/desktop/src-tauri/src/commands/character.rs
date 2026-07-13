@@ -20,6 +20,45 @@ pub struct CharacterState {
     manifest: Mutex<Option<CharacterManifest>>,
 }
 
+pub(crate) trait Live2dWindows {
+    fn show_chat(&mut self) -> Result<(), String>;
+    fn hide_character(&mut self) -> Result<(), String>;
+    fn show_character(&mut self) -> Result<(), String>;
+}
+
+impl<R: Runtime> Live2dWindows for &AppHandle<R> {
+    fn show_chat(&mut self) -> Result<(), String> {
+        self.get_webview_window("chat")
+            .ok_or_else(|| "chat window is not available".to_owned())?
+            .show()
+            .map_err(|error| error.to_string())
+    }
+    fn hide_character(&mut self) -> Result<(), String> {
+        self.get_webview_window("character")
+            .ok_or_else(|| "character window is not available".to_owned())?
+            .hide()
+            .map_err(|error| error.to_string())
+    }
+    fn show_character(&mut self) -> Result<(), String> {
+        self.get_webview_window("character")
+            .ok_or_else(|| "character window is not available".to_owned())?
+            .show()
+            .map_err(|error| error.to_string())
+    }
+}
+
+pub(crate) fn apply_live2d_window_mode(
+    windows: &mut impl Live2dWindows,
+    available: bool,
+) -> Result<(), String> {
+    if available {
+        windows.show_character()
+    } else {
+        windows.show_chat()?;
+        windows.hide_character()
+    }
+}
+
 impl CharacterState {
     /// Expression and motion-group names of the loaded model, when a
     /// manifest has been fetched.
@@ -188,6 +227,45 @@ mod tests {
     use super::{load_manifest, to_dto, validate_expression, validate_motion_group};
     use crate::character::CharacterManifest;
     use pw_platform::paths::AppDataLayout;
+
+    #[derive(Default)]
+    struct FakeWindows {
+        chat_visible: bool,
+        character_visible: bool,
+    }
+
+    impl super::Live2dWindows for FakeWindows {
+        fn show_chat(&mut self) -> Result<(), String> {
+            self.chat_visible = true;
+            Ok(())
+        }
+        fn hide_character(&mut self) -> Result<(), String> {
+            self.character_visible = false;
+            Ok(())
+        }
+        fn show_character(&mut self) -> Result<(), String> {
+            self.character_visible = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn live2d_failure_shows_normal_chat_and_hides_character_surface() {
+        let mut windows = FakeWindows {
+            character_visible: true,
+            ..Default::default()
+        };
+        super::apply_live2d_window_mode(&mut windows, false).unwrap();
+        assert!(windows.chat_visible);
+        assert!(!windows.character_visible);
+    }
+
+    #[test]
+    fn live2d_recovery_restores_character_surface() {
+        let mut windows = FakeWindows::default();
+        super::apply_live2d_window_mode(&mut windows, true).unwrap();
+        assert!(windows.character_visible);
+    }
 
     fn manifest() -> CharacterManifest {
         CharacterManifest {

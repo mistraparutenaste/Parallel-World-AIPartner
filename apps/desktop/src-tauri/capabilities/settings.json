@@ -16,6 +16,7 @@
     "allow-stop-listening",
     "allow-set-capture-enabled",
     "allow-get-audio-diagnostics",
+    "allow-get-runtime-diagnostics",
     "allow-get-llm-settings",
     "allow-set-llm-settings",
     "allow-get-tts-settings",
@@ -23,6 +24,16 @@
     "allow-list-tts-speakers",
     "allow-list-user-dict",
     "allow-add-user-dict-word",
-    "allow-delete-user-dict-word"
+    "allow-delete-user-dict-word",
+    "allow-export-user-data",
+    "allow-delete-conversation-history",
+    "allow-delete-memories",
+    "allow-rearm-runtime-feature",
+    "allow-report-frontend-error",
+    "allow-list-diagnostic-reports",
+    "allow-export-diagnostic-reports"
+    ,"allow-get-update-state"
+    ,"allow-check-for-updates"
+    ,"allow-install-update"
   ]
 }

@@ -27,6 +27,14 @@
 target/
 node_modules/
 dist/
+# ts-rs #[test] export artifacts (canonical bindings live in packages/contracts)
+/crates/pw-contracts/bindings/
+/artifacts/soak/
+/artifacts/phase7/
+/apps/desktop/src-tauri/generated/release.json
+
+# 署名秘密鍵（fixtureの署名生成に使用。public key/署名のみコミットする）
+/tools/fixtures/updater/test-private.key
 
 # Local state
 .env

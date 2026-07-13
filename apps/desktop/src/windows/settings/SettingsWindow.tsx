@@ -2,6 +2,10 @@ import { CharacterPanel } from './CharacterPanel';
 import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
 import { TtsPanel } from './TtsPanel';
+import { DataPanel } from './DataPanel';
+import { RuntimeHealthPanel } from './RuntimeHealthPanel';
+import { DiagnosticsPanel } from './DiagnosticsPanel';
+import { UpdatesPanel } from './UpdatesPanel';
 
 const SETTINGS_SECTIONS = [
   'マイク',
@@ -32,6 +36,10 @@ export function SettingsWindow() {
       <LlmPanel />
       <TtsPanel />
       <CharacterPanel />
+      <DataPanel />
+      <RuntimeHealthPanel />
+      <DiagnosticsPanel />
+      <UpdatesPanel />
     </main>
   );
 }

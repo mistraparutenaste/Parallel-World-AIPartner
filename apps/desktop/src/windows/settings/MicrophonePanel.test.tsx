@@ -1,4 +1,4 @@
-import type { AudioDeviceDto, SttStateEventDto } from '@parallel-world/contracts';
+import type { AudioDeviceDto, RuntimeHealthEventDto, SttStateEventDto } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MicrophonePanel } from './MicrophonePanel';
@@ -82,5 +82,57 @@ describe('MicrophonePanel', () => {
     expect(invokeMock).toHaveBeenCalledWith('set_capture_enabled', {
       enabled: false,
     });
+  });
+
+  it('shows audio recovery and re-enumerates devices', async () => {
+    render(<MicrophonePanel />);
+    await screen.findByRole('option', { name: 'Mic A' });
+    const payload: RuntimeHealthEventDto = {
+      schema_version: 1,
+      feature: 'audio_input',
+      status: 'recovering',
+      failure_class: 'transient',
+      last_error: null,
+      attempts: 1,
+      ownership: 'not_applicable',
+      circuit_open: false,
+      changed_at_ms: 1,
+    };
+
+    act(() => listenHandlers.get('runtime-health')?.({ payload }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('マイクを再接続しています');
+    expect(invokeMock.mock.calls.filter(([name]) => name === 'list_microphones')).toHaveLength(2);
+  });
+
+  it('keeps the preferred device and fallback warning across refreshes', async () => {
+    render(<MicrophonePanel />);
+    await screen.findByRole('option', { name: 'Mic A' });
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'wasapi:mic-a' },
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_microphones') return Promise.resolve([DEVICES[1]]);
+      return Promise.resolve(null);
+    });
+
+    act(() => listenHandlers.get('stt-device-fallback')?.({
+      payload: {
+        schema_version: 1,
+        preferred_device_id: 'wasapi:mic-a',
+        active_device_id: 'wasapi:mic-b',
+      },
+    }));
+    await act(async () => { await Promise.resolve(); });
+    act(() => listenHandlers.get('runtime-health')?.({
+      payload: {
+        schema_version: 1, feature: 'audio_input', status: 'healthy',
+        failure_class: null, last_error: null, attempts: 0,
+        ownership: 'not_applicable', circuit_open: false, changed_at_ms: 2,
+      },
+    }));
+
+    expect(screen.getByRole('combobox')).toHaveValue('wasapi:mic-a');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
   });
 });

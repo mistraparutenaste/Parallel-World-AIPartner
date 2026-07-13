@@ -6,8 +6,11 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "build": "pnpm -r build"
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "build": "corepack pnpm -r build",
+    "distribution:verify": "node --test tools/scripts/verify-distribution-config.test.mjs && node tools/scripts/verify-distribution-config.mjs --base apps/desktop/src-tauri/tauri.conf.json --overlay apps/desktop/src-tauri/tauri.windows.local.json --mode local --platform windows && node tools/scripts/verify-distribution-config.mjs --base apps/desktop/src-tauri/tauri.conf.json --overlay apps/desktop/src-tauri/tauri.macos.local.json --mode local --platform macos",
+    "bundle:windows:local": "corepack pnpm distribution:verify && corepack pnpm --filter @parallel-world/desktop tauri build --config src-tauri/tauri.windows.local.json --bundles nsis",
+    "bundle:macos:local": "corepack pnpm distribution:verify && corepack pnpm --filter @parallel-world/desktop tauri build --config src-tauri/tauri.macos.local.json --bundles app"
   }
 }

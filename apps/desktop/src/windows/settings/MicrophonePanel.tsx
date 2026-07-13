@@ -2,6 +2,8 @@ import type {
   AudioDeviceDto,
   AudioDiagnosticsDto,
   AudioLevelEventDto,
+  DeviceFallbackEventDto,
+  RuntimeHealthEventDto,
   SttStateEventDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
@@ -22,6 +24,7 @@ const PHASE_LABELS: Record<SttStateEventDto['phase'], string> = {
 export function MicrophonePanel() {
   const [devices, setDevices] = useState<AudioDeviceDto[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
+  const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
   const [phase, setPhase] = useState<SttStateEventDto['phase']>('stopped');
   const [message, setMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
@@ -30,16 +33,25 @@ export function MicrophonePanel() {
     null,
   );
   const phaseRef = useRef(phase);
+  const preferredDeviceRef = useRef(selectedDevice);
   phaseRef.current = phase;
+  preferredDeviceRef.current = selectedDevice;
 
   useEffect(() => {
     let disposed = false;
 
-    invoke<AudioDeviceDto[]>('list_microphones')
+    const refreshDevices = () => invoke<AudioDeviceDto[]>('list_microphones')
       .then((list) => {
         if (!disposed) {
           setDevices(list);
-          setSelectedDevice(list.find((d) => d.is_default)?.id ?? '');
+          const preferred = preferredDeviceRef.current;
+          if (preferred === '') {
+            const initial = list.find((d) => d.is_default)?.id ?? '';
+            preferredDeviceRef.current = initial;
+            setSelectedDevice(initial);
+          } else if (list.some((device) => device.id === preferred)) {
+            setFallbackMessage(null);
+          }
         }
       })
       .catch((error: unknown) => {
@@ -47,6 +59,7 @@ export function MicrophonePanel() {
           setMessage(`マイクを列挙できません: ${String(error)}`);
         }
       });
+    void refreshDevices();
 
     const stopState = subscribeEvent<SttStateEventDto>('stt-state', (payload) => {
       setPhase(payload.phase);
@@ -54,6 +67,22 @@ export function MicrophonePanel() {
     });
     const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
       setLevel(payload.rms);
+    });
+    const stopHealth = subscribeEvent<RuntimeHealthEventDto>('runtime-health', (payload) => {
+      if (payload.feature !== 'audio_input') return;
+      if (payload.status === 'recovering') {
+        setMessage('マイクを再接続しています…');
+        void refreshDevices();
+      } else if (payload.status === 'degraded') {
+        setMessage(payload.last_error ?? '選択したマイクが見つからないため既定のマイクを使用します。');
+        void refreshDevices();
+      } else if (payload.status === 'healthy') {
+        setMessage(null);
+      }
+    });
+    const stopFallback = subscribeEvent<DeviceFallbackEventDto>('stt-device-fallback', (payload) => {
+      setFallbackMessage(`選択したマイクが見つからないため、既定のマイク（${payload.active_device_id ?? '自動選択'}）を使用しています。`);
+      void refreshDevices();
     });
 
     const timer = setInterval(() => {
@@ -73,6 +102,8 @@ export function MicrophonePanel() {
       clearInterval(timer);
       stopState();
       stopLevel();
+      stopHealth();
+      stopFallback();
     };
   }, []);
 
@@ -97,14 +128,21 @@ export function MicrophonePanel() {
   return (
     <section aria-label="マイク設定">
       <h2>マイク</h2>
-      {message !== null && <p role="alert">{message}</p>}
+      {(fallbackMessage ?? message) !== null && <p role="alert">{fallbackMessage ?? message}</p>}
       <div>
         <label htmlFor="microphone-select">入力デバイス</label>
         <select
           id="microphone-select"
           value={selectedDevice}
-          onChange={(event) => setSelectedDevice(event.target.value)}
+          onChange={(event) => {
+            preferredDeviceRef.current = event.target.value;
+            setSelectedDevice(event.target.value);
+            setFallbackMessage(null);
+          }}
         >
+          {selectedDevice !== '' && !devices.some((device) => device.id === selectedDevice) && (
+            <option value={selectedDevice}>選択したデバイス（接続待ち）</option>
+          )}
           {devices.map((device) => (
             <option key={device.id} value={device.id}>
               {device.name}
@@ -145,6 +183,8 @@ export function MicrophonePanel() {
             <li>採用: {diagnostics.transcripts_accepted}</li>
             <li>棄却: {diagnostics.transcripts_rejected}</li>
             <li>ドロップサンプル数: {diagnostics.dropped_samples}</li>
+            <li>障害通知キュー: {diagnostics.failure_queue_depth}</li>
+            <li>破棄された障害通知: {diagnostics.failure_queue_dropped}</li>
           </ul>
         </details>
       )}

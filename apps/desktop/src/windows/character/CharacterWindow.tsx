@@ -2,6 +2,7 @@ import type {
   CharacterCursorEventDto,
   CharacterManifestDto,
   ConversationStateDto,
+  RuntimeHealthEventDto,
   SpeechAudioEventDto,
   SpeechStopEventDto,
 } from '@parallel-world/contracts';
@@ -16,6 +17,7 @@ import { useEffect, useRef, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
 import { StatusBadge } from '../../shared/components/StatusBadge';
 import { createModelSource } from './model-source';
+import { createLive2DFailureReporter, handleLive2DRetry, reportLive2DSuccess, retryLive2D } from './live2d-health';
 
 const SHADER_PATH = '/live2d/shaders/';
 
@@ -43,6 +45,7 @@ export function CharacterWindow() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<Live2DControllerState>('idle');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryGeneration, setRetryGeneration] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -53,6 +56,16 @@ export function CharacterWindow() {
     let controller: Live2DController | null = null;
     let player: SpeechAudioPlayer | null = null;
     const unlisteners: Array<() => void> = [];
+    const reportFailureOnce = createLive2DFailureReporter();
+    unlisteners.push(subscribeEvent<RuntimeHealthEventDto>('runtime-health', (event) => {
+      if (event.feature === 'live2d' && event.status === 'starting') {
+        handleLive2DRetry(() => {
+          setLoadError(null);
+          setState('idle');
+          setRetryGeneration((generation) => generation + 1);
+        });
+      }
+    }));
 
     const resize = () => {
       controller?.resize(
@@ -66,6 +79,7 @@ export function CharacterWindow() {
       if (!('Live2DCubismCore' in globalThis)) {
         setLoadError('Cubism Core script is not loaded');
         setState('unavailable');
+        reportFailureOnce('core_missing');
         return;
       }
       const { CubismFrameworkRuntime } = await import(
@@ -76,7 +90,11 @@ export function CharacterWindow() {
       }
       const instance = new Live2DController(
         new CubismFrameworkRuntime({ shaderPath: SHADER_PATH }),
-        setState,
+        (nextState) => {
+          setState(nextState);
+          if (nextState === 'model-loaded') void reportLive2DSuccess();
+          if (nextState === 'unavailable') reportFailureOnce('renderer_initialization_failed');
+        },
       );
       controller = instance;
       await instance.attach(canvas);
@@ -98,6 +116,7 @@ export function CharacterWindow() {
         console.error('failed to load the character model', error);
         setLoadError(String(error));
         setState('unavailable');
+        reportFailureOnce('model_load_failed');
         return;
       }
       const stopExpression = subscribeEvent<string>(
@@ -172,7 +191,12 @@ export function CharacterWindow() {
         unlisteners.push(stopExpression, stopMotion, stopAudio, stopSpeech, stopCursor);
       }
     };
-    void boot();
+    void boot().catch((error: unknown) => {
+      console.error('failed to initialize Live2D', error);
+      setLoadError(String(error));
+      setState('unavailable');
+      reportFailureOnce('renderer_initialization_failed');
+    });
 
     window.addEventListener('resize', resize);
     const observer =
@@ -189,7 +213,7 @@ export function CharacterWindow() {
       player?.dispose();
       controller?.dispose();
     };
-  }, []);
+  }, [retryGeneration]);
 
   return (
     <main aria-label="キャラクター">
@@ -198,11 +222,23 @@ export function CharacterWindow() {
         className="character-canvas"
         data-tauri-drag-region
         data-live2d-surface
+        hidden={state === 'unavailable'}
       />
       <div className="character-status">
         <StatusBadge state={toBadgeState(state)} />
         {loadError !== null && (
           <p className="character-error">{loadError}</p>
+        )}
+        {state === 'unavailable' && (
+          <section aria-label="キャラクター表示フォールバック">
+            <p>キャラクター表示を利用できません。チャットは通常どおり利用できます。</p>
+            <button type="button" onClick={() => {
+              void retryLive2D().catch((error: unknown) => {
+                setLoadError(String(error));
+                setState('unavailable');
+              });
+            }}>再試行</button>
+          </section>
         )}
       </div>
     </main>

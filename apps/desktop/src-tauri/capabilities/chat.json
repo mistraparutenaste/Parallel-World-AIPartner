@@ -9,6 +9,8 @@
     "core:default",
     "allow-get-app-status",
     "allow-send-chat-message",
-    "allow-cancel-turn"
+    "allow-cancel-turn",
+    "allow-list-conversation-history",
+    "allow-report-frontend-error"
   ]
 }
