@@ -9,7 +9,6 @@ describe('DataPanel', () => {
   beforeEach(() => { invokeMock.mockReset(); invokeMock.mockResolvedValue(null); });
 
   it('does not delete history when confirmation is declined', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(false);
     render(<DataPanel />);
     fireEvent.click(screen.getByRole('button', { name: '会話履歴を削除' }));
     expect(invokeMock).not.toHaveBeenCalledWith('delete_conversation_history');
@@ -28,6 +27,13 @@ describe('DataPanel', () => {
     fireEvent.change(screen.getByLabelText('保存先'), { target: { value: 'C:/backup/user-data.sqlite3' } });
     fireEvent.click(screen.getByRole('button', { name: 'エクスポート' }));
     expect(invokeMock).toHaveBeenCalledWith('export_user_data', { destination: 'C:/backup/user-data.sqlite3', allowOverwrite: false });
+  });
+
+  it('asks for overwrite only after the backend reports an existing file', async () => {
+    invokeMock.mockRejectedValueOnce('DESTINATION_EXISTS').mockResolvedValueOnce(null);
+    vi.spyOn(window, 'confirm').mockReturnValue(true); render(<DataPanel />);
+    fireEvent.change(screen.getByLabelText('保存先'),{target:{value:'C:/backup.sqlite3'}}); fireEvent.click(screen.getByRole('button',{name:'エクスポート'}));
+    expect(await screen.findByRole('status')).toHaveTextContent('完了'); expect(invokeMock).toHaveBeenLastCalledWith('export_user_data',{destination:'C:/backup.sqlite3',allowOverwrite:true});
   });
 
   it('shows command failures as alerts', async () => {

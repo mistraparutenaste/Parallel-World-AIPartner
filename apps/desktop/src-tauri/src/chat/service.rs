@@ -407,11 +407,9 @@ impl ChatService {
 
     fn reset_locked(&self) -> Result<(), String> {
         self.cancel.store(true, Ordering::SeqCst);
-        if let Some(worker) = self.lock().take() {
-            worker.shutdown()?;
-        }
+        let result = self.lock().take().map_or(Ok(()), Worker::shutdown);
         self.cancel.store(false, Ordering::SeqCst);
-        Ok(())
+        result
     }
 
     /// Runs a destructive operation while submissions are excluded.
@@ -745,6 +743,21 @@ mod tests {
             .unwrap();
         thread.join().unwrap();
         waiter.join().unwrap();
+    }
+
+    #[test]
+    fn shutdown_failure_always_restores_cancel_flag() {
+        let service = ChatService::default();
+        let (tx, _rx) = channel();
+        *service.lock() = Some(Worker {
+            tx,
+            settings_fingerprint: String::new(),
+            thread: Some(std::thread::spawn(|| panic!("injected"))),
+            context_thread: None,
+            enrichment_thread: None,
+        });
+        assert!(service.reset().is_err());
+        assert!(!service.cancel.load(Ordering::SeqCst));
     }
 
     #[derive(Default)]

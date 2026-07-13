@@ -9,6 +9,40 @@ const CONVERSATION: &str = "chat";
 fn path(layout: &AppDataLayout) -> PathBuf {
     layout.data.join("parallel-world.sqlite3")
 }
+fn validated_export_path(
+    source: &std::path::Path,
+    requested: &std::path::Path,
+    allow_overwrite: bool,
+) -> Result<PathBuf, String> {
+    let source = source.canonicalize().map_err(|e| e.to_string())?;
+    if requested.exists() {
+        if !requested
+            .symlink_metadata()
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_file()
+        {
+            return Err("保存先は通常ファイルである必要があります".into());
+        }
+        let destination = requested.canonicalize().map_err(|e| e.to_string())?;
+        if same_file::is_same_file(&source, &destination).map_err(|e| e.to_string())? {
+            return Err("保存先に使用中のデータベースは指定できません".into());
+        }
+        if !allow_overwrite {
+            return Err("DESTINATION_EXISTS".into());
+        }
+        return Ok(destination);
+    }
+    let name = requested
+        .file_name()
+        .ok_or("保存先にはファイル名を指定してください")?;
+    let parent = requested
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .canonicalize()
+        .map_err(|_| "保存先ディレクトリが存在しません".to_owned())?;
+    Ok(parent.join(name))
+}
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 /// Lists durable chat messages. Returns an error when `SQLite` is unavailable.
@@ -56,19 +90,11 @@ pub fn export_user_data(
         return Err("保存先を指定してください".into());
     }
     let source = path(&layout);
-    let destination = PathBuf::from(destination.trim());
-    if source == destination {
-        return Err("保存先に使用中のデータベースは指定できません".into());
-    }
-    if destination.is_dir() {
-        return Err("保存先にはファイルを指定してください".into());
-    }
-    if destination.exists() && !allow_overwrite {
-        return Err("保存先は既に存在します".into());
-    }
-    if destination.parent().is_none_or(|parent| !parent.is_dir()) {
-        return Err("保存先ディレクトリが存在しません".into());
-    }
+    let destination = validated_export_path(
+        &source,
+        std::path::Path::new(destination.trim()),
+        allow_overwrite,
+    )?;
     Database::open(source)
         .map_err(|e| e.to_string())?
         .backup_to(destination)
@@ -117,4 +143,43 @@ pub fn delete_memories(
             .map_err(|e| e.to_string())?;
         tx.commit().map_err(|e| e.to_string())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validated_export_path;
+    #[test]
+    fn canonicalization_rejects_parent_alias_and_hardlink() {
+        let root = std::env::temp_dir().join(format!("pw-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("child")).unwrap();
+        let source = root.join("source");
+        std::fs::write(&source, b"x").unwrap();
+        assert!(validated_export_path(&source, &root.join("child/../source"), true).is_err());
+        let hard = root.join("hard");
+        std::fs::hard_link(&source, &hard).unwrap();
+        assert!(validated_export_path(&source, &hard, true).is_err());
+        assert_eq!(
+            validated_export_path(&source, &root.join("child/../new"), false).unwrap(),
+            root.canonicalize().unwrap().join("new")
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn only_regular_files_may_be_explicitly_overwritten() {
+        let root = std::env::temp_dir().join(format!("pw-export-kind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source");
+        let other = root.join("other");
+        std::fs::write(&source, b"x").unwrap();
+        std::fs::write(&other, b"y").unwrap();
+        assert!(validated_export_path(&source, &root, false).is_err());
+        assert_eq!(
+            validated_export_path(&source, &other, false).unwrap_err(),
+            "DESTINATION_EXISTS"
+        );
+        assert!(validated_export_path(&source, &other, true).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

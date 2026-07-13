@@ -2388,6 +2388,7 @@ dependencies = [
  "pw-storage",
  "pw-stt-sherpa",
  "pw-tts",
+ "same-file",
  "serde",
  "serde_json",
  "tauri",

@@ -21,6 +21,7 @@ pw-storage = { workspace = true }
 pw-tts = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+same-file = { workspace = true }
 tauri = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
 thiserror = { workspace = true }
