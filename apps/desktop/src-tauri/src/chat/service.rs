@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,10 +19,12 @@ use pw_application::memory::{
     redact_persistent_content,
 };
 use pw_contracts::{
-    ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
+    ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto,
+    RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION,
 };
 use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, TurnId};
+use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
@@ -36,6 +38,9 @@ pub const STATE_EVENT: &str = "conversation-state";
 /// Kept messages of context (user + assistant combined).
 const MAX_HISTORY_MESSAGES: usize = 20;
 const DEFAULT_CONVERSATION_ID: &str = "default";
+const SUBMIT_QUEUE_CAPACITY: usize = 8;
+const CONVERSATION_QUEUE_CAPACITY: usize = 8;
+const ENRICHMENT_QUEUE_CAPACITY: usize = 1;
 
 fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
     let memories = memory
@@ -137,7 +142,7 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_enrichment(database_path: &Path, rx: std::sync::mpsc::Receiver<String>) {
+fn run_enrichment(database_path: &Path, rx: Receiver<String>) {
     while let Ok(user_text) = rx.recv() {
         if let Err(error) = process_enrichment_job(database_path, &user_text) {
             tracing::warn!(%error, "memory enrichment job failed; worker remains available");
@@ -148,8 +153,8 @@ fn run_enrichment(database_path: &Path, rx: std::sync::mpsc::Receiver<String>) {
 #[allow(clippy::needless_pass_by_value)]
 fn run_context_worker<M: MemoryStore>(
     memory: M,
-    rx: std::sync::mpsc::Receiver<Command>,
-    conversation_tx: Sender<Command>,
+    rx: Receiver<Command>,
+    conversation_tx: SyncSender<Command>,
 ) {
     while let Ok(command) = rx.recv() {
         match command {
@@ -225,7 +230,7 @@ struct PersistentConversationEvents<E, H> {
     history: Mutex<H>,
     conversation_id: String,
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
-    enrichment: Option<Sender<String>>,
+    enrichment: Option<SyncSender<String>>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
@@ -237,7 +242,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
         inner: E,
         history: H,
         conversation_id: impl Into<String>,
-        enrichment: Option<Sender<String>>,
+        enrichment: Option<SyncSender<String>>,
     ) -> Self {
         Self {
             inner,
@@ -309,9 +314,16 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
             if let Some(enrichment) = &self.enrichment
-                && let Err(error) = enrichment.send(user_text.clone())
+                && let Err(error) = enrichment.try_send(user_text.clone())
             {
-                tracing::warn!(%error, "memory enrichment worker unavailable; conversation remains available");
+                match error {
+                    TrySendError::Full(_) => {
+                        tracing::debug!("memory enrichment coalesced while worker is busy");
+                    }
+                    TrySendError::Disconnected(_) => tracing::warn!(
+                        "memory enrichment worker unavailable; conversation remains available"
+                    ),
+                }
             }
             pending.remove(&turn);
         }
@@ -332,8 +344,16 @@ enum Command {
     Shutdown,
 }
 
+fn enqueue_submit(tx: &SyncSender<Command>, text: String, turn_id: u64) -> Result<(), String> {
+    tx.try_send(Command::Submit(text, turn_id))
+        .map_err(|error| match error {
+            TrySendError::Full(_) => "conversation is busy; please retry".to_owned(),
+            TrySendError::Disconnected(_) => "conversation worker is not available".to_owned(),
+        })
+}
+
 struct Worker {
-    tx: Sender<Command>,
+    tx: SyncSender<Command>,
     settings_fingerprint: String,
     thread: Option<std::thread::JoinHandle<()>>,
     context_thread: Option<std::thread::JoinHandle<()>>,
@@ -482,10 +502,7 @@ impl ChatService {
         };
         let database_path = layout.data.join("parallel-world.sqlite3");
         let turn_id = self.reserve_turn_id(&database_path);
-        worker
-            .tx
-            .send(Command::Submit(text, turn_id))
-            .map_err(|_| "conversation worker is not available".to_owned())
+        enqueue_submit(&worker.tx, text, turn_id)
     }
 
     /// Cancels the in-flight turn (生成途中で停止).
@@ -516,9 +533,9 @@ impl ChatService {
             strip_emoji: settings.strip_emoji,
         };
         let cancel = Arc::clone(&self.cancel);
-        let (tx, context_rx) = channel::<Command>();
-        let (conversation_tx, rx) = channel::<Command>();
-        let (enrichment_tx, enrichment_rx) = channel::<String>();
+        let (tx, context_rx) = sync_channel::<Command>(SUBMIT_QUEUE_CAPACITY);
+        let (conversation_tx, rx) = sync_channel::<Command>(CONVERSATION_QUEUE_CAPACITY);
+        let (enrichment_tx, enrichment_rx) = sync_channel::<String>(ENRICHMENT_QUEUE_CAPACITY);
         let database_path = app
             .state::<AppDataLayout>()
             .data
@@ -614,6 +631,24 @@ struct TauriConversationEvents<R: Runtime> {
 }
 
 impl<R: Runtime> TauriConversationEvents<R> {
+    fn emit_health(&self, healthy: bool) {
+        let mut health = RuntimeHealth::new(RuntimeFeature::LanguageModel);
+        let now = u64::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |duration| duration.as_millis()),
+        )
+        .unwrap_or(u64::MAX);
+        if healthy {
+            health.mark_healthy(now);
+        } else {
+            health.mark_failed(&RuntimeFailure::transient(FailureCode::Unavailable), now);
+        }
+        let _ = self.app.emit(
+            RUNTIME_HEALTH_EVENT,
+            RuntimeHealthEventDto::from((&health, u8::from(!healthy))),
+        );
+    }
     fn emit_message(&self, turn: TurnId, role: ChatRoleDto, text: &str) {
         let payload = ChatMessageEventDto {
             schema_version: SCHEMA_VERSION,
@@ -656,6 +691,12 @@ impl<R: Runtime> TauriConversationEvents<R> {
 
 impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
     fn on_state(&self, state: ConversationState) {
+        if matches!(
+            state,
+            ConversationState::Thinking | ConversationState::Speaking | ConversationState::Idle
+        ) {
+            self.emit_health(true);
+        }
         self.emit_state(state, None);
     }
 
@@ -696,6 +737,7 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
     fn on_cancelled(&self, _turn: TurnId) {}
 
     fn on_error(&self, _turn: TurnId, message: &str) {
+        self.emit_health(false);
         self.emit_state(ConversationState::LlmUnavailable, Some(message.to_owned()));
     }
 }
@@ -749,7 +791,7 @@ mod tests {
     #[test]
     fn shutdown_failure_always_restores_cancel_flag() {
         let service = ChatService::default();
-        let (tx, _rx) = channel();
+        let (tx, _rx) = sync_channel(8);
         *service.lock() = Some(Worker {
             tx,
             settings_fingerprint: String::new(),
@@ -905,7 +947,7 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(8);
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || run_enrichment(&worker_path, rx));
         tx.send("私は猫が好きです".into()).unwrap();
@@ -1100,8 +1142,8 @@ mod tests {
 
     #[test]
     fn slow_memory_search_does_not_block_submit_sender() {
-        let (tx, rx) = channel();
-        let (conversation_tx, conversation_rx) = channel();
+        let (tx, rx) = sync_channel(8);
+        let (conversation_tx, conversation_rx) = sync_channel(8);
         let worker =
             std::thread::spawn(move || run_context_worker(SlowMemory, rx, conversation_tx));
         let started = std::time::Instant::now();
@@ -1206,7 +1248,7 @@ mod tests {
 
     #[test]
     fn worker_restart_waits_for_queued_turn_before_history_is_read() {
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(8);
         let persisted = Arc::new(AtomicBool::new(false));
         let worker_persisted = Arc::clone(&persisted);
         let thread = std::thread::spawn(move || {
@@ -1254,5 +1296,19 @@ mod tests {
         assert!(recovered < (1_u64 << 63));
         assert_ne!(recovered, first);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bounded_submit_queue_returns_busy_without_silently_dropping_user_text() {
+        let (tx, rx) = sync_channel(1);
+        enqueue_submit(&tx, "first".to_owned(), 1).unwrap();
+
+        let error = enqueue_submit(&tx, "second".to_owned(), 2).unwrap_err();
+
+        assert_eq!(error, "conversation is busy; please retry");
+        let Command::Submit(text, turn_id) = rx.recv().unwrap() else {
+            panic!("expected queued user submission");
+        };
+        assert_eq!((text.as_str(), turn_id), ("first", 1));
     }
 }
