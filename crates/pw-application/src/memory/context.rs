@@ -175,6 +175,55 @@ pub fn is_safe_persistent_content(content: &str) -> bool {
         })
 }
 
+#[must_use]
+pub fn redact_persistent_content(content: &str) -> String {
+    if is_safe_persistent_content(content) {
+        return content.to_owned();
+    }
+    let lower = content.to_ascii_lowercase();
+    let labels = [
+        "authorization",
+        "bearer",
+        "api_key",
+        "apikey",
+        "api key",
+        "token",
+        "password",
+        "passwd",
+        "secret",
+        "apiキー",
+        "トークン",
+        "パスワード",
+        "秘密",
+        "認証",
+        "ベアラー",
+    ];
+    let cut = labels.iter().filter_map(|label| lower.find(label)).min();
+    if let Some(index) = cut {
+        let prefix = content[..index].trim_end();
+        return if prefix.is_empty() {
+            "[REDACTED]".into()
+        } else {
+            format!("{prefix} [REDACTED]")
+        };
+    }
+    content
+        .split_whitespace()
+        .map(|part| {
+            if part.chars().count() >= 24
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
+            {
+                "[REDACTED]"
+            } else {
+                part
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Default)]
 pub struct RollingSummaryGenerator;
 impl SummaryGenerator for RollingSummaryGenerator {
@@ -283,6 +332,24 @@ mod tests {
             assert!(!is_safe_persistent_content(secret), "{secret}");
         }
         assert!(is_safe_persistent_content("私は猫が好きです"));
+    }
+
+    #[test]
+    fn persistence_redaction_preserves_safe_text_and_removes_credentials() {
+        for (input, safe) in [
+            (
+                "keep this Authorization: Bearer abc",
+                "keep this [REDACTED]",
+            ),
+            ("覚えて APIキー=秘密値", "覚えて [REDACTED]"),
+            ("hello AbCdEfGhIjKlMnOpQrStUvWx1234", "hello [REDACTED]"),
+        ] {
+            let redacted = redact_persistent_content(input);
+            assert_eq!(redacted, safe);
+            assert!(!redacted.contains("abc"));
+            assert!(!redacted.contains("秘密値"));
+            assert!(!redacted.contains("AbCdEf"));
+        }
     }
 
     #[test]

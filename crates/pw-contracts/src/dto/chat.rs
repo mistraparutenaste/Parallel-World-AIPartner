@@ -44,6 +44,11 @@ pub struct ConversationMessageDto {
     pub text: String,
     pub created_at: i64,
 }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "ConversationHistoryDeletedEventDto.ts")]
+pub struct ConversationHistoryDeletedEventDto {
+    pub schema_version: u16,
+}
 
 /// `conversation-state` event payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

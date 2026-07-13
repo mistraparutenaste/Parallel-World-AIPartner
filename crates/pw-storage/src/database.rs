@@ -11,6 +11,7 @@ const DETACHED_TURN_SEQUENCE_MIGRATION: &str =
     include_str!("../migrations/0004_detached_turn_sequence.sql");
 const MEMORY_FTS_MIGRATION: &str = include_str!("../migrations/0005_memory_fts.sql");
 const MEMORY_UNIQUE_MIGRATION: &str = include_str!("../migrations/0006_memory_content_unique.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -18,6 +19,8 @@ pub enum StorageError {
     Sqlite(#[from] rusqlite::Error),
     #[error("bundled SQLite {found} is older than required 3.51.3")]
     UnsupportedSqlite { found: String },
+    #[error("database schema version {found} is newer than supported version {supported}")]
+    FutureSchema { found: i64, supported: i64 },
 }
 
 pub struct Database {
@@ -68,6 +71,12 @@ impl Database {
             connection.pragma_update(None, "journal_mode", "WAL")?;
         }
         let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current > CURRENT_SCHEMA_VERSION {
+            return Err(StorageError::FutureSchema {
+                found: current,
+                supported: CURRENT_SCHEMA_VERSION,
+            });
+        }
         if current == 0 {
             let transaction = connection.transaction()?;
             transaction.execute_batch(INITIAL_MIGRATION)?;
@@ -196,6 +205,22 @@ mod tests {
                 .unwrap();
             assert!(exists, "missing table {table}");
         }
+    }
+
+    #[test]
+    fn rejects_database_from_a_future_schema_version() {
+        let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
+        let connection = rusqlite::Connection::open(&path).unwrap();
+        connection.pragma_update(None, "user_version", 7).unwrap();
+        drop(connection);
+        assert!(matches!(
+            Database::open(&path),
+            Err(super::StorageError::FutureSchema {
+                found: 7,
+                supported: 6
+            })
+        ));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

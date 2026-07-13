@@ -32,6 +32,13 @@ function fireMessage(payload: ChatMessageEventDto) {
 }
 
 describe('ChatWindow', () => {
+  it('clears displayed messages after durable history deletion', async () => {
+    render(<ChatWindow />);
+    fireMessage({ schema_version: 1, turn_id: 1, role: 'user', text: '消える', message_id: null });
+    expect(await screen.findByText(/消える/)).toBeInTheDocument();
+    act(() => listenHandlers.get('conversation-history-deleted')?.({ payload: { schema_version: 1 } }));
+    expect(screen.queryByText(/消える/)).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(null);

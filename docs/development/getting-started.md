@@ -107,6 +107,6 @@ corepack pnpm build
 - 1ファイルは1つの主要責務を持つ。
 # Phase 5 データ検証
 
-会話履歴・要約・長期記憶は app-data 配下の `data/parallel-world.sqlite3` に保存されます。エクスポートは SQLite Online Backup により、単独で再open可能な整合snapshotを作ります。設定画面には会話履歴と要約・記憶の個別削除があります。削除済みcontextが次のpromptへ戻らないことを確認する場合は両方を実行してください。
+会話履歴・要約・長期記憶は app-data 配下の `data/parallel-world.sqlite3` に保存されます。エクスポートは SQLite Online Backup により、単独で再open可能な整合snapshotを作ります。「会話履歴と要約を削除」は会話履歴とその会話要約を削除し、長期記憶は残します。「記憶を削除」は全要約と長期記憶を削除します。
 
 Phase 5受け入れ検証とschema v1〜v6 migration検証は `cargo test --workspace` に含まれます。

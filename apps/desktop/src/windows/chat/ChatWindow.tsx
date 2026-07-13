@@ -1,6 +1,7 @@
 import type {
   ChatMessageEventDto,
   ConversationMessageDto,
+  ConversationHistoryDeletedEventDto,
   ConversationStateEventDto,
   TtsStateEventDto,
 } from '@parallel-world/contracts';
@@ -77,10 +78,12 @@ export function ChatWindow() {
         setError(`音声合成に接続できません: ${payload.message ?? ''}`);
       }
     });
+    const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>('conversation-history-deleted', () => setMessages([]));
     return () => {
       stopMessages();
       stopState();
       stopTts();
+      stopDeleted();
     };
   }, []);
 

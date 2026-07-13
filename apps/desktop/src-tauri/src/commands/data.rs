@@ -1,11 +1,13 @@
 use crate::chat::ChatService;
 use pw_application::history::{ConversationHistory, MessageRole};
-use pw_contracts::{ChatRoleDto, ConversationMessageDto, SCHEMA_VERSION};
+use pw_contracts::{
+    ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationMessageDto, SCHEMA_VERSION,
+};
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory};
 use std::path::PathBuf;
-use tauri::State;
-const CONVERSATION: &str = "chat";
+use tauri::{AppHandle, Emitter, Runtime, State};
+const CONVERSATION: &str = "default";
 fn path(layout: &AppDataLayout) -> PathBuf {
     layout.data.join("parallel-world.sqlite3")
 }
@@ -106,7 +108,8 @@ pub fn export_user_data(
 ///
 /// # Errors
 /// Returns an error when shutdown or the transaction fails.
-pub fn delete_conversation_history(
+pub fn delete_conversation_history<R: Runtime>(
+    app: AppHandle<R>,
     layout: State<'_, AppDataLayout>,
     chat: State<'_, ChatService>,
 ) -> Result<(), String> {
@@ -118,7 +121,14 @@ pub fn delete_conversation_history(
             .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
             .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+        tx.commit().map_err(|e| e.to_string())?;
+        app.emit(
+            "conversation-history-deleted",
+            ConversationHistoryDeletedEventDto {
+                schema_version: SCHEMA_VERSION,
+            },
+        )
+        .map_err(|e| e.to_string())
     })
 }
 #[tauri::command]

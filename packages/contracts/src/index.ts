@@ -10,6 +10,7 @@ export type { CharacterManifestDto } from './generated/CharacterManifestDto';
 export type { ChatMessageEventDto } from './generated/ChatMessageEventDto';
 export type { ChatRoleDto } from './generated/ChatRoleDto';
 export type { ConversationMessageDto } from './generated/ConversationMessageDto';
+export type { ConversationHistoryDeletedEventDto } from './generated/ConversationHistoryDeletedEventDto';
 export type { ConversationStateDto } from './generated/ConversationStateDto';
 export type { ConversationStateEventDto } from './generated/ConversationStateEventDto';
 export type { LlmSettingsDto } from './generated/LlmSettingsDto';

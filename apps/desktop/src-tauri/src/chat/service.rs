@@ -16,6 +16,7 @@ use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
     DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryStore,
     PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator, is_safe_persistent_content,
+    redact_persistent_content,
 };
 use pw_contracts::{
     ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto, SCHEMA_VERSION,
@@ -188,8 +189,8 @@ fn persist_completed_turn<H: ConversationHistory>(
     history.store_completed_turn(&StoredTurn {
         conversation_id: conversation_id.to_owned(),
         turn_id: turn.value(),
-        user_content: user_text.to_owned(),
-        assistant_content: assistant_text.to_owned(),
+        user_content: redact_persistent_content(user_text),
+        assistant_content: redact_persistent_content(assistant_text),
         created_at: unix_timestamp(),
     })
 }
@@ -1072,7 +1073,9 @@ mod tests {
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
             .unwrap();
-        assert!(first.content.is_empty());
+        assert!(first.content.contains("[REDACTED]"));
+        assert!(!first.content.contains("abc"));
+        assert!(!first.content.contains("xyz"));
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         for (user, assistant) in [("追加1", "追加1回答"), ("追加2", "追加2回答")] {
             persist_completed_turn(

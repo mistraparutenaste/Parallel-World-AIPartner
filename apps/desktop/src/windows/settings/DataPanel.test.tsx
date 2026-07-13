@@ -10,7 +10,7 @@ describe('DataPanel', () => {
 
   it('does not delete history when confirmation is declined', () => {
     render(<DataPanel />);
-    fireEvent.click(screen.getByRole('button', { name: '会話履歴を削除' }));
+    fireEvent.click(screen.getByRole('button', { name: '会話履歴と要約を削除' }));
     expect(invokeMock).not.toHaveBeenCalledWith('delete_conversation_history');
   });
 
