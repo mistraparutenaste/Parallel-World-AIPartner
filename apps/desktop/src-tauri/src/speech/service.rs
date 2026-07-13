@@ -50,7 +50,7 @@ impl SttModelPaths {
 }
 
 struct RunningPipeline {
-    active_device_id: String,
+    active_device_id: Arc<Mutex<String>>,
     cancel: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
     diagnostics: Arc<PipelineDiagnostics>,
@@ -218,6 +218,7 @@ struct RecoveryCycle<D: DeviceSelector, C: CaptureFactory> {
     factory: C,
     preferred_device_id: Option<String>,
     capture_enabled: Arc<AtomicBool>,
+    active_device_id: Arc<Mutex<String>>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
     session: Option<C::Session>,
@@ -229,6 +230,7 @@ impl<D: DeviceSelector, C: CaptureFactory> RecoveryCycle<D, C> {
         factory: C,
         preferred_device_id: Option<String>,
         capture_enabled: Arc<AtomicBool>,
+        active_device_id: Arc<Mutex<String>>,
         generation: u64,
         current_generation: Arc<AtomicU64>,
     ) -> Self {
@@ -237,6 +239,7 @@ impl<D: DeviceSelector, C: CaptureFactory> RecoveryCycle<D, C> {
             factory,
             preferred_device_id,
             capture_enabled,
+            active_device_id,
             generation,
             current_generation,
             session: None,
@@ -261,14 +264,19 @@ impl<D: DeviceSelector, C: CaptureFactory> RecoveryCycle<D, C> {
         if resolved.fallback {
             events.push(RecoveryCycleEvent::Fallback {
                 preferred_device_id: self.preferred_device_id.clone(),
-                active_device_id: resolved.active_id,
+                active_device_id: resolved.active_id.clone(),
             });
         }
-        self.session = Some(
-            self.factory
-                .open(resolved.open_id.as_deref(), failures)
-                .map_err(|error| (SpeechFailure::Audio, error.to_string()))?,
-        );
+        let session = self
+            .factory
+            .open(resolved.open_id.as_deref(), failures)
+            .map_err(|error| (SpeechFailure::Audio, error.to_string()))?;
+        *self
+            .active_device_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            resolved.active_id.unwrap_or_else(|| "default".to_owned());
+        self.session = Some(session);
         events.push(RecoveryCycleEvent::Healthy);
         Ok(())
     }
@@ -363,14 +371,18 @@ impl SpeechService {
         let dropped_samples = Arc::new(AtomicU64::new(0));
         let failure_metrics = Arc::new(Mutex::new(Arc::new(FailureQueueMetrics::default())));
         let failure_queue_dropped = Arc::new(AtomicU64::new(0));
+        let active_device_id = Arc::new(Mutex::new(
+            device_id.clone().unwrap_or_else(|| "default".to_owned()),
+        ));
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
         let worker = PipelineWorker {
             app,
             paths,
-            device_id: device_id.clone(),
+            device_id,
             cancel: Arc::clone(&cancel),
             capture_enabled: Arc::clone(&capture_enabled),
+            active_device_id: Arc::clone(&active_device_id),
             diagnostics: Arc::clone(&diagnostics),
             dropped_samples: Arc::clone(&dropped_samples),
             failure_metrics: Arc::clone(&failure_metrics),
@@ -384,7 +396,7 @@ impl SpeechService {
             .map_err(|error| format!("failed to spawn speech worker: {error}"))?;
 
         *guard = Some(RunningPipeline {
-            active_device_id: device_id.unwrap_or_else(|| "default".to_owned()),
+            active_device_id,
             cancel,
             capture_enabled,
             diagnostics,
@@ -469,7 +481,13 @@ impl SpeechService {
     pub fn active_device_id(&self) -> String {
         self.lock().as_ref().map_or_else(
             || "inactive".to_owned(),
-            |running| running.active_device_id.clone(),
+            |running| {
+                running
+                    .active_device_id
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            },
         )
     }
 }
@@ -480,6 +498,7 @@ struct PipelineWorker<R: Runtime> {
     device_id: Option<String>,
     cancel: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
+    active_device_id: Arc<Mutex<String>>,
     diagnostics: Arc<PipelineDiagnostics>,
     dropped_samples: Arc<AtomicU64>,
     failure_metrics: Arc<Mutex<Arc<FailureQueueMetrics>>>,
@@ -520,6 +539,7 @@ impl<R: Runtime> PipelineWorker<R> {
             ProductionCaptureFactory,
             self.device_id.clone(),
             Arc::clone(&self.capture_enabled),
+            Arc::clone(&self.active_device_id),
             self.generation,
             Arc::clone(&self.current_generation),
         );
@@ -1093,6 +1113,7 @@ mod tests {
     fn production_recovery_cycle_stops_old_session_and_preserves_runtime_state() {
         let state = Arc::new(Mutex::new(FakeCaptureState::default()));
         let enabled = Arc::new(AtomicBool::new(false));
+        let active_device_id = Arc::new(Mutex::new("requested".to_owned()));
         let generation = Arc::new(AtomicU64::new(7));
         let mut events = Vec::new();
         let mut cycle = RecoveryCycle::new(
@@ -1104,6 +1125,7 @@ mod tests {
             FakeCaptureFactory(Arc::clone(&state)),
             Some("usb-mic".into()),
             Arc::clone(&enabled),
+            Arc::clone(&active_device_id),
             7,
             Arc::clone(&generation),
         );
@@ -1117,6 +1139,7 @@ mod tests {
         assert!(cycle.recover_once(None, &mut events).is_ok());
 
         assert_eq!(state.lock().unwrap().stopped, 1);
+        assert_eq!(*active_device_id.lock().unwrap(), "default");
         assert_eq!(
             state.lock().unwrap().opened,
             vec![Some("usb-mic".into()), None]
