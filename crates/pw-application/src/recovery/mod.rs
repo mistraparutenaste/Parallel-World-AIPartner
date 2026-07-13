@@ -35,6 +35,7 @@ impl<'a, C: Clock, R: RandomSource> BackoffPolicy<'a, C, R> {
         }
     }
     pub fn record_failure(&mut self) -> BackoffDecision {
+        self.reset_if_stable();
         self.healthy_since_ms = None;
         self.attempts = self.attempts.saturating_add(1);
         if self.attempts >= Self::MAX_FAILURES {

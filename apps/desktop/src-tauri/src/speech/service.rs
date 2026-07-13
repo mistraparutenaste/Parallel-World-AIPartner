@@ -55,6 +55,7 @@ struct RunningPipeline {
     diagnostics: Arc<PipelineDiagnostics>,
     dropped_samples: Arc<AtomicU64>,
     failure_metrics: Arc<Mutex<Arc<FailureQueueMetrics>>>,
+    failure_queue_dropped: Arc<AtomicU64>,
     worker: Option<JoinHandle<()>>,
 }
 
@@ -170,21 +171,111 @@ impl DeviceSelector for ProductionDeviceSelector {
 }
 
 trait CaptureFactory {
+    type Session: CaptureLifecycle;
+
     fn open(
         &self,
         device_id: Option<&str>,
         failures: Option<FailureSender>,
-    ) -> Result<CaptureSession, CaptureError>;
+    ) -> Result<Self::Session, CaptureError>;
+}
+
+trait CaptureLifecycle {
+    fn stop_and_join(&mut self);
+}
+
+impl CaptureLifecycle for CaptureSession {
+    fn stop_and_join(&mut self) {
+        CaptureSession::stop_and_join(self);
+    }
 }
 
 struct ProductionCaptureFactory;
 impl CaptureFactory for ProductionCaptureFactory {
+    type Session = CaptureSession;
+
     fn open(
         &self,
         device_id: Option<&str>,
         failures: Option<FailureSender>,
     ) -> Result<CaptureSession, CaptureError> {
         start_capture_with_failures(device_id, failures)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RecoveryCycleEvent {
+    Fallback {
+        preferred_device_id: Option<String>,
+        active_device_id: Option<String>,
+    },
+    Healthy,
+}
+
+struct RecoveryCycle<D: DeviceSelector, C: CaptureFactory> {
+    selector: D,
+    factory: C,
+    preferred_device_id: Option<String>,
+    capture_enabled: Arc<AtomicBool>,
+    generation: u64,
+    current_generation: Arc<AtomicU64>,
+    session: Option<C::Session>,
+}
+
+impl<D: DeviceSelector, C: CaptureFactory> RecoveryCycle<D, C> {
+    fn new(
+        selector: D,
+        factory: C,
+        preferred_device_id: Option<String>,
+        capture_enabled: Arc<AtomicBool>,
+        generation: u64,
+        current_generation: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            selector,
+            factory,
+            preferred_device_id,
+            capture_enabled,
+            generation,
+            current_generation,
+            session: None,
+        }
+    }
+
+    fn recover_once(
+        &mut self,
+        failures: Option<FailureSender>,
+        events: &mut Vec<RecoveryCycleEvent>,
+    ) -> Result<(), (SpeechFailure, String)> {
+        if self.current_generation.load(Ordering::Acquire) != self.generation {
+            return Err((SpeechFailure::Stopped, "stale speech generation".into()));
+        }
+        if let Some(mut session) = self.session.take() {
+            session.stop_and_join();
+        }
+        let resolved = resolve_device(
+            self.preferred_device_id.as_deref(),
+            &self.selector.devices(),
+        );
+        if resolved.fallback {
+            events.push(RecoveryCycleEvent::Fallback {
+                preferred_device_id: self.preferred_device_id.clone(),
+                active_device_id: resolved.active_id,
+            });
+        }
+        self.session = Some(
+            self.factory
+                .open(resolved.open_id.as_deref(), failures)
+                .map_err(|error| (SpeechFailure::Audio, error.to_string()))?,
+        );
+        events.push(RecoveryCycleEvent::Healthy);
+        Ok(())
+    }
+
+    fn take_session(&mut self) -> C::Session {
+        self.session
+            .take()
+            .expect("recover_once succeeded without a capture session")
     }
 }
 
@@ -270,6 +361,7 @@ impl SpeechService {
         let diagnostics = Arc::new(PipelineDiagnostics::default());
         let dropped_samples = Arc::new(AtomicU64::new(0));
         let failure_metrics = Arc::new(Mutex::new(Arc::new(FailureQueueMetrics::default())));
+        let failure_queue_dropped = Arc::new(AtomicU64::new(0));
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
 
         let worker = PipelineWorker {
@@ -281,6 +373,7 @@ impl SpeechService {
             diagnostics: Arc::clone(&diagnostics),
             dropped_samples: Arc::clone(&dropped_samples),
             failure_metrics: Arc::clone(&failure_metrics),
+            failure_queue_dropped: Arc::clone(&failure_queue_dropped),
             generation,
             current_generation: Arc::clone(&self.generation),
         };
@@ -295,6 +388,7 @@ impl SpeechService {
             diagnostics,
             dropped_samples,
             failure_metrics,
+            failure_queue_dropped,
             worker: Some(worker),
         });
         Ok(())
@@ -345,11 +439,14 @@ impl SpeechService {
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .depth(),
-                failure_queue_dropped: running
-                    .failure_metrics
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .dropped(),
+                failure_queue_dropped: aggregate_counter(
+                    running.failure_queue_dropped.load(Ordering::Relaxed),
+                    running
+                        .failure_metrics
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .dropped(),
+                ),
             },
             None => AudioDiagnosticsDto {
                 schema_version: SCHEMA_VERSION,
@@ -376,6 +473,7 @@ struct PipelineWorker<R: Runtime> {
     diagnostics: Arc<PipelineDiagnostics>,
     dropped_samples: Arc<AtomicU64>,
     failure_metrics: Arc<Mutex<Arc<FailureQueueMetrics>>>,
+    failure_queue_dropped: Arc<AtomicU64>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
 }
@@ -407,6 +505,14 @@ impl<R: Runtime> PipelineWorker<R> {
         emit_health_events(&self.app, health.snapshots(0));
         let clock = SystemClock;
         let mut policy = BackoffPolicy::new(&clock, Jitter(clock.now_ms().max(1)));
+        let mut recovery = RecoveryCycle::new(
+            ProductionDeviceSelector,
+            ProductionCaptureFactory,
+            self.device_id.clone(),
+            Arc::clone(&self.capture_enabled),
+            self.generation,
+            Arc::clone(&self.current_generation),
+        );
         loop {
             match self.interruption() {
                 WorkerInterruption::Continue => {}
@@ -420,7 +526,7 @@ impl<R: Runtime> PipelineWorker<R> {
                 }
                 WorkerInterruption::Stale => break,
             }
-            let result = self.build_and_run(&mut health);
+            let result = self.build_and_run(&mut recovery, &mut health, || policy.record_healthy());
             if self.interruption() == WorkerInterruption::Stale {
                 break;
             }
@@ -512,7 +618,15 @@ impl<R: Runtime> PipelineWorker<R> {
         true
     }
 
-    fn build_and_run(&self, health: &mut HealthRegistry) -> Result<(), (SpeechFailure, String)> {
+    fn build_and_run<F>(
+        &self,
+        recovery: &mut RecoveryCycle<ProductionDeviceSelector, ProductionCaptureFactory>,
+        health: &mut HealthRegistry,
+        mut on_healthy: F,
+    ) -> Result<(), (SpeechFailure, String)>
+    where
+        F: FnMut(),
+    {
         let vad = SileroVad::new(&self.paths.vad_model, 0.5)
             .map_err(|error| classify_model_error(&error, true))?;
         let recognizer = ReazonSpeechRecognizer::new(&RecognizerModelPaths::in_directory(
@@ -520,26 +634,34 @@ impl<R: Runtime> PipelineWorker<R> {
         ))
         .map_err(|error| classify_model_error(&error, false))?;
 
-        let devices = ProductionDeviceSelector.devices();
-        let resolved = resolve_device(self.device_id.as_deref(), &devices);
-        if resolved.fallback {
-            let _ = self.app.emit(
-                DEVICE_FALLBACK_EVENT,
-                DeviceFallbackEventDto {
-                    schema_version: SCHEMA_VERSION,
-                    preferred_device_id: self.device_id.clone(),
-                    active_device_id: resolved.active_id.clone(),
-                },
-            );
-        }
         let (failure_tx, failure_rx, metrics) = failure_channel(4);
-        *self
+        let mut failure_metrics = self
             .failure_metrics
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = metrics;
-        let session = ProductionCaptureFactory
-            .open(resolved.open_id.as_deref(), Some(failure_tx))
-            .map_err(|error| (SpeechFailure::Audio, error.to_string()))?;
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.failure_queue_dropped
+            .fetch_add(failure_metrics.dropped(), Ordering::Relaxed);
+        *failure_metrics = metrics;
+        drop(failure_metrics);
+        let mut recovery_events = Vec::new();
+        recovery.recover_once(Some(failure_tx), &mut recovery_events)?;
+        for event in &recovery_events {
+            if let RecoveryCycleEvent::Fallback {
+                preferred_device_id,
+                active_device_id,
+            } = event
+            {
+                let _ = self.app.emit(
+                    DEVICE_FALLBACK_EVENT,
+                    DeviceFallbackEventDto {
+                        schema_version: SCHEMA_VERSION,
+                        preferred_device_id: preferred_device_id.clone(),
+                        active_device_id: active_device_id.clone(),
+                    },
+                );
+            }
+        }
+        let session = recovery.take_session();
         let dropped_counter = Arc::clone(&session.dropped_samples);
         let source = CaptureFrameSource::new(session)
             .map_err(|error| (SpeechFailure::Audio, error.to_string()))?;
@@ -563,13 +685,14 @@ impl<R: Runtime> PipelineWorker<R> {
             &self.app,
             health.mark_pipeline_healthy(SystemClock.now_ms()),
         );
+        on_healthy();
 
         let pipeline = SpeechPipeline::new(
             SpeechPipelineConfig::default(),
             vad,
             recognizer,
             events,
-            Arc::clone(&self.capture_enabled),
+            Arc::clone(&recovery.capture_enabled),
             Arc::clone(&self.diagnostics),
         );
         let result = std::thread::scope(|scope| {
@@ -615,17 +738,29 @@ impl<R: Runtime> PipelineWorker<R> {
         session_cancel: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         let target = Arc::clone(&self.dropped_samples);
+        let completed = target.load(Ordering::Relaxed);
         let cancel = Arc::clone(&self.cancel);
         std::thread::Builder::new()
             .name("pw-speech-drop-mirror".into())
             .spawn(move || {
                 while !cancel.load(Ordering::Relaxed) && !session_cancel.load(Ordering::Relaxed) {
-                    target.store(source.load(Ordering::Relaxed), Ordering::Relaxed);
+                    target.store(
+                        aggregate_counter(completed, source.load(Ordering::Relaxed)),
+                        Ordering::Relaxed,
+                    );
                     std::thread::sleep(std::time::Duration::from_millis(500));
                 }
+                target.store(
+                    aggregate_counter(completed, source.load(Ordering::Relaxed)),
+                    Ordering::Relaxed,
+                );
             })
             .expect("failed to spawn speech diagnostics mirror")
     }
+}
+
+const fn aggregate_counter(completed: u64, current: u64) -> u64 {
+    completed.saturating_add(current)
 }
 
 impl SpeechFailure {
@@ -743,12 +878,17 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
+
+    use pw_audio::capture::CaptureError;
     use pw_audio::devices::InputDeviceInfo;
     use pw_platform::paths::AppDataLayout;
 
     use super::{
-        HealthRegistry, SpeechFailure, SpeechService, SttModelPaths, WorkerInterruption,
-        resolve_device, worker_interruption,
+        CaptureFactory, CaptureLifecycle, DeviceSelector, HealthRegistry, RecoveryCycle,
+        RecoveryCycleEvent, SpeechFailure, SpeechService, SttModelPaths, WorkerInterruption,
+        aggregate_counter, resolve_device, worker_interruption,
     };
     use pw_contracts::{HealthStatusDto, RuntimeFeatureDto};
 
@@ -873,5 +1013,124 @@ mod tests {
             worker_interruption(false, 2, 2),
             WorkerInterruption::Continue
         );
+    }
+
+    #[test]
+    fn diagnostics_counters_remain_monotonic_across_sessions() {
+        assert_eq!(aggregate_counter(7, 3), 10);
+        assert_eq!(aggregate_counter(10, 2), 12);
+        assert_eq!(aggregate_counter(u64::MAX, 1), u64::MAX);
+    }
+
+    #[derive(Default)]
+    struct FakeDeviceSelector(Vec<InputDeviceInfo>);
+
+    impl DeviceSelector for FakeDeviceSelector {
+        fn devices(&self) -> Vec<InputDeviceInfo> {
+            self.0.clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeCaptureState {
+        opened: Vec<Option<String>>,
+        stopped: usize,
+    }
+
+    struct FakeCapture {
+        state: Arc<Mutex<FakeCaptureState>>,
+        stopped: bool,
+    }
+
+    impl CaptureLifecycle for FakeCapture {
+        fn stop_and_join(&mut self) {
+            if !self.stopped {
+                self.state.lock().unwrap().stopped += 1;
+                self.stopped = true;
+            }
+        }
+    }
+
+    impl Drop for FakeCapture {
+        fn drop(&mut self) {
+            self.stop_and_join();
+        }
+    }
+
+    struct FakeCaptureFactory(Arc<Mutex<FakeCaptureState>>);
+
+    impl CaptureFactory for FakeCaptureFactory {
+        type Session = FakeCapture;
+
+        fn open(
+            &self,
+            device_id: Option<&str>,
+            _failures: Option<pw_audio::recovery::FailureSender>,
+        ) -> Result<Self::Session, CaptureError> {
+            self.0
+                .lock()
+                .unwrap()
+                .opened
+                .push(device_id.map(str::to_owned));
+            Ok(FakeCapture {
+                state: Arc::clone(&self.0),
+                stopped: false,
+            })
+        }
+    }
+
+    #[test]
+    fn production_recovery_cycle_stops_old_session_and_preserves_runtime_state() {
+        let state = Arc::new(Mutex::new(FakeCaptureState::default()));
+        let enabled = Arc::new(AtomicBool::new(false));
+        let generation = Arc::new(AtomicU64::new(7));
+        let mut events = Vec::new();
+        let mut cycle = RecoveryCycle::new(
+            FakeDeviceSelector(vec![InputDeviceInfo {
+                id: "usb-mic".into(),
+                name: "USB".into(),
+                is_default: false,
+            }]),
+            FakeCaptureFactory(Arc::clone(&state)),
+            Some("usb-mic".into()),
+            Arc::clone(&enabled),
+            7,
+            Arc::clone(&generation),
+        );
+
+        assert!(cycle.recover_once(None, &mut events).is_ok());
+        cycle.selector = FakeDeviceSelector(vec![InputDeviceInfo {
+            id: "default".into(),
+            name: "Built in".into(),
+            is_default: true,
+        }]);
+        assert!(cycle.recover_once(None, &mut events).is_ok());
+
+        assert_eq!(state.lock().unwrap().stopped, 1);
+        assert_eq!(
+            state.lock().unwrap().opened,
+            vec![Some("usb-mic".into()), None]
+        );
+        assert!(
+            !enabled.load(Ordering::Relaxed),
+            "mute state is shared, not reset"
+        );
+        enabled.store(true, Ordering::Relaxed);
+        assert!(enabled.load(Ordering::Relaxed));
+        assert_eq!(
+            events,
+            vec![
+                RecoveryCycleEvent::Healthy,
+                RecoveryCycleEvent::Fallback {
+                    preferred_device_id: Some("usb-mic".into()),
+                    active_device_id: Some("default".into()),
+                },
+                RecoveryCycleEvent::Healthy,
+            ]
+        );
+
+        generation.store(8, Ordering::Release);
+        assert!(cycle.recover_once(None, &mut events).is_err());
+        assert_eq!(events.len(), 3, "stale generations publish nothing");
     }
 }

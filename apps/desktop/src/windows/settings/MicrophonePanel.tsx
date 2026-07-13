@@ -24,6 +24,7 @@ const PHASE_LABELS: Record<SttStateEventDto['phase'], string> = {
 export function MicrophonePanel() {
   const [devices, setDevices] = useState<AudioDeviceDto[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<string>('');
+  const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
   const [phase, setPhase] = useState<SttStateEventDto['phase']>('stopped');
   const [message, setMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
@@ -32,7 +33,9 @@ export function MicrophonePanel() {
     null,
   );
   const phaseRef = useRef(phase);
+  const preferredDeviceRef = useRef(selectedDevice);
   phaseRef.current = phase;
+  preferredDeviceRef.current = selectedDevice;
 
   useEffect(() => {
     let disposed = false;
@@ -41,7 +44,14 @@ export function MicrophonePanel() {
       .then((list) => {
         if (!disposed) {
           setDevices(list);
-          setSelectedDevice(list.find((d) => d.is_default)?.id ?? '');
+          const preferred = preferredDeviceRef.current;
+          if (preferred === '') {
+            const initial = list.find((d) => d.is_default)?.id ?? '';
+            preferredDeviceRef.current = initial;
+            setSelectedDevice(initial);
+          } else if (list.some((device) => device.id === preferred)) {
+            setFallbackMessage(null);
+          }
         }
       })
       .catch((error: unknown) => {
@@ -71,7 +81,7 @@ export function MicrophonePanel() {
       }
     });
     const stopFallback = subscribeEvent<DeviceFallbackEventDto>('stt-device-fallback', (payload) => {
-      setMessage(`選択したマイクが見つからないため、既定のマイク（${payload.active_device_id ?? '自動選択'}）を使用しています。`);
+      setFallbackMessage(`選択したマイクが見つからないため、既定のマイク（${payload.active_device_id ?? '自動選択'}）を使用しています。`);
       void refreshDevices();
     });
 
@@ -118,14 +128,21 @@ export function MicrophonePanel() {
   return (
     <section aria-label="マイク設定">
       <h2>マイク</h2>
-      {message !== null && <p role="alert">{message}</p>}
+      {(fallbackMessage ?? message) !== null && <p role="alert">{fallbackMessage ?? message}</p>}
       <div>
         <label htmlFor="microphone-select">入力デバイス</label>
         <select
           id="microphone-select"
           value={selectedDevice}
-          onChange={(event) => setSelectedDevice(event.target.value)}
+          onChange={(event) => {
+            preferredDeviceRef.current = event.target.value;
+            setSelectedDevice(event.target.value);
+            setFallbackMessage(null);
+          }}
         >
+          {selectedDevice !== '' && !devices.some((device) => device.id === selectedDevice) && (
+            <option value={selectedDevice}>選択したデバイス（接続待ち）</option>
+          )}
           {devices.map((device) => (
             <option key={device.id} value={device.id}>
               {device.name}

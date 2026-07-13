@@ -75,3 +75,19 @@ fn jitter_never_exceeds_thirty_second_cap() {
     }
     assert_eq!(policy.maximum_delay(), Duration::from_secs(16));
 }
+
+#[test]
+fn failure_after_a_stable_healthy_operation_restarts_at_attempt_one() {
+    let clock = FakeClock(Cell::new(0));
+    let mut policy = BackoffPolicy::new(&clock, MaxRandom);
+    let _ = policy.record_failure();
+    let _ = policy.record_failure();
+    policy.record_healthy();
+    clock.0.set(60_001);
+
+    assert_eq!(
+        policy.record_failure(),
+        BackoffDecision::RetryAfter(Duration::from_millis(250))
+    );
+    assert_eq!(policy.attempts(), 1);
+}
