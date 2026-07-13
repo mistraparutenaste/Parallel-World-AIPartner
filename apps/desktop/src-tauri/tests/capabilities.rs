@@ -120,9 +120,23 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-delete-user-dict-word",
             "allow-export-user-data",
             "allow-delete-conversation-history",
-            "allow-delete-memories"
+            "allow-delete-memories",
+            "allow-rearm-managed-process"
         ]
     );
+}
+
+#[test]
+fn process_rearm_is_exposed_only_to_settings() {
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            !permissions
+                .iter()
+                .any(|permission| permission.contains("rearm-managed-process")),
+            "process rearm leaked into {capability}"
+        );
+    }
 }
 
 #[test]

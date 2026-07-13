@@ -11,7 +11,23 @@ use std::{
 };
 
 use pw_application::recovery::{BackoffDecision, BackoffPolicy, Clock, RandomSource};
+use pw_contracts::{ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto};
+use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
 use pw_platform::process::{ProcessSpec, ProcessSupervisor};
+use tauri::Emitter;
+
+trait RuntimeHealthSink: Send + Sync {
+    fn publish(&self, event: RuntimeHealthEventDto);
+}
+
+struct AppRuntimeHealthSink(tauri::AppHandle);
+impl RuntimeHealthSink for AppRuntimeHealthSink {
+    fn publish(&self, event: RuntimeHealthEventDto) {
+        if let Err(error) = self.0.emit(RUNTIME_HEALTH_EVENT, event) {
+            tracing::warn!(%error, "failed to emit runtime health event");
+        }
+    }
+}
 
 struct SystemClock;
 impl Clock for SystemClock {
@@ -43,6 +59,15 @@ pub struct ManagedProcesses {
     generation: Arc<AtomicU64>,
     configs: Vec<MonitorConfig>,
     handles: Mutex<Vec<JoinHandle<()>>>,
+    lifecycle: Mutex<Lifecycle>,
+    circuits: Arc<AtomicU64>,
+    sink: Arc<dyn RuntimeHealthSink>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifecycle {
+    Running,
+    Shutdown,
 }
 
 #[derive(Clone)]
@@ -51,17 +76,19 @@ struct MonitorConfig {
     spec: ProcessSpec,
     probe: SocketAddr,
     probe_paths: &'static [&'static str],
+    feature: RuntimeFeature,
 }
 
 impl ManagedProcesses {
     #[must_use]
-    pub fn from_environment() -> Self {
+    pub fn from_environment(app: tauri::AppHandle) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let generation = Arc::new(AtomicU64::new(1));
         let mut configs = Vec::new();
-        for (name, variable, args_variable, port_variable, default_port) in [
+        for (name, feature, variable, args_variable, port_variable, default_port) in [
             (
                 "AivisSpeech",
+                RuntimeFeature::TextToSpeech,
                 "PW_AIVIS_ENGINE",
                 "PW_AIVIS_ARGS_JSON",
                 "PW_TTS_PORT",
@@ -69,6 +96,7 @@ impl ManagedProcesses {
             ),
             (
                 "llama-server",
+                RuntimeFeature::LanguageModel,
                 "PW_LLAMA_SERVER",
                 "PW_LLAMA_ARGS_JSON",
                 "PW_LLM_PORT",
@@ -108,18 +136,32 @@ impl ManagedProcesses {
                 },
                 probe: SocketAddr::from(([127, 0, 0, 1], port)),
                 probe_paths,
+                feature,
             });
         }
-        let handles = spawn_monitors(&configs, &stop, &generation);
+        let sink: Arc<dyn RuntimeHealthSink> = Arc::new(AppRuntimeHealthSink(app));
+        let circuits = Arc::new(AtomicU64::new(0));
+        let handles = spawn_monitors(&configs, &stop, &generation, &sink, &circuits);
         Self {
             stop,
             generation,
             configs,
             handles: Mutex::new(handles),
+            lifecycle: Mutex::new(Lifecycle::Running),
+            circuits,
+            sink,
         }
     }
 
     pub fn shutdown(&self) {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *lifecycle == Lifecycle::Shutdown {
+            return;
+        }
+        *lifecycle = Lifecycle::Shutdown;
         self.stop.store(true, Ordering::Release);
         self.generation.fetch_add(1, Ordering::AcqRel);
         for handle in self
@@ -132,16 +174,64 @@ impl ManagedProcesses {
         }
     }
 
-    /// Explicitly rearms all configured monitors after stopping the current generation.
-    pub fn restart(&self) {
-        self.shutdown();
-        self.stop.store(false, Ordering::Release);
-        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+    #[must_use]
+    pub fn is_running(&self) -> bool {
         *self
-            .handles
+            .lifecycle
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            spawn_monitors_at(&self.configs, &self.stop, &self.generation, generation);
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            == Lifecycle::Running
+    }
+
+    /// Rearms a configured feature only when its circuit is open.
+    ///
+    /// # Errors
+    /// Returns an error after terminal shutdown, for an unopened circuit, or an unconfigured feature.
+    pub fn rearm(&self, feature: RuntimeFeature) -> Result<(), &'static str> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *lifecycle != Lifecycle::Running {
+            return Err("process supervision is shut down");
+        }
+        let bit = feature_bit(feature);
+        if self.circuits.fetch_and(!bit, Ordering::AcqRel) & bit == 0 {
+            return Err("feature circuit is not open");
+        }
+        let config = self
+            .configs
+            .iter()
+            .find(|config| config.feature == feature)
+            .cloned()
+            .ok_or("feature is not configured")?;
+        let handle = spawn_monitor(
+            config.name,
+            config.spec,
+            config.probe,
+            config.probe_paths,
+            self.stop.clone(),
+            self.generation.clone(),
+            self.generation.load(Ordering::Acquire),
+            config.feature,
+            self.sink.clone(),
+            self.circuits.clone(),
+        );
+        self.handles
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(handle);
+        Ok(())
+    }
+}
+
+const fn feature_bit(feature: RuntimeFeature) -> u64 {
+    match feature {
+        RuntimeFeature::SpeechToText => 1,
+        RuntimeFeature::LanguageModel => 2,
+        RuntimeFeature::TextToSpeech => 4,
+        RuntimeFeature::Live2D => 8,
+        RuntimeFeature::AudioInput => 16,
     }
 }
 
@@ -151,6 +241,25 @@ impl Drop for ManagedProcesses {
     }
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Rearms a managed feature from the Settings window.
+///
+/// # Errors
+/// Returns a safe reason when the feature cannot be rearmed.
+pub fn rearm_managed_process(
+    feature: pw_contracts::RuntimeFeatureDto,
+    processes: tauri::State<'_, ManagedProcesses>,
+) -> Result<(), String> {
+    let feature = match feature {
+        pw_contracts::RuntimeFeatureDto::LanguageModel => RuntimeFeature::LanguageModel,
+        pw_contracts::RuntimeFeatureDto::TextToSpeech => RuntimeFeature::TextToSpeech,
+        _ => return Err("feature is not managed by the process supervisor".into()),
+    };
+    processes.rearm(feature).map_err(str::to_owned)
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn spawn_monitor(
     name: &'static str,
     spec: ProcessSpec,
@@ -159,10 +268,23 @@ fn spawn_monitor(
     stop: Arc<AtomicBool>,
     generations: Arc<AtomicU64>,
     generation: u64,
+    feature: RuntimeFeature,
+    sink: Arc<dyn RuntimeHealthSink>,
+    circuits: Arc<AtomicU64>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
         if probe_ready(probe, probe_paths) {
             tracing::info!(process=name, %probe, "existing external process detected; not owned");
+            monitor_external(
+                name,
+                feature,
+                probe,
+                probe_paths,
+                &stop,
+                &generations,
+                generation,
+                sink.as_ref(),
+            );
             return;
         }
         let clock = SystemClock;
@@ -171,6 +293,14 @@ fn spawn_monitor(
         while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
             match ProcessSupervisor::spawn(&spec) {
                 Ok(child) => {
+                    publish_health(
+                        sink.as_ref(),
+                        feature,
+                        ProcessOwnershipDto::Managed,
+                        true,
+                        0,
+                        false,
+                    );
                     tracing::info!(
                         process = name,
                         pid = child.pid(),
@@ -181,7 +311,7 @@ fn spawn_monitor(
                     while !stop.load(Ordering::Acquire)
                         && generations.load(Ordering::Acquire) == generation
                         && !probe_ready(probe, probe_paths)
-                        && child.try_wait().ok().flatten().is_none()
+                        && matches!(child.try_wait(), Ok(None))
                         && std::time::Instant::now() < ready_deadline
                     {
                         thread::sleep(Duration::from_millis(100));
@@ -192,8 +322,24 @@ fn spawn_monitor(
                     }
                     while !stop.load(Ordering::Acquire)
                         && generations.load(Ordering::Acquire) == generation
-                        && child.try_wait().ok().flatten().is_none()
                     {
+                        match child.try_wait() {
+                            Ok(None) => {}
+                            Ok(Some(_)) => break,
+                            Err(error) => {
+                                tracing::error!(process=name, %error, "managed process status query failed");
+                                publish_health(
+                                    sink.as_ref(),
+                                    feature,
+                                    ProcessOwnershipDto::Managed,
+                                    false,
+                                    1,
+                                    false,
+                                );
+                                let _ = child.stop(Duration::from_secs(5));
+                                break;
+                            }
+                        }
                         thread::sleep(Duration::from_millis(100));
                         backoff.record_healthy();
                         let _ = backoff.reset_if_stable();
@@ -214,6 +360,15 @@ fn spawn_monitor(
                 BackoffDecision::RetryAfter(delay) => sleep_interruptibly(&stop, delay),
                 BackoffDecision::CircuitOpen => {
                     tracing::error!(process = name, "managed process restart circuit opened");
+                    publish_health(
+                        sink.as_ref(),
+                        feature,
+                        ProcessOwnershipDto::Managed,
+                        false,
+                        8,
+                        true,
+                    );
+                    circuits.fetch_or(feature_bit(feature), Ordering::Release);
                     break;
                 }
             }
@@ -225,12 +380,16 @@ fn spawn_monitors(
     configs: &[MonitorConfig],
     stop: &Arc<AtomicBool>,
     generations: &Arc<AtomicU64>,
+    sink: &Arc<dyn RuntimeHealthSink>,
+    circuits: &Arc<AtomicU64>,
 ) -> Vec<JoinHandle<()>> {
     spawn_monitors_at(
         configs,
         stop,
         generations,
         generations.load(Ordering::Acquire),
+        sink,
+        circuits,
     )
 }
 
@@ -239,6 +398,8 @@ fn spawn_monitors_at(
     stop: &Arc<AtomicBool>,
     generations: &Arc<AtomicU64>,
     generation: u64,
+    sink: &Arc<dyn RuntimeHealthSink>,
+    circuits: &Arc<AtomicU64>,
 ) -> Vec<JoinHandle<()>> {
     configs
         .iter()
@@ -251,9 +412,70 @@ fn spawn_monitors_at(
                 stop.clone(),
                 generations.clone(),
                 generation,
+                config.feature,
+                sink.clone(),
+                circuits.clone(),
             )
         })
         .collect()
+}
+
+fn publish_health(
+    sink: &dyn RuntimeHealthSink,
+    feature: RuntimeFeature,
+    ownership: ProcessOwnershipDto,
+    healthy: bool,
+    attempts: u8,
+    circuit_open: bool,
+) {
+    let mut health = RuntimeHealth::new(feature);
+    if healthy {
+        health.mark_healthy(SystemClock.now_ms());
+    } else {
+        health.mark_failed(
+            &RuntimeFailure::transient(FailureCode::Unavailable),
+            SystemClock.now_ms(),
+        );
+    }
+    let mut event = RuntimeHealthEventDto::from((&health, attempts));
+    event.ownership = ownership;
+    event.circuit_open = circuit_open;
+    sink.publish(event);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn monitor_external(
+    name: &'static str,
+    feature: RuntimeFeature,
+    probe: SocketAddr,
+    paths: &'static [&'static str],
+    stop: &AtomicBool,
+    generations: &AtomicU64,
+    generation: u64,
+    sink: &dyn RuntimeHealthSink,
+) {
+    let mut failures = 0_u8;
+    publish_health(sink, feature, ProcessOwnershipDto::External, true, 0, false);
+    while !stop.load(Ordering::Acquire) && generations.load(Ordering::Acquire) == generation {
+        thread::sleep(Duration::from_secs(1));
+        if probe_ready(probe, paths) {
+            failures = 0;
+            publish_health(sink, feature, ProcessOwnershipDto::External, true, 0, false);
+        } else {
+            failures = failures.saturating_add(1);
+            if failures >= 3 {
+                tracing::warn!(process = name, "external process probe threshold exceeded");
+                publish_health(
+                    sink,
+                    feature,
+                    ProcessOwnershipDto::External,
+                    false,
+                    failures,
+                    false,
+                );
+            }
+        }
+    }
 }
 
 fn probe_ready(address: SocketAddr, paths: &[&str]) -> bool {

@@ -267,6 +267,12 @@
           "markdownDescription": "Enables the list_user_dict command without any pre-configured scope."
         },
         {
+          "description": "Enables the rearm_managed_process command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rearm-managed-process",
+          "markdownDescription": "Enables the rearm_managed_process command without any pre-configured scope."
+        },
+        {
           "description": "Enables the send_chat_message command without any pre-configured scope.",
           "type": "string",
           "const": "allow-send-chat-message",
@@ -415,6 +421,12 @@
           "type": "string",
           "const": "deny-list-user-dict",
           "markdownDescription": "Denies the list_user_dict command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rearm_managed_process command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rearm-managed-process",
+          "markdownDescription": "Denies the rearm_managed_process command without any pre-configured scope."
         },
         {
           "description": "Denies the send_chat_message command without any pre-configured scope.",

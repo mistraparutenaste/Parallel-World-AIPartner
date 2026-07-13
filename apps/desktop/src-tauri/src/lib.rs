@@ -27,7 +27,6 @@ pub fn run() {
         .manage(speech::SpeechService::default())
         .manage(chat::ChatService::default())
         .manage(tts::TtsService::default())
-        .manage(supervisor::ManagedProcesses::from_environment())
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
@@ -53,9 +52,13 @@ pub fn run() {
             commands::tts::list_tts_speakers,
             commands::tts::list_user_dict,
             commands::tts::add_user_dict_word,
-            commands::tts::delete_user_dict_word
+            commands::tts::delete_user_dict_word,
+            supervisor::rearm_managed_process
         ])
         .setup(|app| {
+            app.manage(supervisor::ManagedProcesses::from_environment(
+                app.handle().clone(),
+            ));
             let layout = bootstrap::initialize(app.handle())?;
             app.manage(layout);
             windows::create_missing_windows(app.handle())?;

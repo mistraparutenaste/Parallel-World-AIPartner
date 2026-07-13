@@ -26,6 +26,7 @@
     "allow-delete-user-dict-word",
     "allow-export-user-data",
     "allow-delete-conversation-history",
-    "allow-delete-memories"
+    "allow-delete-memories",
+    "allow-rearm-managed-process"
   ]
 }

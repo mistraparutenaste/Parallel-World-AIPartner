@@ -10,8 +10,8 @@ pub use dto::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto, FailureClassDto,
-    HealthStatusDto, LlmSettingsDto, MotionGroupDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto,
-    SttStateEventDto, TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UserDictWordDto,
+    HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto, RUNTIME_HEALTH_EVENT,
+    RuntimeFeatureDto, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
+    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
+    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };

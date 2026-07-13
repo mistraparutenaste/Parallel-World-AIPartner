@@ -1,4 +1,5 @@
 import type { RuntimeHealthEventDto } from '@parallel-world/contracts';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
 
@@ -11,6 +12,7 @@ const LABELS: Record<RuntimeHealthEventDto['feature'], string> = {
 };
 
 function ownership(event: RuntimeHealthEventDto) {
+  if (event.ownership && event.ownership !== 'not_applicable') return event.ownership;
   if (event.last_error?.toLowerCase().includes('owned')) return 'owned';
   if (event.last_error?.toLowerCase().includes('external')) return 'external';
   return 'runtime';
@@ -47,6 +49,14 @@ export function RuntimeHealthPanel() {
             <strong>{LABELS[event.feature]}</strong>{' '}
             <span>{ownership(event)}</span>{' '}
             <span>{event.attempts >= 8 ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>
+            {event.ownership === 'managed' && event.circuit_open ? (
+              <button
+                type="button"
+                onClick={() => void invoke('rearm_managed_process', { feature: event.feature })}
+              >
+                {LABELS[event.feature]} を再起動
+              </button>
+            ) : null}
           </li>
         ))}
       </ul>

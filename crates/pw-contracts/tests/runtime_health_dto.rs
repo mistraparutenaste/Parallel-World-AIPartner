@@ -1,5 +1,5 @@
 use pw_contracts::{
-    FailureClassDto, HealthStatusDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto,
+    FailureClassDto, HealthStatusDto, ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeFeatureDto,
     RuntimeHealthEventDto,
 };
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
@@ -13,6 +13,8 @@ fn runtime_health_event_is_versioned_and_named() {
         failure_class: Some(FailureClassDto::Transient),
         last_error: Some("timeout".into()),
         attempts: 2,
+        ownership: ProcessOwnershipDto::Managed,
+        circuit_open: false,
         changed_at_ms: 42,
     };
     let json = serde_json::to_value(dto).unwrap();

@@ -10,9 +10,9 @@ use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
     CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto, FailureClassDto,
-    HealthStatusDto, LlmSettingsDto, MotionGroupDto, RuntimeFeatureDto, RuntimeHealthEventDto,
-    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
-    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    HealthStatusDto, LlmSettingsDto, MotionGroupDto, ProcessOwnershipDto, RuntimeFeatureDto,
+    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
+    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -48,6 +48,7 @@ fn main() {
     UserDictWordDto::export_all(&config).expect("export UserDictWordDto bindings");
     RuntimeFeatureDto::export_all(&config).expect("export RuntimeFeatureDto bindings");
     HealthStatusDto::export_all(&config).expect("export HealthStatusDto bindings");
+    ProcessOwnershipDto::export_all(&config).expect("export ProcessOwnershipDto bindings");
     FailureClassDto::export_all(&config).expect("export FailureClassDto bindings");
     RuntimeHealthEventDto::export_all(&config).expect("export RuntimeHealthEventDto bindings");
 
