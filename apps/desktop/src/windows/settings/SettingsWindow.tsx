@@ -156,6 +156,18 @@ export function SettingsWindow() {
     }
   };
 
+  const setPlacement = async () => {
+    try {
+      const value = await invoke<UiPreferencesDto>('set_chat_placement', {
+        placement: 'docked',
+      });
+      setPreferences(value);
+      setError(null);
+    } catch (problem) {
+      setError(String(problem));
+    }
+  };
+
   return (
     <main aria-label="管理画面" className="control-center">
       <aside className="control-sidebar">
@@ -183,7 +195,7 @@ export function SettingsWindow() {
         >
           {mainArea === 'conversation' ? (
             preferences.chat_placement === 'popped' ? (
-              <section className="empty-state detached-chat"><h2>会話は別ウィンドウで開いています</h2><button type="button" onClick={() => void invoke('set_chat_placement', { placement: 'docked' })}>再格納</button></section>
+              <section className="empty-state detached-chat"><h2>会話は別ウィンドウで開いています</h2><button type="button" onClick={() => void setPlacement()}>再格納</button></section>
             ) : <ChatWindow placementControl="popout" />
           ) : null}
           {mainArea === 'settings' ? (

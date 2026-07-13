@@ -125,4 +125,18 @@ describe('control center', () => {
     fireEvent.click(within(navigation).getByRole('tab', { name: 'ログ' }));
     expect(await screen.findByText(/2023/)).toBeInTheDocument();
   });
+
+  it('surfaces a failed redock without changing the visible placement', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_ui_preferences') {
+        return Promise.resolve({ schema_version: 1, theme: 'system', chat_placement: 'popped' });
+      }
+      if (command === 'set_chat_placement') return Promise.reject(new Error('window unavailable'));
+      return Promise.resolve([]);
+    });
+    render(<SettingsWindow />);
+    fireEvent.click(await screen.findByRole('button', { name: '再格納' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('window unavailable');
+    expect(screen.getByRole('button', { name: '再格納' })).toBeInTheDocument();
+  });
 });
