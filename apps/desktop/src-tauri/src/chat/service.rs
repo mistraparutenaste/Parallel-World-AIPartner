@@ -142,8 +142,35 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn run_enrichment(database_path: &Path, rx: Receiver<String>) {
-    while let Ok(user_text) = rx.recv() {
+#[derive(Clone)]
+struct EnrichmentSender {
+    wake: SyncSender<()>,
+    pending: Arc<Mutex<Option<String>>>,
+}
+
+impl EnrichmentSender {
+    fn replace_latest(&self, text: String) -> Result<(), ()> {
+        *self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text);
+        match self.wake.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(())) => Ok(()),
+            Err(TrySendError::Disconnected(())) => Err(()),
+        }
+    }
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_enrichment(database_path: &Path, rx: Receiver<()>, pending: Arc<Mutex<Option<String>>>) {
+    while rx.recv().is_ok() {
+        let Some(user_text) = pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        else {
+            continue;
+        };
         if let Err(error) = process_enrichment_job(database_path, &user_text) {
             tracing::warn!(%error, "memory enrichment job failed; worker remains available");
         }
@@ -166,10 +193,6 @@ fn run_context_worker<M: MemoryStore>(
                 {
                     break;
                 }
-            }
-            Command::Shutdown => {
-                let _ = conversation_tx.send(Command::Shutdown);
-                break;
             }
             Command::Prepared(..) => {}
         }
@@ -230,7 +253,7 @@ struct PersistentConversationEvents<E, H> {
     history: Mutex<H>,
     conversation_id: String,
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
-    enrichment: Option<SyncSender<String>>,
+    enrichment: Option<EnrichmentSender>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
@@ -242,7 +265,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
         inner: E,
         history: H,
         conversation_id: impl Into<String>,
-        enrichment: Option<SyncSender<String>>,
+        enrichment: Option<EnrichmentSender>,
     ) -> Self {
         Self {
             inner,
@@ -314,16 +337,11 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
             if let Some(enrichment) = &self.enrichment
-                && let Err(error) = enrichment.try_send(user_text.clone())
+                && enrichment.replace_latest(user_text.clone()).is_err()
             {
-                match error {
-                    TrySendError::Full(_) => {
-                        tracing::debug!("memory enrichment coalesced while worker is busy");
-                    }
-                    TrySendError::Disconnected(_) => tracing::warn!(
-                        "memory enrichment worker unavailable; conversation remains available"
-                    ),
-                }
+                tracing::warn!(
+                    "memory enrichment worker unavailable; conversation remains available"
+                );
             }
             pending.remove(&turn);
         }
@@ -341,7 +359,6 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
 enum Command {
     Submit(String, u64),
     Prepared(String, u64, MemoryContext),
-    Shutdown,
 }
 
 fn enqueue_submit(tx: &SyncSender<Command>, text: String, turn_id: u64) -> Result<(), String> {
@@ -362,24 +379,33 @@ struct Worker {
 
 impl Worker {
     fn shutdown(mut self) -> Result<(), String> {
-        let _ = self.tx.send(Command::Shutdown);
-        let result = self.context_thread.take().map_or(Ok(()), |thread| {
-            thread
-                .join()
-                .map_err(|_| "context worker panicked during shutdown".to_owned())
-        });
-        let conversation = self.thread.take().map_or(Ok(()), |thread| {
-            thread
-                .join()
-                .map_err(|_| "conversation worker panicked during shutdown".to_owned())
-        });
-        let enrichment = self.enrichment_thread.take().map_or(Ok(()), |thread| {
-            thread
-                .join()
-                .map_err(|_| "enrichment worker panicked during shutdown".to_owned())
-        });
+        // Dropping the sole submit sender disconnects the bounded queue even when full.
+        // The context worker then drops its conversation sender, cascading shutdown.
+        drop(self.tx);
+        let result = join_with_deadline(self.context_thread.take(), "context");
+        let conversation = join_with_deadline(self.thread.take(), "conversation");
+        let enrichment = join_with_deadline(self.enrichment_thread.take(), "enrichment");
         result.and(conversation).and(enrichment)
     }
+}
+
+fn join_with_deadline(
+    thread: Option<std::thread::JoinHandle<()>>,
+    name: &str,
+) -> Result<(), String> {
+    let Some(thread) = thread else {
+        return Ok(());
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !thread.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    if !thread.is_finished() {
+        return Err(format!("{name} worker did not stop before deadline"));
+    }
+    thread
+        .join()
+        .map_err(|_| format!("{name} worker panicked during shutdown"))
 }
 
 /// Managed state: at most one conversation worker.
@@ -388,6 +414,7 @@ pub struct ChatService {
     worker: Mutex<Option<Worker>>,
     cancel: Arc<AtomicBool>,
     fallback_turn_id: AtomicU64,
+    health: Arc<Mutex<RuntimeHealth>>,
 }
 
 impl Default for ChatService {
@@ -397,6 +424,9 @@ impl Default for ChatService {
             worker: Mutex::new(None),
             cancel: Arc::new(AtomicBool::new(false)),
             fallback_turn_id: AtomicU64::new(1_u64 << 63),
+            health: Arc::new(Mutex::new(RuntimeHealth::new(
+                RuntimeFeature::LanguageModel,
+            ))),
         }
     }
 }
@@ -535,7 +565,12 @@ impl ChatService {
         let cancel = Arc::clone(&self.cancel);
         let (tx, context_rx) = sync_channel::<Command>(SUBMIT_QUEUE_CAPACITY);
         let (conversation_tx, rx) = sync_channel::<Command>(CONVERSATION_QUEUE_CAPACITY);
-        let (enrichment_tx, enrichment_rx) = sync_channel::<String>(ENRICHMENT_QUEUE_CAPACITY);
+        let (enrichment_wake, enrichment_rx) = sync_channel::<()>(ENRICHMENT_QUEUE_CAPACITY);
+        let enrichment_pending = Arc::new(Mutex::new(None));
+        let enrichment_tx = EnrichmentSender {
+            wake: enrichment_wake,
+            pending: Arc::clone(&enrichment_pending),
+        };
         let database_path = app
             .state::<AppDataLayout>()
             .data
@@ -559,7 +594,10 @@ impl ChatService {
             None
         }).unwrap_or(0);
         let events = PersistentConversationEvents::new_with_enrichment(
-            TauriConversationEvents { app },
+            TauriConversationEvents {
+                app,
+                health: Arc::clone(&self.health),
+            },
             history,
             DEFAULT_CONVERSATION_ID,
             Some(enrichment_tx),
@@ -573,7 +611,7 @@ impl ChatService {
         let enrichment_path = database_path.clone();
         let enrichment_thread = std::thread::Builder::new()
             .name("pw-memory-enrichment".into())
-            .spawn(move || run_enrichment(&enrichment_path, enrichment_rx))
+            .spawn(move || run_enrichment(&enrichment_path, enrichment_rx, enrichment_pending))
             .map_err(|error| format!("failed to spawn memory enrichment worker: {error}"))?;
 
         let thread = std::thread::Builder::new()
@@ -594,7 +632,6 @@ impl ChatService {
                             orchestrator.submit_user_text_with_context(&text, turn_id, &context);
                         }
                         Command::Submit(..) => {}
-                        Command::Shutdown => break,
                     }
                 }
             })
@@ -628,11 +665,15 @@ fn with_character_abilities<R: Runtime>(app: &AppHandle<R>, base: String) -> Str
 
 struct TauriConversationEvents<R: Runtime> {
     app: AppHandle<R>,
+    health: Arc<Mutex<RuntimeHealth>>,
 }
 
 impl<R: Runtime> TauriConversationEvents<R> {
     fn emit_health(&self, healthy: bool) {
-        let mut health = RuntimeHealth::new(RuntimeFeature::LanguageModel);
+        let mut health = self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let now = u64::try_from(
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -646,7 +687,7 @@ impl<R: Runtime> TauriConversationEvents<R> {
         }
         let _ = self.app.emit(
             RUNTIME_HEALTH_EVENT,
-            RuntimeHealthEventDto::from((&health, u8::from(!healthy))),
+            RuntimeHealthEventDto::from((&*health, u8::from(!healthy))),
         );
     }
     fn emit_message(&self, turn: TurnId, role: ChatRoleDto, text: &str) {
@@ -948,9 +989,11 @@ mod tests {
         }
         drop(history);
         let (tx, rx) = sync_channel(8);
+        let pending = Arc::new(Mutex::new(Some("私は猫が好きです".to_owned())));
+        let worker_pending = Arc::clone(&pending);
         let worker_path = path.clone();
-        let worker = std::thread::spawn(move || run_enrichment(&worker_path, rx));
-        tx.send("私は猫が好きです".into()).unwrap();
+        let worker = std::thread::spawn(move || run_enrichment(&worker_path, rx, worker_pending));
+        tx.send(()).unwrap();
         drop(tx);
         worker.join().unwrap();
 
@@ -1153,7 +1196,7 @@ mod tests {
             conversation_rx.recv().unwrap(),
             Command::Prepared(_, 1, _)
         ));
-        tx.send(Command::Shutdown).unwrap();
+        drop(tx);
         worker.join().unwrap();
     }
 
@@ -1256,7 +1299,6 @@ mod tests {
                 match command {
                     Command::Submit(_, _) => worker_persisted.store(true, Ordering::SeqCst),
                     Command::Prepared(_, _, _) => {}
-                    Command::Shutdown => break,
                 }
             }
         });
@@ -1310,5 +1352,40 @@ mod tests {
             panic!("expected queued user submission");
         };
         assert_eq!((text.as_str(), turn_id), ("first", 1));
+    }
+
+    #[test]
+    fn enrichment_coalescing_replaces_pending_text_with_latest() {
+        let (wake, rx) = sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+        };
+        sender.replace_latest("old".into()).unwrap();
+        sender.replace_latest("latest".into()).unwrap();
+        rx.recv().unwrap();
+        assert_eq!(pending.lock().unwrap().take().as_deref(), Some("latest"));
+        assert!(
+            rx.try_recv().is_err(),
+            "one wake coalesces multiple updates"
+        );
+    }
+
+    #[test]
+    fn shutdown_does_not_block_sending_control_into_a_full_queue() {
+        let (tx, rx) = sync_channel(1);
+        tx.send(Command::Submit("queued".into(), 1)).unwrap();
+        let context = std::thread::spawn(move || while rx.recv().is_ok() {});
+        let worker = Worker {
+            tx,
+            settings_fingerprint: String::new(),
+            thread: None,
+            context_thread: Some(context),
+            enrichment_thread: None,
+        };
+        let started = std::time::Instant::now();
+        worker.shutdown().unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

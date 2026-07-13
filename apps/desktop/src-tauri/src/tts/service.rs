@@ -2,7 +2,7 @@
 //! `speech-audio` items to the character window.
 
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -33,12 +33,29 @@ const TTS_QUEUE_CAPACITY: usize = 8;
 
 enum Command {
     Sentence { turn: TurnId, text: String },
-    Shutdown,
 }
 
 struct Worker {
     tx: SyncSender<Command>,
     settings_fingerprint: String,
+    cancel: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn shutdown(mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        drop(self.tx);
+        if let Some(thread) = self.thread.take() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            while !thread.is_finished() && std::time::Instant::now() < deadline {
+                std::thread::yield_now();
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
+        }
+    }
 }
 
 /// Managed state: at most one synthesis worker.
@@ -47,12 +64,26 @@ struct Worker {
 /// watermark is shared with the worker: `stop()` raises it and emits
 /// `speech-stop` from the calling thread; the worker drops queued
 /// sentences at or below the watermark before synthesizing them.
-#[derive(Default)]
 pub struct TtsService {
     worker: Mutex<Option<Worker>>,
     latest_turn: AtomicU64,
     invalid_up_to: Arc<AtomicU64>,
     dropped_sentences: AtomicU64,
+    text_only_turn: AtomicU64,
+    health: Arc<Mutex<RuntimeHealth>>,
+}
+
+impl Default for TtsService {
+    fn default() -> Self {
+        Self {
+            worker: Mutex::new(None),
+            latest_turn: AtomicU64::new(0),
+            invalid_up_to: Arc::new(AtomicU64::new(0)),
+            dropped_sentences: AtomicU64::new(0),
+            text_only_turn: AtomicU64::new(0),
+            health: Arc::new(Mutex::new(RuntimeHealth::new(RuntimeFeature::TextToSpeech))),
+        }
+    }
 }
 
 fn fingerprint(settings: &TtsSettingsDto) -> String {
@@ -78,6 +109,18 @@ impl TtsService {
             return;
         }
         self.latest_turn.store(turn.value(), Ordering::Relaxed);
+        let text_only = self.text_only_turn.load(Ordering::Relaxed);
+        if text_only == turn.value() {
+            return;
+        }
+        if turn.value() > text_only {
+            let _ = self.text_only_turn.compare_exchange(
+                text_only,
+                0,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            );
+        }
 
         let wanted = fingerprint(&settings);
         let mut guard = self.lock();
@@ -87,13 +130,13 @@ impl TtsService {
         };
         if restart {
             if let Some(worker) = guard.take() {
-                let _ = worker.tx.send(Command::Shutdown);
+                worker.shutdown();
             }
             match self.start_worker(app.clone(), &settings) {
                 Ok(worker) => *guard = Some(worker),
                 Err(message) => {
                     emit_state(app, false, Some(message));
-                    emit_tts_health(app, false);
+                    emit_tts_health(app, &self.health, false);
                     return;
                 }
             }
@@ -107,15 +150,20 @@ impl TtsService {
             match error {
                 TrySendError::Full(_) => {
                     self.dropped_sentences.fetch_add(1, Ordering::Relaxed);
-                    emit_state(
-                        app,
-                        false,
-                        Some("tts queue is busy; continuing text-only".to_owned()),
-                    );
-                    emit_tts_health(app, false);
+                    self.invalid_up_to
+                        .fetch_max(turn.value(), Ordering::Relaxed);
+                    if self.text_only_turn.swap(turn.value(), Ordering::Relaxed) != turn.value() {
+                        emit_state(
+                            app,
+                            false,
+                            Some("tts queue is busy; continuing this turn text-only".to_owned()),
+                        );
+                        emit_tts_health(app, &self.health, false);
+                    }
                 }
                 TrySendError::Disconnected(_) => {
                     emit_state(app, false, Some("tts worker is not available".to_owned()));
+                    emit_tts_health(app, &self.health, false);
                 }
             }
         }
@@ -136,7 +184,7 @@ impl TtsService {
     ) -> Result<Worker, String> {
         let client = AivisSpeechClient::new(&TtsClientConfig {
             base_url: settings.base_url.clone(),
-            timeout: Duration::from_secs(30),
+            timeout: Duration::from_secs(5),
         })
         .map_err(|error| error.to_string())?;
         let layout = app.state::<AppDataLayout>();
@@ -151,14 +199,23 @@ impl TtsService {
             },
         );
         let invalid = Arc::clone(&self.invalid_up_to);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = sync_channel::<Command>(TTS_QUEUE_CAPACITY);
-        let sink = TauriSpeechAudioSink { app };
+        let sink = TauriSpeechAudioSink {
+            app,
+            health: Arc::clone(&self.health),
+            invalid: Arc::clone(&invalid),
+        };
 
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("pw-tts".into())
             .spawn(move || {
                 let mut queue = SpeechSynthesisQueue::new(synthesizer, sink);
                 while let Ok(command) = rx.recv() {
+                    if worker_cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
                     match command {
                         Command::Sentence { turn, text } => {
                             if turn.value() <= invalid.load(Ordering::Relaxed) {
@@ -166,7 +223,6 @@ impl TtsService {
                             }
                             queue.push_sentence(turn, &text);
                         }
-                        Command::Shutdown => break,
                     }
                 }
             })
@@ -175,6 +231,8 @@ impl TtsService {
         Ok(Worker {
             tx,
             settings_fingerprint: fingerprint(settings),
+            cancel,
+            thread: Some(thread),
         })
     }
 }
@@ -200,8 +258,10 @@ fn emit_state<R: Runtime>(app: &AppHandle<R>, available: bool, message: Option<S
     );
 }
 
-fn emit_tts_health<R: Runtime>(app: &AppHandle<R>, healthy: bool) {
-    let mut health = RuntimeHealth::new(RuntimeFeature::TextToSpeech);
+fn emit_tts_health<R: Runtime>(app: &AppHandle<R>, registry: &Mutex<RuntimeHealth>, healthy: bool) {
+    let mut health = registry
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |duration| {
@@ -214,18 +274,23 @@ fn emit_tts_health<R: Runtime>(app: &AppHandle<R>, healthy: bool) {
     }
     let _ = app.emit(
         RUNTIME_HEALTH_EVENT,
-        RuntimeHealthEventDto::from((&health, u8::from(!healthy))),
+        RuntimeHealthEventDto::from((&*health, u8::from(!healthy))),
     );
 }
 
 struct TauriSpeechAudioSink<R: Runtime> {
     app: AppHandle<R>,
+    health: Arc<Mutex<RuntimeHealth>>,
+    invalid: Arc<AtomicU64>,
 }
 
 impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
     fn on_audio(&self, turn: TurnId, seq: u32, wav_path: &Path, text: &str) {
+        if turn.value() <= self.invalid.load(Ordering::Relaxed) {
+            return;
+        }
         emit_state(&self.app, true, None);
-        emit_tts_health(&self.app, true);
+        emit_tts_health(&self.app, &self.health, true);
         let payload = SpeechAudioEventDto {
             schema_version: SCHEMA_VERSION,
             turn_id: turn.value(),
@@ -247,6 +312,6 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
     fn on_error(&self, _turn: TurnId, message: &str) {
         tracing::warn!(%message, "tts synthesis failed; continuing text-only");
         emit_state(&self.app, false, Some(message.to_owned()));
-        emit_tts_health(&self.app, false);
+        emit_tts_health(&self.app, &self.health, false);
     }
 }

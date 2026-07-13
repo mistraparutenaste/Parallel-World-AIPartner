@@ -62,6 +62,7 @@ export function CharacterWindow() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<Live2DControllerState>('idle');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryGeneration, setRetryGeneration] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -219,7 +220,7 @@ export function CharacterWindow() {
       player?.dispose();
       controller?.dispose();
     };
-  }, []);
+  }, [retryGeneration]);
 
   return (
     <main aria-label="キャラクター">
@@ -228,6 +229,7 @@ export function CharacterWindow() {
         className="character-canvas"
         data-tauri-drag-region
         data-live2d-surface
+        hidden={state === 'unavailable'}
       />
       <div className="character-status">
         <StatusBadge state={toBadgeState(state)} />
@@ -235,7 +237,14 @@ export function CharacterWindow() {
           <p className="character-error">{loadError}</p>
         )}
         {state === 'unavailable' && (
-          <p>キャラクター表示を利用できません。チャットは通常どおり利用できます。</p>
+          <section aria-label="キャラクター表示フォールバック">
+            <p>キャラクター表示を利用できません。チャットは通常どおり利用できます。</p>
+            <button type="button" onClick={() => {
+              setLoadError(null);
+              setState('idle');
+              setRetryGeneration((generation) => generation + 1);
+            }}>再試行</button>
+          </section>
         )}
       </div>
     </main>
