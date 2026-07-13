@@ -4,5 +4,9 @@
   "description": "Settings window can read the current application status.",
   "local": true,
   "windows": ["settings"],
-  "permissions": ["allow-get-app-status"]
+  "permissions": [
+    "allow-get-app-status",
+    "allow-get-character-presentation",
+    "allow-set-character-presentation"
+  ]
 }

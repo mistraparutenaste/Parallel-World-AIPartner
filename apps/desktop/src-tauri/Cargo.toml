@@ -18,6 +18,8 @@ tauri-build.workspace = true
 
 [dependencies]
 pw-contracts = { path = "../../../crates/pw-contracts" }
+pw-domain = { path = "../../../crates/pw-domain" }
+serde.workspace = true
 pw-platform = { path = "../../../crates/pw-platform" }
 tauri.workspace = true
 tracing.workspace = true

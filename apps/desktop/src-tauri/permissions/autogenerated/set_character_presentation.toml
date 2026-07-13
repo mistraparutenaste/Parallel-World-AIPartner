@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-character-presentation"
+description = "Enables the set_character_presentation command without any pre-configured scope."
+commands.allow = ["set_character_presentation"]
+
+[[permission]]
+identifier = "deny-set-character-presentation"
+description = "Denies the set_character_presentation command without any pre-configured scope."
+commands.deny = ["set_character_presentation"]

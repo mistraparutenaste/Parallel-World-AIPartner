@@ -6,6 +6,7 @@
   "windows": ["character"],
   "permissions": [
     "core:window:allow-start-dragging",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "allow-get-character-presentation"
   ]
 }

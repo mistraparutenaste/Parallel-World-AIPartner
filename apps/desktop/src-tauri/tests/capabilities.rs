@@ -71,7 +71,11 @@ fn character_has_only_minimal_window_permissions() {
     assert_eq!(value["windows"], serde_json::json!(["character"]));
     assert_eq!(
         permissions(&value),
-        ["core:window:allow-start-dragging", "core:window:allow-show"]
+        [
+            "core:window:allow-start-dragging",
+            "core:window:allow-show",
+            "allow-get-character-presentation"
+        ]
     );
     let serialized = value.to_string();
     assert!(!serialized.contains("shell"));
@@ -92,5 +96,22 @@ fn settings_exposes_get_app_status() {
     let value = capability("settings");
     assert_capability_metadata(&value, "settings");
     assert_eq!(value["windows"], serde_json::json!(["settings"]));
-    assert_eq!(permissions(&value), ["allow-get-app-status"]);
+    assert_eq!(
+        permissions(&value),
+        [
+            "allow-get-app-status",
+            "allow-get-character-presentation",
+            "allow-set-character-presentation"
+        ]
+    );
+}
+
+#[test]
+fn character_cannot_write_and_settings_is_the_only_writer() {
+    let character = capability("character").to_string();
+    let chat = capability("chat").to_string();
+    let settings = capability("settings").to_string();
+    assert!(!character.contains("allow-set-character-presentation"));
+    assert!(!chat.contains("character-presentation"));
+    assert!(settings.contains("allow-set-character-presentation"));
 }

@@ -9,8 +9,8 @@ import { SettingsWindow } from './settings/SettingsWindow';
 describe('desktop windows', () => {
   it('renders the character surface', () => {
     const { container } = render(<CharacterWindow />);
-    expect(container.querySelector('canvas[aria-label="Live2D character"]')).toBeInTheDocument();
-    expect(screen.getByRole('status')).toHaveTextContent('準備中');
+    expect(container.querySelector('canvas[aria-label="Live2Dキャラクター"]')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('読み込み中');
     expect(container.querySelector('.character-stage__silhouette')).toHaveAttribute('aria-hidden', 'true');
     expect(container.querySelector('.character-stage__drag')).toHaveAttribute('data-tauri-drag-region');
   });
@@ -21,6 +21,26 @@ describe('desktop windows', () => {
     const css = readFileSync(resolve(desktopRoot, 'src/shared/styles/global.css'), 'utf8');
     expect(html).toContain('<html class="character-document"');
     expect(css).toContain('html.character-document, .character-body, .character-body #root { background: transparent; }');
+  });
+
+  it('keeps a real drag hit target above the interactive canvas and fallback layers', () => {
+    const { container } = render(<CharacterWindow />);
+    const drag = container.querySelector<HTMLElement>('.character-stage__drag')!;
+    const css = readFileSync(resolve(process.cwd(), 'src/shared/styles/global.css'), 'utf8');
+    expect(drag).toHaveAttribute('data-tauri-drag-region');
+    expect(css).toMatch(/\.character-stage__drag\s*\{[^}]*position:\s*absolute;[^}]*width:\s*32px;[^}]*height:\s*32px;[^}]*z-index:\s*3;[^}]*pointer-events:\s*auto;/s);
+    expect(css).toMatch(/\.character-stage__live2d\s*\{[^}]*z-index:\s*1;/s);
+    expect(css).toMatch(/\.character-stage__silhouette\s*\{[^}]*z-index:\s*0;[^}]*pointer-events:\s*none;/s);
+    expect(css).toMatch(/\.character-stage__drag i\s*\{[^}]*pointer-events:\s*none;/s);
+  });
+
+  it('constrains the high-DPI character canvas without document overflow', () => {
+    const { container } = render(<CharacterWindow />);
+    expect(container.querySelector('.character-stage')).toBeInTheDocument();
+    const css = readFileSync(resolve(process.cwd(), 'src/shared/styles/global.css'), 'utf8');
+    expect(css).toMatch(/\.character-stage\s*\{[^}]*min-height:\s*100vh;[^}]*overflow:\s*hidden;/s);
+    expect(css).toMatch(/\.character-stage__live2d\s*\{[^}]*inset:\s*0;[^}]*width:\s*100%;[^}]*height:\s*100%;/s);
+    expect(css).toContain('html, body, #root { min-width: 320px;');
   });
 
   it('renders chat input and stop action', () => {

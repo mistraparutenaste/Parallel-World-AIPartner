@@ -1,4 +1,4 @@
-use pw_contracts::dto::{AppStatusDto, ConversationStateDto};
+use pw_contracts::dto::{AppStatusDto, CharacterPresentationSettingsDto, ConversationStateDto};
 use ts_rs::{Config, TS};
 
 fn main() -> Result<(), ts_rs::ExportError> {
@@ -10,5 +10,6 @@ fn main() -> Result<(), ts_rs::ExportError> {
     let config = Config::new().with_out_dir(output_directory);
 
     ConversationStateDto::export(&config)?;
-    AppStatusDto::export(&config)
+    AppStatusDto::export(&config)?;
+    CharacterPresentationSettingsDto::export(&config)
 }

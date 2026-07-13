@@ -2071,7 +2071,9 @@ name = "parallel-world-desktop"
 version = "0.1.0"
 dependencies = [
  "pw-contracts",
+ "pw-domain",
  "pw-platform",
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
