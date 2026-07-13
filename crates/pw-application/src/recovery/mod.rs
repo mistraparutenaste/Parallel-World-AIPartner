@@ -44,7 +44,9 @@ impl<'a, C: Clock, R: RandomSource> BackoffPolicy<'a, C, R> {
         let maximum = Self::BASE_DELAY_MS
             .saturating_mul(2_u64.saturating_pow(exponent))
             .min(Self::CAP_DELAY_MS);
-        BackoffDecision::RetryAfter(Duration::from_millis(self.rng.uniform_inclusive(maximum)))
+        BackoffDecision::RetryAfter(Duration::from_millis(
+            self.rng.uniform_inclusive(maximum).min(maximum),
+        ))
     }
     pub fn record_healthy(&mut self) {
         self.healthy_since_ms

@@ -183,6 +183,11 @@ pub fn is_safe_persistent_content(content: &str) -> bool {
 
 #[must_use]
 pub fn redact_persistent_content(content: &str) -> String {
+    pw_domain::runtime_health::redact_persistent_content(content)
+}
+
+#[allow(dead_code)]
+fn legacy_redact_persistent_content(content: &str) -> String {
     let keyed = redact_key_values(content);
     if keyed != content {
         return keyed;

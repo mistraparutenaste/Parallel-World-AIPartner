@@ -17,6 +17,13 @@ impl RandomSource for MaxRandom {
     }
 }
 
+struct MaliciousRandom;
+impl RandomSource for MaliciousRandom {
+    fn uniform_inclusive(&mut self, upper: u64) -> u64 {
+        upper.saturating_add(999_999)
+    }
+}
+
 #[test]
 fn full_jitter_is_capped_and_circuit_opens_after_eight_failures() {
     let clock = FakeClock(Cell::new(0));
@@ -29,6 +36,16 @@ fn full_jitter_is_capped_and_circuit_opens_after_eight_failures() {
         );
     }
     assert_eq!(policy.record_failure(), BackoffDecision::CircuitOpen);
+}
+
+#[test]
+fn malicious_rng_is_clamped_to_the_attempt_maximum() {
+    let clock = FakeClock(Cell::new(0));
+    let mut policy = BackoffPolicy::new(&clock, MaliciousRandom);
+    assert_eq!(
+        policy.record_failure(),
+        BackoffDecision::RetryAfter(Duration::from_millis(250))
+    );
 }
 
 #[test]
