@@ -6,6 +6,7 @@ import { installFrontendDiagnostics } from '../../shared/frontend-diagnostics';
 
 installFrontendDiagnostics();
 
+document.documentElement.classList.add('transparent');
 document.body.classList.add('transparent');
 
 const container = document.getElementById('root');

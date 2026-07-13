@@ -6,7 +6,7 @@ use pw_platform::diagnostics::{
 use pw_platform::paths::AppDataLayout;
 use std::{
     fs,
-    io::{Read, Seek, Write},
+    io::{BufRead, Read, Seek, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -17,6 +17,17 @@ use crate::error::AppError;
 const LOG_FILE_LIMIT: u64 = 5 * 1024 * 1024;
 const LOG_READ_LIMIT: u64 = 128 * 1024;
 const LOG_LINE_LIMIT: usize = 16 * 1024;
+
+fn truncate_utf8_bytes(value: &str) -> String {
+    if value.len() <= LOG_LINE_LIMIT {
+        return value.to_owned();
+    }
+    let mut end = LOG_LINE_LIMIT;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
 #[derive(Clone)]
 struct BoundedLogMakeWriter {
     state: Arc<Mutex<BoundedLogState>>,
@@ -78,22 +89,48 @@ impl TechnicalLogAccess {
         } else {
             cursor.map_or(0, |value| value.offset)
         };
+        let starts_mid_line = if offset == 0 {
+            false
+        } else {
+            file.seek(std::io::SeekFrom::Start(offset - 1))
+                .map_err(|error| error.to_string())?;
+            let mut previous = [0_u8; 1];
+            file.read_exact(&mut previous)
+                .map_err(|error| error.to_string())?;
+            previous[0] != b'\n'
+        };
         file.seek(std::io::SeekFrom::Start(offset))
             .map_err(|error| error.to_string())?;
         let mut bytes = Vec::new();
-        file.take(LOG_READ_LIMIT)
+        (&mut file)
+            .take(LOG_READ_LIMIT)
             .read_to_end(&mut bytes)
             .map_err(|error| error.to_string())?;
-        let next_offset = offset + u64::try_from(bytes.len()).unwrap_or(LOG_READ_LIMIT);
-        let text = String::from_utf8_lossy(&bytes);
-        let mut lines = text.lines();
-        if initial && offset > 0 {
-            let _ = lines.next();
+        if u64::try_from(bytes.len()).unwrap_or(0) == LOG_READ_LIMIT && !bytes.ends_with(b"\n") {
+            std::io::BufReader::new(&mut file)
+                .read_until(b'\n', &mut bytes)
+                .map_err(|error| error.to_string())?;
         }
-        let lines = lines
+        let complete_len = bytes
+            .iter()
+            .rposition(|byte| *byte == b'\n')
+            .map_or(0, |index| index + 1);
+        let complete = &bytes[..complete_len];
+        let start = if starts_mid_line {
+            complete
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(complete.len(), |index| index + 1)
+        } else {
+            0
+        };
+        let text = String::from_utf8_lossy(&complete[start..]);
+        let lines = text
+            .lines()
             .map(pw_domain::runtime_health::redact_credentials)
-            .map(|line| line.chars().take(LOG_LINE_LIMIT).collect())
+            .map(|line| truncate_utf8_bytes(&line))
             .collect();
+        let next_offset = offset + u64::try_from(complete_len).unwrap_or(LOG_READ_LIMIT);
         Ok(pw_contracts::TechnicalLogChunkDto {
             schema_version: pw_contracts::SCHEMA_VERSION,
             lines,
@@ -102,7 +139,7 @@ impl TechnicalLogAccess {
                 offset: next_offset,
             },
             reset,
-            has_more: next_offset < length,
+            has_more: next_offset < length && next_offset > offset,
         })
     }
 }
@@ -266,7 +303,10 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) -> Result<AppDataLayout, AppEr
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundedLogMakeWriter, BoundedLogState, LOG_FILE_LIMIT, TechnicalLogAccess};
+    use super::{
+        BoundedLogMakeWriter, BoundedLogState, LOG_FILE_LIMIT, LOG_READ_LIMIT, TechnicalLogAccess,
+    };
+    use pw_contracts::TechnicalLogCursorDto;
     use std::{
         io::Write,
         sync::{Arc, Mutex},
@@ -311,6 +351,38 @@ mod tests {
         let reset = access.read(Some(delta.next_cursor)).unwrap();
         assert!(reset.reset);
         assert_eq!(reset.lines, ["fresh-generation"]);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn technical_log_redacts_across_chunk_boundaries_and_limits_utf8_bytes() {
+        let root = std::env::temp_dir().join(format!("pw-log-boundary-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state = Arc::new(Mutex::new(BoundedLogState {
+            directory: root.clone(),
+            sequence: 0,
+            generation: 0,
+        }));
+        let access = TechnicalLogAccess::new(state);
+        let mut bytes = vec![b'x'; usize::try_from(LOG_READ_LIMIT).unwrap() - b"token=".len()];
+        bytes.extend_from_slice(b"token=abc\n");
+        bytes.extend_from_slice("あ".repeat(10_000).as_bytes());
+        bytes.push(b'\n');
+        std::fs::write(root.join("parallel-world.log"), bytes).unwrap();
+
+        let first = access
+            .read(Some(TechnicalLogCursorDto {
+                generation: 0,
+                offset: 0,
+            }))
+            .unwrap();
+        assert!(!first.lines.iter().any(|line| line.contains("abc")));
+        assert!(first.lines.iter().all(|line| line.len() <= 16 * 1024));
+
+        let second = access.read(Some(first.next_cursor)).unwrap();
+        assert!(!second.lines.iter().any(|line| line.contains("abc")));
+        assert!(second.lines.iter().all(|line| line.len() <= 16 * 1024));
         let _ = std::fs::remove_dir_all(root);
     }
 

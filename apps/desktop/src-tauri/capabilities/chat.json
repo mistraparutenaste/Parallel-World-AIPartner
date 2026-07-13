@@ -9,7 +9,6 @@
     "core:default",
     "allow-get-app-status",
     "allow-get-ui-preferences",
-    "allow-set-theme-preference",
     "allow-set-chat-placement",
     "allow-send-chat-message",
     "allow-cancel-turn",

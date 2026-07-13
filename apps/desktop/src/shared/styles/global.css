@@ -425,9 +425,11 @@ textarea {
   height: 100vh;
 }
 
-body.transparent,
+html.transparent,
+html.transparent body,
 body.transparent #root,
-body.transparent main {
+body.transparent main,
+body.transparent canvas {
   width: 100vw;
   height: 100vh;
   overflow: hidden;

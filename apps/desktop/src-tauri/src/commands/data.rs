@@ -168,12 +168,17 @@ fn list_conversation_log_at(
 /// # Errors
 ///
 /// Returns an error when the history database cannot be queried.
-pub fn list_conversation_log(
+pub async fn list_conversation_log(
     layout: State<'_, AppDataLayout>,
     before_message_id: Option<i64>,
     query: Option<String>,
 ) -> Result<ConversationLogPageDto, String> {
-    list_conversation_log_at(&path(&layout), before_message_id, query.as_deref())
+    let database_path = path(&layout);
+    tauri::async_runtime::spawn_blocking(move || {
+        list_conversation_log_at(&database_path, before_message_id, query.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]

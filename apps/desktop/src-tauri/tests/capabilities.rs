@@ -82,7 +82,6 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
         [
             "allow-get-app-status",
             "allow-get-ui-preferences",
-            "allow-set-theme-preference",
             "allow-set-chat-placement",
             "allow-send-chat-message",
             "allow-cancel-turn",
@@ -237,11 +236,7 @@ fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
         );
     }
     let (_, chat) = capability_permissions("chat");
-    for permission in [
-        "allow-get-ui-preferences",
-        "allow-set-theme-preference",
-        "allow-set-chat-placement",
-    ] {
+    for permission in ["allow-get-ui-preferences", "allow-set-chat-placement"] {
         assert!(chat.iter().any(|item| item == permission), "{permission}");
     }
     assert!(
