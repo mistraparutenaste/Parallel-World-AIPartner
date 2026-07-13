@@ -1136,6 +1136,40 @@ mod tests {
     }
 
     #[test]
+    fn persisted_history_and_export_never_contain_raw_credentials() {
+        let root = std::env::temp_dir().join(format!("pw-redacted-export-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.sqlite3");
+        let export = root.join("export.sqlite3");
+        let mut history = SqliteConversationHistory::new(Database::open(&source).unwrap());
+        let mut tracker = TurnTracker::new();
+        persist_completed_turn(
+            &mut history,
+            DEFAULT_CONVERSATION_ID,
+            tracker.begin_turn(),
+            "keep token=rawSecret123, next",
+            "Authorization: Bearer rawAssistant456;",
+        )
+        .unwrap();
+        drop(history);
+        Database::open(&source).unwrap().backup_to(&export).unwrap();
+        for path in [&source, &export] {
+            let history = SqliteConversationHistory::new(Database::open(path).unwrap());
+            let joined = history
+                .list_messages(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .into_iter()
+                .map(|m| m.content)
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(joined.contains("[REDACTED]"));
+            assert!(!joined.contains("rawSecret123"));
+            assert!(!joined.contains("rawAssistant456"));
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn restored_messages_are_limited_to_recent_prompt_history() {
         let mut history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
         let mut tracker = TurnTracker::new();

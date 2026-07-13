@@ -97,10 +97,28 @@ pub fn export_user_data(
         std::path::Path::new(destination.trim()),
         allow_overwrite,
     )?;
+    export_database(&source, &destination)
+}
+fn export_database(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     Database::open(source)
         .map_err(|e| e.to_string())?
         .backup_to(destination)
         .map_err(|e| e.to_string())
+}
+fn delete_history_core(
+    database_path: &std::path::Path,
+) -> Result<ConversationHistoryDeletedEventDto, String> {
+    let mut db = Database::open(database_path).map_err(|e| e.to_string())?;
+    let tx = db
+        .connection_mut()
+        .transaction()
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(ConversationHistoryDeletedEventDto {
+        schema_version: SCHEMA_VERSION,
+    })
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -114,21 +132,9 @@ pub fn delete_conversation_history<R: Runtime>(
     chat: State<'_, ChatService>,
 ) -> Result<(), String> {
     chat.with_exclusive_reset(|| {
-        let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
-        let tx = db
-            .connection_mut()
-            .transaction()
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
-        app.emit(
-            "conversation-history-deleted",
-            ConversationHistoryDeletedEventDto {
-                schema_version: SCHEMA_VERSION,
-            },
-        )
-        .map_err(|e| e.to_string())
+        let payload = delete_history_core(&path(&layout))?;
+        app.emit("conversation-history-deleted", payload)
+            .map_err(|e| e.to_string())
     })
 }
 #[tauri::command]
@@ -157,7 +163,9 @@ pub fn delete_memories(
 
 #[cfg(test)]
 mod tests {
-    use super::validated_export_path;
+    use super::{delete_history_core, export_database, validated_export_path};
+    use pw_application::history::{ConversationHistory, StoredConversation};
+    use pw_storage::{Database, SqliteConversationHistory};
     #[test]
     fn canonicalization_rejects_parent_alias_and_hardlink() {
         let root = std::env::temp_dir().join(format!("pw-export-{}", std::process::id()));
@@ -190,6 +198,47 @@ mod tests {
             "DESTINATION_EXISTS"
         );
         assert!(validated_export_path(&source, &other, true).is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn command_cores_export_then_delete_and_return_typed_notification() {
+        let root = std::env::temp_dir().join(format!("pw-command-core-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.sqlite3");
+        let export = root.join("export.sqlite3");
+        let mut history = SqliteConversationHistory::new(Database::open(&source).unwrap());
+        history
+            .upsert_conversation(&StoredConversation {
+                id: "default".into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        drop(history);
+        export_database(&source, &export).unwrap();
+        assert_eq!(
+            Database::open(&export)
+                .unwrap()
+                .connection()
+                .query_row("SELECT count(*) FROM conversations", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            delete_history_core(&source).unwrap().schema_version,
+            pw_contracts::SCHEMA_VERSION
+        );
+        assert_eq!(
+            Database::open(&source)
+                .unwrap()
+                .connection()
+                .query_row("SELECT count(*) FROM conversations", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 }

@@ -2630,6 +2630,7 @@ name = "pw-application"
 version = "0.1.0"
 dependencies = [
  "pw-domain",
+ "regex",
  "thiserror 2.0.18",
  "tracing",
 ]
