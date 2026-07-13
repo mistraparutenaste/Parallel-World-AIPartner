@@ -25,6 +25,16 @@ pub struct Database {
 }
 
 impl Database {
+    /// Creates a consistent snapshot with `SQLite`'s Online Backup API.
+    ///
+    /// # Errors
+    /// Returns an error when the destination cannot be opened or backup fails.
+    pub fn backup_to(&self, destination: impl AsRef<Path>) -> Result<(), StorageError> {
+        let mut destination = Connection::open(destination)?;
+        let backup = rusqlite::backup::Backup::new(&self.connection, &mut destination)?;
+        backup.run_to_completion(64, Duration::from_millis(10), None)?;
+        Ok(())
+    }
     /// Opens or creates the application database at `path`.
     ///
     /// # Errors
@@ -107,7 +117,7 @@ impl Database {
         &self.connection
     }
 
-    pub(crate) const fn connection_mut(&mut self) -> &mut Connection {
+    pub const fn connection_mut(&mut self) -> &mut Connection {
         &mut self.connection
     }
 }
@@ -117,6 +127,35 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{Database, INITIAL_MIGRATION};
+
+    #[test]
+    fn online_backup_produces_a_consistent_reopenable_snapshot() {
+        let source =
+            std::env::temp_dir().join(format!("pw-backup-source-{}.sqlite3", std::process::id()));
+        let destination = std::env::temp_dir().join(format!(
+            "pw-backup-destination-{}.sqlite3",
+            std::process::id()
+        ));
+        let database = Database::open(&source).unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES('chat',1,1)",
+                [],
+            )
+            .unwrap();
+        database.backup_to(&destination).unwrap();
+        let snapshot = Database::open(&destination).unwrap();
+        let count: i64 = snapshot
+            .connection()
+            .query_row("SELECT COUNT(*) FROM conversations", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+        drop(snapshot);
+        drop(database);
+        let _ = std::fs::remove_file(source);
+        let _ = std::fs::remove_file(destination);
+    }
 
     #[test]
     fn in_memory_database_applies_connection_pragmas_and_schema() {

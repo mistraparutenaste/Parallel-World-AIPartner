@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-export-user-data"
+description = "Enables the export_user_data command."
+commands.allow = ["export_user_data"]
+
+[[permission]]
+identifier = "deny-export-user-data"
+description = "Denies the export_user_data command."
+commands.deny = ["export_user_data"]

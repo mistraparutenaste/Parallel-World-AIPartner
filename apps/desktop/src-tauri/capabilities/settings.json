@@ -23,6 +23,9 @@
     "allow-list-tts-speakers",
     "allow-list-user-dict",
     "allow-add-user-dict-word",
-    "allow-delete-user-dict-word"
+    "allow-delete-user-dict-word",
+    "allow-export-user-data",
+    "allow-delete-conversation-history",
+    "allow-delete-memories"
   ]
 }

@@ -391,6 +391,18 @@ fn fingerprint(settings: &LlmSettingsDto) -> String {
 }
 
 impl ChatService {
+    /// Stops the active workers and clears their in-memory prompt state.
+    ///
+    /// # Errors
+    /// Returns an error if a worker thread panicked while shutting down.
+    pub fn reset(&self) -> Result<(), String> {
+        self.cancel.store(true, Ordering::SeqCst);
+        if let Some(worker) = self.lock().take() {
+            worker.shutdown()?;
+        }
+        self.cancel.store(false, Ordering::SeqCst);
+        Ok(())
+    }
     fn reserve_turn_id(&self, database_path: &Path) -> u64 {
         let durable = Database::open(database_path)
             .map_err(|error| error.to_string())
@@ -577,6 +589,7 @@ impl<R: Runtime> TauriConversationEvents<R> {
         let payload = ChatMessageEventDto {
             schema_version: SCHEMA_VERSION,
             turn_id: turn.value(),
+            message_id: None,
             role,
             text: text.to_owned(),
         };

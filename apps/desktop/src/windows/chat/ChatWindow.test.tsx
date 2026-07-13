@@ -58,6 +58,14 @@ describe('ChatWindow', () => {
     expect(screen.getByText('やあ、こんにちは。')).toBeInTheDocument();
   });
 
+  it('loads persisted history and deduplicates a matching live event', async () => {
+    invokeMock.mockResolvedValueOnce([{ schema_version: 1, message_id: 7, turn_id: 1, role: 'user', text: 'saved', created_at: 1 }]);
+    render(<ChatWindow />);
+    expect(await screen.findByText(/saved$/)).toBeInTheDocument();
+    fireMessage({ schema_version: 1, message_id: 7, turn_id: 1, role: 'user', text: 'saved' });
+    expect(screen.getAllByText(/saved$/)).toHaveLength(1);
+  });
+
   it('sends the draft through send_chat_message', async () => {
     render(<ChatWindow />);
     await act(async () => {});

@@ -189,10 +189,28 @@
           "markdownDescription": "Enables the cancel_turn command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_conversation_history command.",
+          "type": "string",
+          "const": "allow-delete-conversation-history",
+          "markdownDescription": "Enables the delete_conversation_history command."
+        },
+        {
+          "description": "Enables the delete_memories command.",
+          "type": "string",
+          "const": "allow-delete-memories",
+          "markdownDescription": "Enables the delete_memories command."
+        },
+        {
           "description": "Enables the delete_user_dict_word command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-user-dict-word",
           "markdownDescription": "Enables the delete_user_dict_word command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_user_data command.",
+          "type": "string",
+          "const": "allow-export-user-data",
+          "markdownDescription": "Enables the export_user_data command."
         },
         {
           "description": "Enables the get_app_status command without any pre-configured scope.",
@@ -223,6 +241,12 @@
           "type": "string",
           "const": "allow-get-tts-settings",
           "markdownDescription": "Enables the get_tts_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_conversation_history command.",
+          "type": "string",
+          "const": "allow-list-conversation-history",
+          "markdownDescription": "Enables the list_conversation_history command."
         },
         {
           "description": "Enables the list_microphones command without any pre-configured scope.",
@@ -315,10 +339,28 @@
           "markdownDescription": "Denies the cancel_turn command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_conversation_history command.",
+          "type": "string",
+          "const": "deny-delete-conversation-history",
+          "markdownDescription": "Denies the delete_conversation_history command."
+        },
+        {
+          "description": "Denies the delete_memories command.",
+          "type": "string",
+          "const": "deny-delete-memories",
+          "markdownDescription": "Denies the delete_memories command."
+        },
+        {
           "description": "Denies the delete_user_dict_word command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-user-dict-word",
           "markdownDescription": "Denies the delete_user_dict_word command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_user_data command.",
+          "type": "string",
+          "const": "deny-export-user-data",
+          "markdownDescription": "Denies the export_user_data command."
         },
         {
           "description": "Denies the get_app_status command without any pre-configured scope.",
@@ -349,6 +391,12 @@
           "type": "string",
           "const": "deny-get-tts-settings",
           "markdownDescription": "Denies the get_tts_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_conversation_history command.",
+          "type": "string",
+          "const": "deny-list-conversation-history",
+          "markdownDescription": "Denies the list_conversation_history command."
         },
         {
           "description": "Denies the list_microphones command without any pre-configured scope.",

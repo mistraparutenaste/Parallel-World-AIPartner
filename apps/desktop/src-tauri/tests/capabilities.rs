@@ -78,13 +78,18 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
         [
             "allow-get-app-status",
             "allow-send-chat-message",
-            "allow-cancel-turn"
+            "allow-cancel-turn",
+            "allow-list-conversation-history"
         ]
     );
     for permission in &permissions {
         assert!(
             !permission.contains("llm-settings"),
             "llm settings command leaked into chat: {permission}"
+        );
+        assert!(
+            !permission.contains("delete-") && !permission.contains("export-user-data"),
+            "data command leaked into chat: {permission}"
         );
     }
 }
@@ -112,7 +117,10 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-list-tts-speakers",
             "allow-list-user-dict",
             "allow-add-user-dict-word",
-            "allow-delete-user-dict-word"
+            "allow-delete-user-dict-word",
+            "allow-export-user-data",
+            "allow-delete-conversation-history",
+            "allow-delete-memories"
         ]
     );
 }

@@ -1,0 +1,9 @@
+[[permission]]
+identifier = "allow-delete-conversation-history"
+description = "Enables the delete_conversation_history command."
+commands.allow = ["delete_conversation_history"]
+
+[[permission]]
+identifier = "deny-delete-conversation-history"
+description = "Denies the delete_conversation_history command."
+commands.deny = ["delete_conversation_history"]

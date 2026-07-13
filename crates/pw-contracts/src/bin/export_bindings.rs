@@ -8,10 +8,10 @@ use std::path::Path;
 
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationStateDto,
-    ConversationStateEventDto, LlmSettingsDto, MotionGroupDto, SpeechAudioEventDto,
-    SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto, TtsSettingsDto,
-    TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
+    CharacterManifestDto, ChatMessageEventDto, ChatRoleDto, ConversationMessageDto,
+    ConversationStateDto, ConversationStateEventDto, LlmSettingsDto, MotionGroupDto,
+    SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto, TranscriptEventDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -33,6 +33,7 @@ fn main() {
     TranscriptEventDto::export_all(&config).expect("export TranscriptEventDto bindings");
     ChatMessageEventDto::export_all(&config).expect("export ChatMessageEventDto bindings");
     ChatRoleDto::export_all(&config).expect("export ChatRoleDto bindings");
+    ConversationMessageDto::export_all(&config).expect("export ConversationMessageDto bindings");
     ConversationStateEventDto::export_all(&config)
         .expect("export ConversationStateEventDto bindings");
     LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");

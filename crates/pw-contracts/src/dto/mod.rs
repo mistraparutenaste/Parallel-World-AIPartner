@@ -14,7 +14,10 @@ pub use audio::{
 };
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{CharacterManifestDto, MotionGroupDto};
-pub use chat::{ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto};
+pub use chat::{
+    ChatMessageEventDto, ChatRoleDto, ConversationMessageDto, ConversationStateEventDto,
+    LlmSettingsDto,
+};
 pub use tts::{
     SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
     UserDictWordDto,
