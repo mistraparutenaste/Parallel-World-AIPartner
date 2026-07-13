@@ -21,6 +21,12 @@
       "capabilities": ["character", "chat", "settings"]
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": [],
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": false,
     "icon": [

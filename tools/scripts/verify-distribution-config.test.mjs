@@ -315,6 +315,14 @@ test("repository local overlays and branded icon set satisfy distribution policy
   verifyDistributionConfig(windows, "local", "windows");
   verifyDistributionConfig(macos, "local", "macos");
   assert.equal(windows.identifier, "com.parallelworld.desktop");
+  assert.deepEqual(windows.plugins.updater, {
+    endpoints: [],
+    pubkey: "",
+  });
+  assert.deepEqual(macos.plugins.updater, {
+    endpoints: [],
+    pubkey: "",
+  });
   assert.equal(windows.bundle.windows.nsis.installMode, "currentUser");
   assert.deepEqual(windows.bundle.windows.nsis.languages, ["English", "Japanese"]);
   assert.equal(
