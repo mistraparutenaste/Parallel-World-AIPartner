@@ -1,4 +1,7 @@
 use pw_platform::diagnostics::{CrashInput, DiagnosticStore, RetentionPolicy};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static PREVIOUS_HOOK_CALLED: AtomicBool = AtomicBool::new(false);
 
 fn temp_root(name: &str) -> std::path::PathBuf {
     std::env::temp_dir().join(format!("pw-diagnostics-{name}-{}", std::process::id()))
@@ -49,7 +52,7 @@ fn concurrent_writes_have_unique_names_and_deterministic_retention() {
             let store = store.clone();
             std::thread::spawn(move || {
                 store
-                    .write(CrashInput::frontend("error", Some(index), None))
+                    .write(CrashInput::frontend("window_error", Some(index), None))
                     .unwrap()
             })
         })
@@ -84,7 +87,7 @@ fn export_conflict_preserves_old_file_and_leaves_no_predictable_temp() {
     std::fs::create_dir_all(&out).unwrap();
     let store = DiagnosticStore::new(&root, RetentionPolicy::default());
     store
-        .write(CrashInput::frontend("error", Some(1), None))
+        .write(CrashInput::frontend("window_error", Some(1), None))
         .unwrap();
     let destination = out.join("reports.json");
     std::fs::write(&destination, b"old").unwrap();
@@ -112,7 +115,7 @@ fn concurrent_no_overwrite_has_exactly_one_creator() {
     std::fs::create_dir_all(&out).unwrap();
     let store = std::sync::Arc::new(DiagnosticStore::new(&root, RetentionPolicy::default()));
     store
-        .write(CrashInput::frontend("error", None, None))
+        .write(CrashInput::frontend("window_error", None, None))
         .unwrap();
     let destination = std::sync::Arc::new(out.join("reports.json"));
     let threads = (0..16)
@@ -154,7 +157,7 @@ fn retention_enforces_count_and_total_bytes() {
     );
     for index in 0..10 {
         store
-            .write(CrashInput::frontend("error", Some(index), None))
+            .write(CrashInput::frontend("window_error", Some(index), None))
             .unwrap();
     }
     let entries = store.list().unwrap();
@@ -176,4 +179,99 @@ fn maintenance_removes_orphaned_temporary_reports() {
 
     assert!(!orphan.exists());
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn installed_hook_never_calls_an_arbitrary_previous_hook() {
+    let root = temp_root("panic-hook");
+    let _ = std::fs::remove_dir_all(&root);
+    PREVIOUS_HOOK_CALLED.store(false, Ordering::SeqCst);
+    std::panic::set_hook(Box::new(|_| {
+        PREVIOUS_HOOK_CALLED.store(true, Ordering::SeqCst);
+    }));
+    pw_platform::diagnostics::install_panic_hook(DiagnosticStore::new(
+        &root,
+        RetentionPolicy::default(),
+    ));
+
+    let _ = std::panic::catch_unwind(|| panic!("payload must be omitted"));
+
+    assert!(!PREVIOUS_HOOK_CALLED.load(Ordering::SeqCst));
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn list_and_export_ignore_unowned_or_unvalidated_json() {
+    let root = temp_root("typed-only");
+    let out = temp_root("typed-only-out");
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&out);
+    std::fs::create_dir_all(&out).unwrap();
+    let store = DiagnosticStore::new(&root, RetentionPolicy::default());
+    store
+        .write(CrashInput::frontend("window_error", Some(1), Some(2)))
+        .unwrap();
+    assert!(
+        store
+            .write(CrashInput::frontend("error", Some(1), Some(2)))
+            .is_err()
+    );
+    std::fs::write(root.join("notes.json"), br#"{"prompt":"TOP_SECRET"}"#).unwrap();
+    std::fs::write(
+        root.join("crash-1-1-1.json"),
+        br#"{
+          "schema_version": 1,
+          "timestamp_ms": 1,
+          "build": "0.1.0",
+          "source": "frontend",
+          "payload_category": "window_error",
+          "detail": "line=1;column=2",
+          "thread": null,
+          "location": null,
+          "backtrace": null,
+          "prompt": "TOP_SECRET"
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("crash-2-1-1.json"),
+        br#"{
+          "schema_version": 0,
+          "timestamp_ms": 2,
+          "build": "0.1.0",
+          "source": "frontend",
+          "payload_category": "window_error",
+          "detail": "line=1;column=2",
+          "thread": null,
+          "location": null,
+          "backtrace": null
+        }"#,
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("crash-3-1-1.json"),
+        br#"{
+          "schema_version": 1,
+          "timestamp_ms": 3,
+          "build": "0.1.0",
+          "source": "rust",
+          "payload_category": "panic_string",
+          "detail": "panic payload omitted",
+          "thread": null,
+          "location": null,
+          "backtrace": "Bearer TOP_SECRET"
+        }"#,
+    )
+    .unwrap();
+
+    assert_eq!(store.list().unwrap().len(), 1);
+    let destination = out.join("reports.json");
+    store.export(&destination, false).unwrap();
+    assert!(
+        !std::fs::read_to_string(destination)
+            .unwrap()
+            .contains("TOP_SECRET")
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(out);
 }
