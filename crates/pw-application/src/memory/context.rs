@@ -458,6 +458,15 @@ mod tests {
     }
 
     #[test]
+    fn persistence_redaction_scans_mixed_long_content_without_truncation() {
+        let input = format!("{} token economy token=secret tail", "safe ".repeat(200));
+        let output = redact_persistent_content(&input);
+        assert!(output.len() > 900);
+        assert!(output.contains("token economy token=[REDACTED] tail"));
+        assert!(!output.contains("token=secret"));
+    }
+
+    #[test]
     fn question_marker_or_question_word_rejects_the_whole_message_before_split() {
         let mut generator = JapanesePersistentFactGenerator;
         for question in [

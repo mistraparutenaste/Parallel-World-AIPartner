@@ -31,38 +31,51 @@ pub enum FailureCode {
 }
 
 impl FailureCode {
-    const fn as_str(self) -> &'static str {
+    const fn message(self) -> &'static str {
         match self {
-            Self::Timeout => "timeout",
-            Self::Unavailable => "unavailable",
-            Self::MissingModel => "missing_model",
-            Self::InvalidConfiguration => "invalid_configuration",
-            Self::Internal => "internal",
+            Self::Timeout => "operation timed out",
+            Self::Unavailable => "service unavailable",
+            Self::MissingModel => "required model is missing",
+            Self::InvalidConfiguration => "configuration is invalid",
+            Self::Internal => "internal runtime error",
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Failure metadata intentionally contains no arbitrary text or raw cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeFailure {
     class: FailureClass,
     code: FailureCode,
-    detail: String,
+    system_code: Option<i64>,
 }
 impl RuntimeFailure {
     #[must_use]
-    pub fn transient(code: FailureCode, untrusted_detail: &str) -> Self {
-        Self::new(FailureClass::Transient, code, untrusted_detail)
+    pub const fn transient(code: FailureCode) -> Self {
+        Self {
+            class: FailureClass::Transient,
+            code,
+            system_code: None,
+        }
     }
     #[must_use]
-    pub fn permanent(code: FailureCode, untrusted_detail: &str) -> Self {
-        Self::new(FailureClass::Permanent, code, untrusted_detail)
-    }
-    fn new(class: FailureClass, code: FailureCode, detail: &str) -> Self {
+    pub const fn permanent(code: FailureCode) -> Self {
         Self {
-            class,
+            class: FailureClass::Permanent,
             code,
-            detail: redact_diagnostic(detail),
+            system_code: None,
         }
+    }
+    #[must_use]
+    pub const fn with_system_code(mut self, code: i64) -> Self {
+        self.system_code = Some(code);
+        self
+    }
+    fn safe_message(self) -> String {
+        self.system_code.map_or_else(
+            || self.code.message().to_owned(),
+            |code| format!("{} (system code {code})", self.code.message()),
+        )
     }
 }
 
@@ -128,7 +141,7 @@ impl RuntimeHealth {
             HealthStatus::Degraded
         };
         self.failure_class = Some(failure.class);
-        self.last_error = Some(format!("{}: {}", failure.code.as_str(), failure.detail));
+        self.last_error = Some(failure.safe_message());
         self.stable_since_ms = None;
         self.changed_at_ms = now_ms;
     }
@@ -141,48 +154,53 @@ impl RuntimeHealth {
     }
 }
 
-/// Redacts common credential shapes and bounds diagnostic text. Raw causes are never retained.
+/// Replaces credential values without changing unrelated text or imposing a length limit.
 ///
 /// # Panics
 ///
 /// Panics only if a compile-time constant regular expression is invalid.
 #[must_use]
-pub fn redact_diagnostic(input: &str) -> String {
+pub fn redact_credentials(input: &str) -> String {
     use std::sync::OnceLock;
     static CREDENTIAL: OnceLock<regex::Regex> = OnceLock::new();
+    static JAPANESE: OnceLock<regex::Regex> = OnceLock::new();
     static AUTH: OnceLock<regex::Regex> = OnceLock::new();
     static JSON: OnceLock<regex::Regex> = OnceLock::new();
-    let credential = CREDENTIAL.get_or_init(|| regex::Regex::new(r#"(?ix)(api[_ ]?key|token|password|passwd|secret(?:\s+value)?|APIキー|トークン|パスワード(?:の値)?|秘密(?:の?値)?|認証(?:情報)?)(\s*(?:[:=：]|は|が)?\s*)(?:\"(?:\\.|[^\"])*\"|“[^”]*”|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).unwrap());
-    let auth = AUTH.get_or_init(|| regex::Regex::new(r#"(?ix)(authorization\s*[:=]?\s*(?:bearer|basic|digest)?\s*)(?:\\?\"[^\"]*\\?\"|'[^']*'|[^\s,;&}]+)"#).unwrap());
+    static SPOKEN: OnceLock<regex::Regex> = OnceLock::new();
+    let credential = CREDENTIAL.get_or_init(|| regex::Regex::new(r#"(?ix)(api[_ ]?key|token|password|passwd|secret(?:\s+value)?)(\s*[:=]\s*)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("credential regex is constant and valid"));
+    let japanese = JAPANESE.get_or_init(|| regex::Regex::new(r#"(APIキー|トークン|パスワード(?:の値)?|秘密(?:の?値)?|認証(?:情報)?)(\s*(?:[:=：]|は|が)\s*)(?:\"(?:\\.|[^\"])*\"|“[^”]*”|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("Japanese credential regex is constant and valid"));
+    let auth = AUTH.get_or_init(|| regex::Regex::new(r#"(?ix)(authorization\s*[:=]?\s*(?:bearer|basic|digest)?\s*)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("authorization regex is constant and valid"));
     let json = JSON.get_or_init(|| {
         regex::Regex::new(
             r#"(?ix)(\"(?:api[_ ]?key|token|password|passwd|secret)\"\s*:\s*\")[^\"]*"#,
         )
-        .unwrap()
+        .expect("json credential regex is constant and valid")
+    });
+    let spoken = SPOKEN.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(secret\s+value\s+)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)"#,
+        )
+        .expect("spoken credential regex is constant and valid")
     });
     let redacted = json.replace_all(input, "$1[REDACTED]");
     let redacted = auth.replace_all(&redacted, "$1[REDACTED]");
-    let redacted = credential.replace_all(&redacted, "$1$2[REDACTED]");
-    redacted.chars().take(256).collect()
+    let redacted = japanese.replace_all(&redacted, "$1$2[REDACTED]");
+    let redacted = spoken.replace_all(&redacted, "$1[REDACTED]");
+    credential
+        .replace_all(&redacted, "$1$2[REDACTED]")
+        .into_owned()
 }
 
-/// Shared persistence redaction preserving harmless discussion of credential concepts.
+/// Diagnostic-only redaction additionally bounds emitted text.
+#[must_use]
+pub fn redact_diagnostic(input: &str) -> String {
+    redact_credentials(input).chars().take(256).collect()
+}
+
+/// Persistent content retains its full length except for replaced secret values.
 #[must_use]
 pub fn redact_persistent_content(input: &str) -> String {
-    let lower = input.to_ascii_lowercase();
-    let harmless = [
-        "token economy",
-        "password management",
-        "パスワード管理方法",
-        "APIキー管理方法",
-    ];
-    if harmless
-        .iter()
-        .any(|phrase| lower.contains(&phrase.to_ascii_lowercase()))
-    {
-        return input.to_owned();
-    }
-    let redacted = redact_diagnostic(input);
+    let redacted = redact_credentials(input);
     redacted
         .split_whitespace()
         .map(|part| {

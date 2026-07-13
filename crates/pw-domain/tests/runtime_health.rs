@@ -12,12 +12,9 @@ fn health_transitions_include_explicit_stop_and_recovery() {
     assert_eq!(health.status(), HealthStatus::Healthy);
     assert_eq!(health.stable_since_ms(), Some(10));
 
-    health.mark_failed(
-        &RuntimeFailure::transient(FailureCode::Timeout, "token=secret"),
-        20,
-    );
+    health.mark_failed(&RuntimeFailure::transient(FailureCode::Timeout), 20);
     assert_eq!(health.status(), HealthStatus::Recovering);
-    assert_eq!(health.last_error(), Some("timeout: token=[REDACTED]"));
+    assert_eq!(health.last_error(), Some("operation timed out"));
 
     health.mark_stopped(30);
     assert_eq!(health.status(), HealthStatus::Stopped);
@@ -27,29 +24,19 @@ fn health_transitions_include_explicit_stop_and_recovery() {
 #[test]
 fn permanent_failures_degrade_instead_of_retrying() {
     let mut health = RuntimeHealth::new(RuntimeFeature::TextToSpeech);
-    health.mark_failed(
-        &RuntimeFailure::permanent(FailureCode::MissingModel, "model missing"),
-        1,
-    );
+    health.mark_failed(&RuntimeFailure::permanent(FailureCode::MissingModel), 1);
     assert_eq!(health.status(), HealthStatus::Degraded);
 }
 
 #[test]
-fn diagnostic_errors_remove_authorization_bearer_values() {
+fn runtime_failures_accept_no_raw_message_and_system_codes_are_numeric() {
     let mut health = RuntimeHealth::new(RuntimeFeature::LanguageModel);
     health.mark_failed(
-        &RuntimeFailure::transient(
-            FailureCode::Unavailable,
-            "request failed Authorization: Bearer abc123",
-        ),
+        &RuntimeFailure::transient(FailureCode::Unavailable).with_system_code(10061),
         1,
     );
     let error = health.last_error().unwrap();
-    assert!(!error.contains("abc123"));
-    assert_eq!(
-        error,
-        "unavailable: request failed Authorization: Bearer [REDACTED]"
-    );
+    assert_eq!(error, "service unavailable (system code 10061)");
 }
 
 #[test]
@@ -74,6 +61,17 @@ fn diagnostic_redaction_covers_wire_formats_and_is_bounded() {
         assert!(!safe.contains(secret), "{input} => {safe}");
     }
     assert!(redact_diagnostic(&"x".repeat(1_000)).len() <= 256);
+}
+
+#[test]
+fn persistent_redaction_scans_mixed_harmless_text_without_truncating() {
+    let long = format!("{} token economy; token=secret tail", "a".repeat(600));
+    let safe = pw_domain::runtime_health::redact_persistent_content(&long);
+    assert_eq!(
+        safe.chars().count(),
+        long.chars().count() - "secret".len() + "[REDACTED]".len()
+    );
+    assert!(safe.ends_with("token economy; token=[REDACTED] tail"));
 }
 
 #[test]

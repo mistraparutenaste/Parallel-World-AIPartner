@@ -31,10 +31,7 @@ fn domain_health_converts_exhaustively_and_live2d_wire_name_is_stable() {
     ];
     for feature in features {
         let mut health = RuntimeHealth::new(feature);
-        health.mark_failed(
-            &RuntimeFailure::transient(FailureCode::Timeout, "timeout"),
-            7,
-        );
+        health.mark_failed(&RuntimeFailure::transient(FailureCode::Timeout), 7);
         let dto = RuntimeHealthEventDto::from((&health, 3));
         assert_eq!(dto.attempts, 3);
     }
