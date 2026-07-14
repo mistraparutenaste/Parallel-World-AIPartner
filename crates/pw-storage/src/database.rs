@@ -11,7 +11,8 @@ const DETACHED_TURN_SEQUENCE_MIGRATION: &str =
     include_str!("../migrations/0004_detached_turn_sequence.sql");
 const MEMORY_FTS_MIGRATION: &str = include_str!("../migrations/0005_memory_fts.sql");
 const MEMORY_UNIQUE_MIGRATION: &str = include_str!("../migrations/0006_memory_content_unique.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 6;
+const MEMORY_LIFECYCLE_MIGRATION: &str = include_str!("../migrations/0007_memory_lifecycle.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -118,6 +119,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 6)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 7 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_LIFECYCLE_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 7)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -135,7 +143,10 @@ impl Database {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{Database, INITIAL_MIGRATION};
+    use super::{
+        DETACHED_TURN_SEQUENCE_MIGRATION, Database, INITIAL_MIGRATION, MEMORY_FTS_MIGRATION,
+        MEMORY_UNIQUE_MIGRATION, TURN_IDENTITY_MIGRATION, TURN_SEQUENCE_MIGRATION,
+    };
 
     #[test]
     fn online_backup_produces_a_consistent_reopenable_snapshot() {
@@ -187,7 +198,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
 
         for table in [
@@ -211,13 +222,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 7).unwrap();
+        connection.pragma_update(None, "user_version", 8).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 7,
-                supported: 6
+                found: 8,
+                supported: 7
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -245,7 +256,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
 
         drop(reopened);
@@ -286,7 +297,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            6
+            7
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -298,9 +309,22 @@ mod tests {
             std::env::temp_dir().join(format!("pw-v4-memory-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
         {
-            let database = Database::open(&path).unwrap();
+            let database = Database {
+                connection: rusqlite::Connection::open(&path).unwrap(),
+            };
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+            ] {
+                database.connection().execute_batch(migration).unwrap();
+            }
             database.connection().execute("INSERT INTO memories(content,created_at,updated_at) VALUES('既存の猫記憶',1,1)", []).unwrap();
-            database.connection().execute_batch("DROP INDEX memories_source_content_unique; DROP TRIGGER memories_fts_insert; DROP TRIGGER memories_fts_delete; DROP TRIGGER memories_fts_update; DROP TABLE memories_fts; PRAGMA user_version=4;").unwrap();
+            database
+                .connection()
+                .pragma_update(None, "user_version", 4)
+                .unwrap();
         }
         let database = Database::open(&path).unwrap();
         let count: i64 = database
@@ -321,8 +345,18 @@ mod tests {
             std::env::temp_dir().join(format!("pw-v5-dedupe-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
         {
-            let database = Database::open(&path).unwrap();
-            database.connection().execute_batch("DROP INDEX memories_source_content_unique; PRAGMA user_version=5; INSERT INTO conversations(id,created_at,updated_at) VALUES('',1,1); INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES('同じ記憶',NULL,1,1),('同じ記憶','',2,2);").unwrap();
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.execute_batch("INSERT INTO conversations(id,created_at,updated_at) VALUES('',1,1); INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES('同じ記憶',NULL,1,1),('同じ記憶','',2,2);").unwrap();
+            connection.pragma_update(None, "user_version", 5).unwrap();
         }
         let database = Database::open(&path).unwrap();
         let count: i64 = database
@@ -335,6 +369,61 @@ mod tests {
             .unwrap();
         assert_eq!(count, 1);
         assert!(database.connection().execute("INSERT INTO memories(content,source_conversation_id,created_at,updated_at) VALUES('同じ記憶','',3,3)", []).is_err());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn v7_upgrade_preserves_memory_and_adds_imported_grace_evidence() {
+        let path =
+            std::env::temp_dir().join(format!("pw-v7-upgrade-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection
+                .execute(
+                    "INSERT INTO memories(content,created_at,updated_at) VALUES('猫が好き',1,2)",
+                    [],
+                )
+                .unwrap();
+            connection.pragma_update(None, "user_version", 6).unwrap();
+        }
+        let database = Database::open(&path).unwrap();
+        let row: (String, i64, i64) = database
+            .connection()
+            .query_row(
+                "SELECT state,pinned,mention_count FROM memories WHERE content='猫が好き'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("active".into(), 0, 1));
+        let evidence: (String, f64) = database
+            .connection()
+            .query_row("SELECT kind,weight FROM memory_evidence", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(evidence, ("imported".into(), 1.0));
+        drop(database);
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            7
+        );
+        drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 }
