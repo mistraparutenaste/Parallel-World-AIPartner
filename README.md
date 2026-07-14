@@ -6,14 +6,14 @@
 
 > Phase 0〜6は完了（Phase 6は2026-07-14に実機2時間soakパス）。現在はPhase 7 配布を進行中（Task 2 署名必須updaterまで完了）。
 
-Live2Dキャラクターをデスクトップに常駐させ、音声またはテキストで会話できるローカル優先のAIパートナーアプリケーション。
+Live2Dまたは全身静止画キャラクターをデスクトップに常駐させ、音声またはテキストで会話できるローカル優先のAIパートナーアプリケーション。
 
 ## 現在の状態
 
 | Phase | 内容 | 状態 |
 | --- | --- | --- |
 | 0 | workspace、3ウィンドウ、型付きIPC、Capability、ログ、CI | 完了 |
-| 1 | Live2D表示 | 完了 |
+| 1 | キャラクター表示（Live2D / 静止画） | 完了 |
 | 2 | マイク入力、VAD、STT | 完了 |
 | 3 | LLM、会話状態機械 | 完了 |
 | 4 | TTS、リップシンク | 完了 |
@@ -53,13 +53,15 @@ IPC契約を変更した場合は再生成する。
 cargo run -p pw-contracts --bin export-bindings
 ```
 
+静止画キャラクターは透明PNGまたは非アニメーションWebPの表情差分に対応する。口パクは行わず、実際の読み上げ開始時にturnごとに1回跳ねる。プロファイルの形式、画像制限、選択規則、20秒（変更可）の表情復帰設定は [静止画キャラクタープロファイル](project-input/static-character/README.md) を参照。
+
 ## 外部ライセンスゲート
 
 以下はコード実装だけでは完了しない外部条件として管理する（詳細: `docs/superpowers/specs/2026-07-11-parallel-world-product-design.md` 第12章）。
 
 - Windows code-signing証明書、Apple Developer資格情報
 - updater公開URLと署名秘密鍵
-- Live2D SDKリリース許諾、同梱モデルの再配布許諾
+- Live2D SDKリリース許諾、同梱Live2Dモデル・静止画キャラクター素材の再配布許諾
 - STT / VAD / LLM / TTSモデルの個別ライセンス確認
 
-許諾未確認のLive2Dモデルは配布buildへ含めない。
+許諾未確認のLive2Dモデルや静止画キャラクター素材は配布buildへ含めない。runtime character assetsはapp dataへ外部配置し、リポジトリや配布bundleへ同梱しない。

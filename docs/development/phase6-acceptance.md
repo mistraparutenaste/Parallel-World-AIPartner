@@ -10,12 +10,20 @@
 | 音声device切断 | 旧streamを停止し、既定deviceへfallback、選択device復帰時に再構築 | `parallel-world-desktop speech::service::production_recovery_cycle_stops_old_session_and_preserves_runtime_state`、frontend `MicrophonePanel` |
 | LLM停止・hung | 履歴・設定を維持して縮退、8回でcircuit、Settingsからrearm | `parallel-world-desktop chat::service`、`pw-application feature_health_supervisor`、frontend `RuntimeHealthPanel` |
 | TTS停止 | 応答本文を表示したまま当該turnをtext-only化し、後続turnで復旧可能 | `parallel-world-desktop tts::service`、frontend `ChatWindow` |
-| Live2D boot失敗 | character surfaceを隠して通常chatを表示し、Settingsからattemptを維持した明示retryで再boot | `parallel-world-desktop supervisor` / `commands::character`、`pw-application feature_health_supervisor`、frontend `live2d-health` / `RuntimeHealthPanel` |
+| character renderer起動失敗 | Live2D / 静止画に共通してcharacter surfaceを隠し通常chatを表示。恒久profileエラーは設定修正後の明示reload、一時的renderer障害はattemptを維持した有界retry | `parallel-world-desktop supervisor` / `commands::character`、`pw-application feature_health_supervisor`、frontend `character-renderer-health` / `RuntimeHealthPanel` |
 | owned process crash | full-jitter backoff、8回でcircuit、明示rearm、shutdown時tree回収 | `pw-platform process_supervisor`、`parallel-world-desktop supervisor`、`pw-application feature_health_supervisor` |
 | SQLite障害 | 一時履歴へ縮退し、Phase 5の履歴・設定・backup契約を維持 | `parallel-world-desktop chat::service::allocator_falls_back_on_database_failure_and_never_collides_after_recovery`、`pw-storage` |
 | crash report | credential、prompt本文、生音声を保存せず、保持上限とatomic writeを維持 | `pw-platform diagnostics`、`parallel-world-desktop diagnostics`、frontend `DiagnosticsPanel` |
 
 一括実行は `cargo test --workspace` と `corepack pnpm test`。外部STT model、LLM server、AivisSpeechを使うignored試験は `getting-started.md` のコマンドで個別実行する。
+
+## 静止画キャラクター受け入れ範囲
+
+自動テストでは、disk manifest schema version 1からIPC manifest schema version 2への変換、PNG/非animated WebP decode、alpha・同一寸法・32表情・4096 px・32 MiB/file・256 MiB decoded RGBA上限、path escape拒否、active ID完全一致、複数未選択、明示profileが0件だけのlegacy Live2D fallbackを検証する。frontendでは全表情preload、atomic switch、alpha hit-test、実音声開始後のturn単位hop、idle timeout（既定20秒、`null`、10〜600秒）と会話・再生中の停止を検証する。
+
+`missing_asset`、`invalid_manifest`、`invalid_image`、`selection_required`、`active_character_unavailable` は恒久設定エラーとして自動retryしない。`transient_asset_read`、WebGL/WebView renderer起動障害は有界retryする。いずれも通常chatを維持し、壊れたprofileから別identityへfallbackしない。
+
+Windows実機でのPNG/WebP、DPI 100/125/150%、クリック透過、再起動永続化、読み上げ・中断・停止、Live2D回帰、profile修復後の復帰は、自動テストとは別のmanual gateである。今回の実行環境で未観測の項目は [作業内容](../../作業内容.md) にPENDINGとして記録する。
 
 ## Soak
 
