@@ -3,7 +3,7 @@ import type {
   CharacterSettingsDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const IDLE_TIMEOUT_OPTIONS = [
   { value: 'never', label: '戻さない' },
@@ -16,13 +16,49 @@ const IDLE_TIMEOUT_OPTIONS = [
   { value: '600', label: '10分' },
 ] as const;
 
+type CharacterPanelRequestGate = {
+  mount(): void;
+  unmount(): void;
+  begin(): number;
+  isCurrent(generation: number): boolean;
+};
+
+export function createCharacterPanelRequestGate(): CharacterPanelRequestGate {
+  let mounted = false;
+  let generation = 0;
+  return {
+    mount() {
+      mounted = true;
+      generation += 1;
+    },
+    unmount() {
+      mounted = false;
+      generation += 1;
+    },
+    begin() {
+      generation += 1;
+      return generation;
+    },
+    isCurrent(requestGeneration) {
+      return mounted && requestGeneration === generation;
+    },
+  };
+}
+
 /** Character controls and global expression behavior settings. */
 export function CharacterPanel() {
+  const requestGate = useRef(createCharacterPanelRequestGate());
   const [manifest, setManifest] = useState<CharacterManifestDto | null>(null);
   const [settings, setSettings] = useState<CharacterSettingsDto | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [reloadGeneration, setReloadGeneration] = useState(0);
   const [savingTimeout, setSavingTimeout] = useState(false);
+
+  useEffect(() => {
+    const gate = requestGate.current;
+    gate.mount();
+    return () => gate.unmount();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -63,18 +99,22 @@ export function CharacterPanel() {
   const saveIdleTimeout = (selected: string) => {
     if (settings === null) return;
     const timeoutSeconds = selected === 'never' ? null : Number(selected);
+    const requestGeneration = requestGate.current.begin();
     setSavingTimeout(true);
     invoke<CharacterSettingsDto>('set_expression_idle_timeout', {
       timeoutSeconds,
     })
       .then((saved) => {
+        if (!requestGate.current.isCurrent(requestGeneration)) return;
         setSettings(saved);
         setMessage(null);
       })
       .catch((error: unknown) => {
+        if (!requestGate.current.isCurrent(requestGeneration)) return;
         setMessage(`表情の復帰時間を保存できません: ${String(error)}`);
       })
       .finally(() => {
+        if (!requestGate.current.isCurrent(requestGeneration)) return;
         setSavingTimeout(false);
       });
   };

@@ -2,9 +2,12 @@ import type {
   CharacterManifestDto,
   CharacterSettingsDto,
 } from '@parallel-world/contracts';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { CharacterPanel } from './CharacterPanel';
+import {
+  CharacterPanel,
+  createCharacterPanelRequestGate,
+} from './CharacterPanel';
 
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({
@@ -58,6 +61,16 @@ const TIMEOUT_OPTIONS = [
   ['5分', '300'],
   ['10分', '600'],
 ] as const;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
 
 function mockLoadedPanel(
   manifest: CharacterManifestDto = MANIFEST,
@@ -143,6 +156,61 @@ describe('CharacterPanel', () => {
     });
   });
 
+  it('saves an integer timeout and applies the returned settings without losing the active id', async () => {
+    const saved: CharacterSettingsDto = {
+      ...SETTINGS,
+      active_character_id: 'epsilon',
+      expression_idle_timeout_seconds: 30,
+    };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'set_expression_idle_timeout') return Promise.resolve(saved);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+    const select = await screen.findByLabelText('表情をデフォルトに戻す時間');
+
+    fireEvent.change(select, { target: { value: '30' } });
+
+    await waitFor(() => expect(select).toHaveValue('30'));
+    expect(saved.active_character_id).toBe(SETTINGS.active_character_id);
+    expect(invokeMock).toHaveBeenCalledWith('set_expression_idle_timeout', {
+      timeoutSeconds: 30,
+    });
+  });
+
+  it('does not let an older save result overwrite the newest settings', async () => {
+    const older = deferred<CharacterSettingsDto>();
+    const latest = deferred<CharacterSettingsDto>();
+    let saveCount = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'set_expression_idle_timeout') {
+        saveCount += 1;
+        return saveCount === 1 ? older.promise : latest.promise;
+      }
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+    const select = await screen.findByLabelText('表情をデフォルトに戻す時間');
+
+    fireEvent.change(select, { target: { value: '60' } });
+    fireEvent.change(select, { target: { value: '30' } });
+    expect(saveCount).toBe(2);
+
+    latest.resolve({ ...SETTINGS, expression_idle_timeout_seconds: 30 });
+    await waitFor(() => expect(select).toHaveValue('30'));
+
+    await act(async () => {
+      older.resolve({ ...SETTINGS, expression_idle_timeout_seconds: 60 });
+      await older.promise;
+    });
+    expect(select).toHaveValue('30');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('retains the previous timeout and shows the existing alert path on save failure', async () => {
     mockLoadedPanel();
     invokeMock.mockImplementation((command: string) => {
@@ -188,5 +256,29 @@ describe('CharacterPanel', () => {
 
     expect(await screen.findByRole('option', { name: 'Smile' })).toBeInTheDocument();
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+});
+
+describe('character panel request generation guard', () => {
+  it('invalidates every pending request on unmount and across a remount', () => {
+    const gate = createCharacterPanelRequestGate();
+    gate.mount();
+    const beforeUnmount = gate.begin();
+
+    gate.unmount();
+    expect(gate.isCurrent(beforeUnmount)).toBe(false);
+
+    gate.mount();
+    expect(gate.isCurrent(beforeUnmount)).toBe(false);
+  });
+
+  it('accepts only the latest request generation', () => {
+    const gate = createCharacterPanelRequestGate();
+    gate.mount();
+    const older = gate.begin();
+    const latest = gate.begin();
+
+    expect(gate.isCurrent(older)).toBe(false);
+    expect(gate.isCurrent(latest)).toBe(true);
   });
 });

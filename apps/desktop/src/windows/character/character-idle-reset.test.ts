@@ -127,6 +127,20 @@ describe('CharacterIdleResetController', () => {
     expect(resetDefaultExpression).toHaveBeenCalledTimes(1);
   });
 
+  it('resets once per activity even across multiple idle periods', () => {
+    const { clock, controller, resetDefaultExpression } = setup();
+
+    clock.advance(20_000);
+    expect(resetDefaultExpression).toHaveBeenCalledTimes(1);
+
+    clock.advance(120_000);
+    expect(resetDefaultExpression).toHaveBeenCalledTimes(1);
+
+    controller.activity();
+    clock.advance(20_000);
+    expect(resetDefaultExpression).toHaveBeenCalledTimes(2);
+  });
+
   it('pauses while speech audio is active and resumes from the latest audio activity', () => {
     const { clock, controller, resetDefaultExpression } = setup();
 
