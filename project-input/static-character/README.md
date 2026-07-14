@@ -41,7 +41,8 @@ Windowsでの例:
 ```
 
 - `active_character_id` がある場合は完全一致するIDだけを読み込む。見つからなければ `active_character_unavailable` となり、別キャラクターへ自動切替しない。
-- 明示プロファイルが1件だけでID設定がない場合は、その1件を使用する。複数件でID設定がない場合は `selection_required`。
+- `legacy-live2d` は従来Live2D探索用の仮想IDとして予約されているため、明示プロファイルの `id` には使用しない。
+- 明示プロファイルが1件だけでID設定がない場合は、その1件を使用し、timeout設定を維持したままIDをatomic保存する。後から2件目を追加しても、この保存済みIDを完全一致で選び続ける。複数件でID設定がない場合は `selection_required`。
 - recursive `*.model3.json` の従来Live2D探索は、`characters/*/character.json` が1件も存在しない場合だけ使用する。壊れた明示プロファイルからLive2Dへfallbackしない。
 - 複数キャラクター一覧・選択UIは将来対応であり、現時点では対象外。
 - 表情の自動復帰は既定20秒、10〜600秒、`null` は「戻さない」。Settingsの選択肢は戻さない、10/20/30秒、1/2/5/10分。

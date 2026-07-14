@@ -19,7 +19,7 @@
 
 ## 静止画キャラクター受け入れ範囲
 
-自動テストでは、disk manifest schema version 1からIPC manifest schema version 2への変換、PNG/非animated WebP decode、alpha・同一寸法・32表情・4096 px・32 MiB/file・256 MiB decoded RGBA上限、path escape拒否、active ID完全一致、複数未選択、明示profileが0件だけのlegacy Live2D fallbackを検証する。frontendでは全表情preload、atomic switch、alpha hit-test、実音声開始後のturn単位hop、idle timeout（既定20秒、`null`、10〜600秒）と会話・再生中の停止を検証する。
+自動テストでは、disk manifest schema version 1からIPC manifest schema version 2への変換、PNG/非animated WebP decode、alpha・同一寸法・32表情・4096 px・32 MiB/file・256 MiB decoded RGBA上限、path escape拒否、active ID完全一致、単一明示profileのID自動保存、複数未選択、明示profileが0件だけのlegacy Live2D fallbackを検証する。frontendでは全表情preload、atomic switch、alpha hit-test、実音声開始後のturn単位hop、idle timeout（既定20秒、`null`、10〜600秒）と会話・再生中の停止を検証する。
 
 `missing_asset`、`invalid_manifest`、`invalid_image`、`selection_required`、`active_character_unavailable` は恒久設定エラーとして自動retryしない。`transient_asset_read`、WebGL/WebView renderer起動障害は有界retryする。いずれも通常chatを維持し、壊れたprofileから別identityへfallbackしない。
 
