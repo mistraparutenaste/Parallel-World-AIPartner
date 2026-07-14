@@ -243,6 +243,12 @@
           "markdownDescription": "Enables the get_character_manifest command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_character_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-character-settings",
+          "markdownDescription": "Enables the get_character_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_llm_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-llm-settings",
@@ -387,6 +393,12 @@
           "markdownDescription": "Enables the set_expression command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_expression_idle_timeout command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-expression-idle-timeout",
+          "markdownDescription": "Enables the set_expression_idle_timeout command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_llm_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-llm-settings",
@@ -493,6 +505,12 @@
           "type": "string",
           "const": "deny-get-character-manifest",
           "markdownDescription": "Denies the get_character_manifest command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_character_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-character-settings",
+          "markdownDescription": "Denies the get_character_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the get_llm_settings command without any pre-configured scope.",
@@ -637,6 +655,12 @@
           "type": "string",
           "const": "deny-set-expression",
           "markdownDescription": "Denies the set_expression command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_expression_idle_timeout command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-expression-idle-timeout",
+          "markdownDescription": "Denies the set_expression_idle_timeout command without any pre-configured scope."
         },
         {
           "description": "Denies the set_llm_settings command without any pre-configured scope.",

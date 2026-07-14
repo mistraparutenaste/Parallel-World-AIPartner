@@ -4,14 +4,16 @@
 use std::sync::Mutex;
 
 use pw_contracts::{
-    CHARACTER_MANIFEST_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
-    CharacterSettingsDto, StaticExpressionDto,
+    CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
+    CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
+    CharacterSettingsChangedEventDto, CharacterSettingsDto, StaticExpressionDto,
 };
 use pw_platform::paths::AppDataLayout;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
 
 use crate::character::{
     CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer,
+    load_character_settings, save_character_settings, with_expression_idle_timeout,
 };
 
 /// Event delivered to the character window when an expression is set.
@@ -254,6 +256,42 @@ pub fn set_click_through<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result
     window
         .set_ignore_cursor_events(enabled)
         .map_err(|error| error.to_string())
+}
+
+/// Returns global character behavior settings.
+#[tauri::command]
+#[must_use]
+#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
+pub fn get_character_settings(layout: State<'_, AppDataLayout>) -> CharacterSettingsDto {
+    load_character_settings(&layout)
+}
+
+/// Updates the global expression idle timeout and notifies only the
+/// character `WebView`.
+///
+/// # Errors
+///
+/// Returns a validation, persistence, or event-delivery error.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
+pub fn set_expression_idle_timeout<R: Runtime>(
+    app: AppHandle<R>,
+    layout: State<'_, AppDataLayout>,
+    timeout_seconds: Option<u32>,
+) -> Result<CharacterSettingsDto, String> {
+    let current = load_character_settings(&layout);
+    let settings = with_expression_idle_timeout(current, timeout_seconds)?;
+    save_character_settings(&layout, &settings)?;
+    app.emit_to(
+        EventTarget::webview_window("character"),
+        CHARACTER_SETTINGS_CHANGED_EVENT,
+        CharacterSettingsChangedEventDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            settings: settings.clone(),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(settings)
 }
 
 #[cfg(test)]

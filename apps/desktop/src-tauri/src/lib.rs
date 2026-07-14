@@ -39,6 +39,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
+            commands::character::get_character_settings,
+            commands::character::set_expression_idle_timeout,
             commands::character::set_expression,
             commands::character::start_motion,
             commands::character::set_click_through,

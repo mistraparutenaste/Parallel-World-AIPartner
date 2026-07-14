@@ -7,6 +7,7 @@
     "core:default",
     "core:window:allow-start-dragging",
     "allow-get-character-manifest",
+    "allow-get-character-settings",
     "allow-set-click-through",
     "allow-set-speech-playback",
     "allow-report-runtime-failure",

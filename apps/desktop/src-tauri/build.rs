@@ -12,6 +12,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "get_app_status",
             "get_character_manifest",
+            "get_character_settings",
+            "set_expression_idle_timeout",
             "set_expression",
             "start_motion",
             "set_click_through",

@@ -47,11 +47,13 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
         assert!(!permission.contains("shell"), "shell leaked: {permission}");
         assert!(!permission.contains("fs:"), "fs leaked: {permission}");
         assert!(
-            !permission.contains("get_app_status") && !permission.contains("settings"),
+            !permission.contains("get_app_status"),
             "settings/status command leaked: {permission}"
         );
         assert!(
-            !permission.contains("set-expression") && !permission.contains("start-motion"),
+            !permission.contains("set-expression-idle-timeout")
+                && !permission.contains("set-expression")
+                && !permission.contains("start-motion"),
             "state-changing character command leaked: {permission}"
         );
         assert!(
@@ -63,6 +65,7 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
         custom_permissions(&permissions),
         [
             "allow-get-character-manifest",
+            "allow-get-character-settings",
             "allow-set-click-through",
             "allow-set-speech-playback",
             "allow-report-runtime-failure",
@@ -118,6 +121,8 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-list-conversation-log",
             "allow-read-technical-log",
             "allow-get-character-manifest",
+            "allow-get-character-settings",
+            "allow-set-expression-idle-timeout",
             "allow-set-expression",
             "allow-start-motion",
             "allow-list-microphones",
