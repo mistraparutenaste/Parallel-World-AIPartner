@@ -8,7 +8,7 @@ const LABELS: Record<RuntimeHealthEventDto['feature'], string> = {
   speech_to_text: '音声認識',
   language_model: 'LLM',
   text_to_speech: '音声合成',
-  live2d: 'Live2D',
+  character_renderer: 'キャラクター表示',
 };
 
 function ownership(event: RuntimeHealthEventDto) {
@@ -75,8 +75,8 @@ export function RuntimeHealthPanel() {
             <strong>{LABELS[event.feature]}</strong>{' '}
             <span>{ownership(event)}</span>{' '}
             <span>{event.circuit_open ? 'circuit open' : `${event.status} / retry ${event.attempts}`}</span>
-            {((event.circuit_open && ['language_model', 'text_to_speech', 'live2d'].includes(event.feature))
-              || (event.feature === 'live2d' && event.status === 'recovering')) ? (
+            {((event.circuit_open && ['language_model', 'text_to_speech', 'character_renderer'].includes(event.feature))
+              || (event.feature === 'character_renderer' && event.status === 'recovering')) ? (
               <button
                 type="button"
                 onClick={() => void invoke('rearm_runtime_feature', { feature: event.feature })}

@@ -12,6 +12,8 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "get_app_status",
             "get_character_manifest",
+            "get_character_settings",
+            "set_expression_idle_timeout",
             "set_expression",
             "start_motion",
             "set_click_through",
@@ -43,6 +45,10 @@ fn main() {
             "set_chat_placement",
             "list_conversation_log",
             "read_technical_log",
+            "report_runtime_failure",
+            "report_runtime_success",
+            "retry_character_renderer",
+            "rearm_runtime_feature",
         ]),
     ))
     .expect("failed to run tauri build script");

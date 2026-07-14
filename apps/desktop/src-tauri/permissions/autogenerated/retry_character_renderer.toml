@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retry-character-renderer"
+description = "Enables the retry_character_renderer command without any pre-configured scope."
+commands.allow = ["retry_character_renderer"]
+
+[[permission]]
+identifier = "deny-retry-character-renderer"
+description = "Denies the retry_character_renderer command without any pre-configured scope."
+commands.deny = ["retry_character_renderer"]

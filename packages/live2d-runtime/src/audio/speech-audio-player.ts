@@ -22,6 +22,8 @@ export interface PlaybackHandle {
 export interface PlaybackRequest {
   url: string;
   volume: number;
+  /** Called once immediately after the output source starts successfully. */
+  onStarted: () => void;
   /** Called repeatedly with the current output level (0..1). */
   onLevel: (level: number) => void;
   /** Called once when playback finishes or fails (not when stopped). */
@@ -39,10 +41,13 @@ export interface SpeechAudioPlayerOptions {
   onLevel?: (level: number) => void;
   /** Reports playback activity (STT gate / capture mute). */
   onActiveChange?: (active: boolean) => void;
+  /** Reports the first actual playback start for each speech turn. */
+  onTurnPlaybackStart?: (turnId: number) => void;
 }
 
 interface PlaybackSession {
   handle: PlaybackHandle | null;
+  item: SpeechAudioItem;
 }
 
 /**
@@ -54,16 +59,19 @@ export class SpeechAudioPlayer {
   #sink: AudioSink;
   #onLevel: (level: number) => void;
   #onActiveChange: (active: boolean) => void;
+  #onTurnPlaybackStart: (turnId: number) => void;
   #queue: SpeechAudioItem[] = [];
   #session: PlaybackSession | null = null;
   #currentTurn = 0;
   #active = false;
   #volume = 1;
+  #lastStartedTurn: number | null = null;
 
   constructor(sink: AudioSink, options: SpeechAudioPlayerOptions = {}) {
     this.#sink = sink;
     this.#onLevel = options.onLevel ?? (() => {});
     this.#onActiveChange = options.onActiveChange ?? (() => {});
+    this.#onTurnPlaybackStart = options.onTurnPlaybackStart ?? (() => {});
   }
 
   /** Master volume for subsequently started items (0..1). */
@@ -116,11 +124,21 @@ export class SpeechAudioPlayer {
       return;
     }
     this.#setActive(true);
-    const session: PlaybackSession = { handle: null };
+    const session: PlaybackSession = { handle: null, item };
     this.#session = session;
-    session.handle = this.#sink.play({
+    const handle = this.#sink.play({
       url: item.url,
       volume: this.#volume,
+      onStarted: () => {
+        if (this.#session !== session) {
+          return;
+        }
+        const turnId = session.item.turnId;
+        if (this.#lastStartedTurn !== turnId) {
+          this.#lastStartedTurn = turnId;
+          this.#onTurnPlaybackStart(turnId);
+        }
+      },
       onLevel: (level) => {
         if (this.#session === session) {
           this.#onLevel(level);
@@ -134,6 +152,11 @@ export class SpeechAudioPlayer {
         this.#playNext();
       },
     });
+    if (this.#session === session) {
+      session.handle = handle;
+    } else {
+      handle.stop();
+    }
   }
 
   #setActive(active: boolean): void {

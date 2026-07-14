@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "epsilon-static",
+  "display_name": "Epsilon (Static)",
+  "renderer": {
+    "kind": "static_image",
+    "default_expression": "neutral",
+    "expressions": [
+      {
+        "name": "neutral",
+        "file": "expressions/neutral.png"
+      },
+      {
+        "name": "happy",
+        "file": "expressions/happy.webp"
+      }
+    ]
+  }
+}

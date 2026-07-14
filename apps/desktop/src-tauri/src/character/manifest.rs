@@ -172,4 +172,20 @@ mod tests {
         assert!(find_first_model3(&root).is_none());
         std::fs::remove_dir_all(&root).unwrap();
     }
+
+    #[test]
+    fn preserves_recursive_sorted_legacy_discovery_order() {
+        let root =
+            std::env::temp_dir().join(format!("pw-manifest-order-test-{}", std::process::id()));
+        let first = root.join("a").join("First.model3.json");
+        let second = root.join("z").join("Second.model3.json");
+        std::fs::create_dir_all(first.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(second.parent().unwrap()).unwrap();
+        std::fs::write(&first, "{}").unwrap();
+        std::fs::write(&second, "{}").unwrap();
+
+        assert_eq!(find_first_model3(&root), Some(first));
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

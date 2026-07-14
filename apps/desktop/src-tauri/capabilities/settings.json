@@ -17,6 +17,8 @@
     "allow-list-conversation-log",
     "allow-read-technical-log",
     "allow-get-character-manifest",
+    "allow-get-character-settings",
+    "allow-set-expression-idle-timeout",
     "allow-set-expression",
     "allow-start-motion",
     "allow-list-microphones",

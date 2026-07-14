@@ -29,9 +29,7 @@ pub enum RuntimeFeatureDto {
     SpeechToText,
     LanguageModel,
     TextToSpeech,
-    #[serde(rename = "live2d")]
-    #[ts(rename = "live2d")]
-    Live2D,
+    CharacterRenderer,
     AudioInput,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -81,7 +79,7 @@ impl From<pw_domain::runtime_health::RuntimeFeature> for RuntimeFeatureDto {
             Domain::SpeechToText => Self::SpeechToText,
             Domain::LanguageModel => Self::LanguageModel,
             Domain::TextToSpeech => Self::TextToSpeech,
-            Domain::Live2D => Self::Live2D,
+            Domain::CharacterRenderer => Self::CharacterRenderer,
             Domain::AudioInput => Self::AudioInput,
         }
     }

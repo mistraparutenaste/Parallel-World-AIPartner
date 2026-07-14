@@ -8,6 +8,10 @@ export type { SttStateEventDto } from './generated/SttStateEventDto';
 export type { TranscriptEventDto } from './generated/TranscriptEventDto';
 export type { CharacterCursorEventDto } from './generated/CharacterCursorEventDto';
 export type { CharacterManifestDto } from './generated/CharacterManifestDto';
+export type { CharacterRendererDto } from './generated/CharacterRendererDto';
+export type { CharacterSettingsChangedEventDto } from './generated/CharacterSettingsChangedEventDto';
+export type { CharacterSettingsDto } from './generated/CharacterSettingsDto';
+export type { StaticExpressionDto } from './generated/StaticExpressionDto';
 export type { ChatMessageEventDto } from './generated/ChatMessageEventDto';
 export type { ChatPlacementDto } from './generated/ChatPlacementDto';
 export type { ChatRoleDto } from './generated/ChatRoleDto';
@@ -39,3 +43,7 @@ export type { ThemePreferenceDto } from './generated/ThemePreferenceDto';
 export type { UiPreferencesDto } from './generated/UiPreferencesDto';
 export type { UpdateStateDto } from './generated/UpdateStateDto';
 export type { UpdateStatusDto } from './generated/UpdateStatusDto';
+
+export const CHARACTER_MANIFEST_SCHEMA_VERSION = 2;
+export const CHARACTER_SETTINGS_SCHEMA_VERSION = 1;
+export const CHARACTER_SETTINGS_CHANGED_EVENT = 'character-settings-changed';

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-expression-idle-timeout"
+description = "Enables the set_expression_idle_timeout command without any pre-configured scope."
+commands.allow = ["set_expression_idle_timeout"]
+
+[[permission]]
+identifier = "deny-set-expression-idle-timeout"
+description = "Denies the set_expression_idle_timeout command without any pre-configured scope."
+commands.deny = ["set_expression_idle_timeout"]

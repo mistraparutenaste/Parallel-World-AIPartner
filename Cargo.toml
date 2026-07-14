@@ -23,6 +23,7 @@ publish = false
 async-trait = "0.1"
 cpal = "0.18.1"
 command-group = "5.0.1"
+image = { version = "0.25.10", default-features = false, features = ["png", "webp"] }
 pw-application = { path = "crates/pw-application" }
 pw-audio = { path = "crates/pw-audio" }
 pw-contracts = { path = "crates/pw-contracts" }
@@ -47,6 +48,7 @@ tauri-plugin-window-state = "2"
 tauri-plugin-updater = "=2.10.1"
 tiny_http = "0.12"
 thiserror = "2.0"
+tokio = { version = "1.52.3", features = ["time"] }
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

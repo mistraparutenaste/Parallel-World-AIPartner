@@ -423,6 +423,7 @@ textarea {
   display: block;
   width: 100vw;
   height: 100vh;
+  transform-origin: bottom center;
 }
 
 html.transparent,

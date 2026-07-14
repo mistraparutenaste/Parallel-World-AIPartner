@@ -40,6 +40,25 @@ node tools/scripts/sync-live2d-dev-assets.mjs
 
 既定モデルは `epsilon_free`（`project-input/live2d/selected/` が必要）。コピー先は `%APPDATA%/com.parallelworld.desktop/characters/`。
 
+## 開発用静止画キャラクターの配置
+
+静止画キャラクターもapp dataの `characters` 配下へ、1キャラクター1ディレクトリで配置する。例と完全な検証規則は [`project-input/static-character/README.md`](../../project-input/static-character/README.md) を参照する。
+
+```text
+%APPDATA%\com.parallelworld.desktop\characters\epsilon-static\
+  character.json                 # disk schema version 1
+  expressions\neutral.png
+  expressions\happy.webp
+```
+
+透明PNGと非アニメーションWebPを使用し、すべての表情画像を同じpixel寸法・位置合わせにする。上限は32表情、4096x4096 px、各32 MiB、decoded RGBA合計256 MiB。静止画は口パクしない。読み上げが実際に始まった時だけ、同じturnにつき1回跳ねる。
+
+明示的な `character.json` が1件なら自動選択され、そのIDが `config/character-settings.json` へatomic保存される。timeout設定は保持され、後から2件目を追加しても保存済みIDを選び続ける。複数件ある場合は `active_character_id` に完全一致するIDが必要で、現在のSettingsには複数キャラクターpickerはない。`legacy-live2d` は従来Live2D探索用の仮想IDとして予約されているため、明示プロファイルには使用しない。ID不一致や壊れたプロファイルから別キャラクターへ自動fallbackしない。従来のrecursive `*.model3.json` 探索は明示プロファイルが0件の場合だけ使用する。
+
+表情の自動復帰はSettingsで「戻さない」または10秒〜10分から選ぶ（既定20秒）。`thinking`を含む会話処理中と音声再生中は復帰しない。設定JSONでは「戻さない」を `expression_idle_timeout_seconds: null` と表す。
+
+キャラクター画像は外部assetである。利用・改変・再配布の許諾を確認し、実画像をGitやinstallerへ含めない。
+
 ## VAD / STTモデルの配置
 
 音声認識には Silero VAD（約2MB）と ReazonSpeech（約700MB）が必要。manifest（URL / SHA-256 / ライセンス）は `content/model-manifests/` にあり、次でapp dataへ配置する（SHA-256検証付き）。
@@ -96,6 +115,7 @@ cargo test --workspace
 corepack pnpm typecheck
 corepack pnpm test
 corepack pnpm build
+corepack pnpm distribution:verify
 corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle
 ```
 
