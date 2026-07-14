@@ -189,6 +189,7 @@ impl ResolvedCharacter {
 #[derive(Debug, Clone)]
 pub struct CharacterCatalog {
     profiles: Vec<ResolvedCharacter>,
+    explicit_profile_count: usize,
 }
 
 impl CharacterCatalog {
@@ -205,9 +206,11 @@ impl CharacterCatalog {
                 .ok_or(CharacterProfileError::NoCharacterAvailable)?;
             return Ok(Self {
                 profiles: vec![resolve_legacy(&characters_root, &model_path)?],
+                explicit_profile_count: 0,
             });
         }
 
+        let explicit_profile_count = explicit.len();
         let mut profiles = Vec::with_capacity(explicit.len());
         let mut ids = HashSet::with_capacity(explicit.len());
         for path in explicit {
@@ -217,7 +220,16 @@ impl CharacterCatalog {
             }
             profiles.push(profile);
         }
-        Ok(Self { profiles })
+        Ok(Self {
+            profiles,
+            explicit_profile_count,
+        })
+    }
+
+    /// True only for one disk-backed explicit profile, never for the virtual legacy profile.
+    #[must_use]
+    pub const fn has_single_explicit_profile(&self) -> bool {
+        self.explicit_profile_count == 1
     }
 
     /// Resolves an exact configured ID, or the sole available profile.

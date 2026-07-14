@@ -120,10 +120,21 @@ impl CharacterState {
 }
 
 fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
-    let settings = load_character_settings(layout);
-    CharacterCatalog::discover(layout)
-        .and_then(|catalog| catalog.resolve(&settings))
-        .map_err(|error| error.to_ipc_error())
+    let mut settings = load_character_settings(layout);
+    let catalog = CharacterCatalog::discover(layout).map_err(|error| error.to_ipc_error())?;
+    let manifest = catalog
+        .resolve(&settings)
+        .map_err(|error| error.to_ipc_error())?;
+    if settings.active_character_id.is_none() && catalog.has_single_explicit_profile() {
+        settings.active_character_id = Some(manifest.id.clone());
+        save_character_settings(layout, &settings).map_err(|error| {
+            format!(
+                "failed to persist automatic character selection: {}",
+                pw_domain::runtime_health::redact_diagnostic(&error)
+            )
+        })?;
+    }
+    Ok(manifest)
 }
 
 fn to_dto(manifest: &ResolvedCharacter) -> CharacterManifestDto {
@@ -481,6 +492,121 @@ mod tests {
 
         assert_eq!(manifest.id, "beta");
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn write_explicit_live2d_profile(layout: &AppDataLayout, id: &str) {
+        let profile = layout.characters.join(id);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(
+            profile.join(format!("{id}.model3.json")),
+            r#"{"FileReferences":{"Expressions":[{"Name":"Normal"}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("character.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "id": id,
+                "display_name": id,
+                "renderer": {
+                    "kind": "live2d",
+                    "model": format!("{id}.model3.json"),
+                    "default_expression": "Normal"
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn sole_explicit_profile_persists_automatic_id_without_changing_timeout() {
+        for (case, timeout) in [("never", None), ("default", Some(20))] {
+            let root = std::env::temp_dir()
+                .join(format!("pw-cmd-auto-select-{case}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let layout = AppDataLayout::under(root.clone());
+            layout.create_all().unwrap();
+            write_explicit_live2d_profile(&layout, "alpha");
+            crate::character::save_character_settings(
+                &layout,
+                &CharacterSettingsDto {
+                    schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+                    active_character_id: None,
+                    expression_idle_timeout_seconds: timeout,
+                },
+            )
+            .unwrap();
+
+            assert_eq!(load_manifest(&layout).unwrap().id, "alpha");
+            let persisted = crate::character::load_character_settings(&layout);
+            assert_eq!(persisted.active_character_id.as_deref(), Some("alpha"));
+            assert_eq!(persisted.expression_idle_timeout_seconds, timeout);
+
+            write_explicit_live2d_profile(&layout, "beta");
+            assert_eq!(load_manifest(&layout).unwrap().id, "alpha");
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn legacy_virtual_profile_is_never_persisted_as_the_active_id() {
+        let root =
+            std::env::temp_dir().join(format!("pw-cmd-legacy-no-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        std::fs::write(
+            layout.characters.join("legacy.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+        let original = CharacterSettingsDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            active_character_id: None,
+            expression_idle_timeout_seconds: None,
+        };
+        crate::character::save_character_settings(&layout, &original).unwrap();
+
+        assert_eq!(load_manifest(&layout).unwrap().id, "legacy-live2d");
+        assert_eq!(crate::character::load_character_settings(&layout), original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn multiple_unselected_profiles_return_typed_error_without_writing_settings() {
+        let root =
+            std::env::temp_dir().join(format!("pw-cmd-multiple-no-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        write_explicit_live2d_profile(&layout, "alpha");
+        write_explicit_live2d_profile(&layout, "beta");
+        let settings_path = layout.config.join("character-settings.json");
+
+        let error = load_manifest(&layout).unwrap_err();
+
+        assert!(error.starts_with("character_profile_error:selection_required:"));
+        assert!(!settings_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn automatic_selection_persistence_failure_is_returned_to_the_caller() {
+        let root = std::env::temp_dir().join(format!(
+            "pw-cmd-auto-select-save-failure-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        write_explicit_live2d_profile(&layout, "alpha");
+        std::fs::create_dir(layout.config.join("character-settings.json")).unwrap();
+
+        let error = load_manifest(&layout).unwrap_err();
+
+        assert!(error.starts_with("failed to persist automatic character selection:"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn static_character() -> ResolvedCharacter {
