@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub const CHARACTER_MANIFEST_SCHEMA_VERSION: u16 = 2;
-pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 1;
+pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 2;
+pub const CHARACTER_SETUP_SCHEMA_VERSION: u16 = 1;
 pub const CHARACTER_SETTINGS_CHANGED_EVENT: &str = "character-settings-changed";
 
 /// One motion group of a `Live2D` model.
@@ -52,12 +53,47 @@ pub struct StaticExpressionDto {
     pub image_path: String,
 }
 
+/// Renderer family used by one configured character source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "CharacterRendererKindDto.ts")]
+pub enum CharacterRendererKindDto {
+    Live2d,
+    StaticImage,
+}
+
+/// Configuration and activation state for one renderer family.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "CharacterSourceStatusDto.ts")]
+pub struct CharacterSourceStatusDto {
+    pub kind: CharacterRendererKindDto,
+    pub configured: bool,
+    pub display_name: Option<String>,
+    pub file_name: Option<String>,
+    pub import_enabled: bool,
+    pub active: bool,
+}
+
+/// Combined setup state for all supported character sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "CharacterSetupDto.ts")]
+pub struct CharacterSetupDto {
+    pub schema_version: u16,
+    pub active_renderer: Option<CharacterRendererKindDto>,
+    pub live2d: CharacterSourceStatusDto,
+    pub static_image: CharacterSourceStatusDto,
+}
+
 /// Persisted global character selection and behavior settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "CharacterSettingsDto.ts")]
 pub struct CharacterSettingsDto {
     pub schema_version: u16,
     pub active_character_id: Option<String>,
+    #[serde(default)]
+    pub live2d_character_id: Option<String>,
+    #[serde(default)]
+    pub static_image_character_id: Option<String>,
     pub expression_idle_timeout_seconds: Option<u32>,
 }
 
@@ -66,6 +102,8 @@ impl Default for CharacterSettingsDto {
         Self {
             schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
             active_character_id: None,
+            live2d_character_id: None,
+            static_image_character_id: None,
             expression_idle_timeout_seconds: Some(20),
         }
     }
@@ -82,8 +120,10 @@ pub struct CharacterSettingsChangedEventDto {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterManifestDto,
-        CharacterRendererDto, CharacterSettingsDto, StaticExpressionDto,
+        CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_SCHEMA_VERSION,
+        CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
+        CharacterRendererKindDto, CharacterSettingsDto, CharacterSetupDto,
+        CharacterSourceStatusDto, StaticExpressionDto,
     };
 
     #[test]
@@ -127,8 +167,64 @@ mod tests {
     fn character_settings_default_to_twenty_second_idle_timeout() {
         let settings = CharacterSettingsDto::default();
 
-        assert_eq!(settings.schema_version, CHARACTER_SETTINGS_SCHEMA_VERSION);
-        assert_eq!(settings.active_character_id, None);
-        assert_eq!(settings.expression_idle_timeout_seconds, Some(20));
+        assert_eq!(CHARACTER_SETTINGS_SCHEMA_VERSION, 2);
+        assert_eq!(
+            serde_json::to_value(settings).unwrap(),
+            serde_json::json!({
+                "schema_version": 2,
+                "active_character_id": null,
+                "live2d_character_id": null,
+                "static_image_character_id": null,
+                "expression_idle_timeout_seconds": 20,
+            })
+        );
+    }
+
+    #[test]
+    fn serializes_character_setup_contract() {
+        let setup = CharacterSetupDto {
+            schema_version: CHARACTER_SETUP_SCHEMA_VERSION,
+            active_renderer: Some(CharacterRendererKindDto::StaticImage),
+            live2d: CharacterSourceStatusDto {
+                kind: CharacterRendererKindDto::Live2d,
+                configured: true,
+                display_name: Some("Epsilon Live2D".into()),
+                file_name: Some("epsilon.model3.json".into()),
+                import_enabled: true,
+                active: false,
+            },
+            static_image: CharacterSourceStatusDto {
+                kind: CharacterRendererKindDto::StaticImage,
+                configured: true,
+                display_name: Some("Epsilon Static".into()),
+                file_name: Some("epsilon.png".into()),
+                import_enabled: false,
+                active: true,
+            },
+        };
+
+        assert_eq!(
+            serde_json::to_value(setup).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "active_renderer": "static_image",
+                "live2d": {
+                    "kind": "live2d",
+                    "configured": true,
+                    "display_name": "Epsilon Live2D",
+                    "file_name": "epsilon.model3.json",
+                    "import_enabled": true,
+                    "active": false,
+                },
+                "static_image": {
+                    "kind": "static_image",
+                    "configured": true,
+                    "display_name": "Epsilon Static",
+                    "file_name": "epsilon.png",
+                    "import_enabled": false,
+                    "active": true,
+                },
+            })
+        );
     }
 }

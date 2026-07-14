@@ -486,6 +486,7 @@ mod tests {
                 schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
                 active_character_id: Some("beta".into()),
                 expression_idle_timeout_seconds: Some(20),
+                ..CharacterSettingsDto::default()
             },
         )
         .unwrap();
@@ -536,6 +537,7 @@ mod tests {
                     schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
                     active_character_id: None,
                     expression_idle_timeout_seconds: timeout,
+                    ..CharacterSettingsDto::default()
                 },
             )
             .unwrap();
@@ -567,6 +569,7 @@ mod tests {
             schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
             active_character_id: None,
             expression_idle_timeout_seconds: None,
+            ..CharacterSettingsDto::default()
         };
         crate::character::save_character_settings(&layout, &original).unwrap();
 

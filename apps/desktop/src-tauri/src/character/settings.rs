@@ -37,6 +37,24 @@ fn validate_settings(settings: &CharacterSettingsDto) -> Result<(), String> {
     validate_idle_timeout(settings.expression_idle_timeout_seconds)
 }
 
+fn migrate_settings(mut settings: CharacterSettingsDto) -> Result<CharacterSettingsDto, String> {
+    match settings.schema_version {
+        1 => {
+            settings.schema_version = CHARACTER_SETTINGS_SCHEMA_VERSION;
+            settings.live2d_character_id = None;
+            settings.static_image_character_id = None;
+        }
+        CHARACTER_SETTINGS_SCHEMA_VERSION => {}
+        version => {
+            return Err(format!(
+                "unsupported character settings schema version: {version}"
+            ));
+        }
+    }
+    validate_idle_timeout(settings.expression_idle_timeout_seconds)?;
+    Ok(settings)
+}
+
 /// Loads persisted character settings, falling back to defaults when
 /// the file is absent, corrupt, or invalid.
 #[must_use]
@@ -54,8 +72,8 @@ pub fn load_character_settings(layout: &AppDataLayout) -> CharacterSettingsDto {
     };
 
     match serde_json::from_str::<CharacterSettingsDto>(&raw) {
-        Ok(settings) => match validate_settings(&settings) {
-            Ok(()) => settings,
+        Ok(settings) => match migrate_settings(settings) {
+            Ok(settings) => settings,
             Err(error) => {
                 tracing::warn!(%error, path = %path.display(), "invalid character settings; using defaults");
                 CharacterSettingsDto::default()
@@ -174,6 +192,7 @@ mod tests {
             schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
             active_character_id: active_character_id.map(str::to_owned),
             expression_idle_timeout_seconds: timeout,
+            ..CharacterSettingsDto::default()
         }
     }
 
@@ -210,6 +229,47 @@ mod tests {
     }
 
     #[test]
+    fn all_character_selections_round_trip() {
+        let test = TestLayout::new("all-selections-round-trip");
+        let expected = serde_json::json!({
+            "schema_version": 2,
+            "active_character_id": "active-static",
+            "live2d_character_id": "remembered-live2d",
+            "static_image_character_id": "remembered-static",
+            "expression_idle_timeout_seconds": 30,
+        });
+        let settings = serde_json::from_value(expected.clone()).expect("deserialize v2 settings");
+
+        save_character_settings(&test.layout, &settings).expect("save v2 settings");
+
+        assert_eq!(
+            serde_json::to_value(load_character_settings(&test.layout)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn schema_v1_migrates_to_v2_without_remembered_sources() {
+        let test = TestLayout::new("schema-v1-migration");
+        std::fs::write(
+            test.settings_path(),
+            r#"{"schema_version":1,"active_character_id":"epsilon","expression_idle_timeout_seconds":30}"#,
+        )
+        .expect("write v1 settings");
+
+        assert_eq!(
+            serde_json::to_value(load_character_settings(&test.layout)).unwrap(),
+            serde_json::json!({
+                "schema_version": 2,
+                "active_character_id": "epsilon",
+                "live2d_character_id": null,
+                "static_image_character_id": null,
+                "expression_idle_timeout_seconds": 30,
+            })
+        );
+    }
+
+    #[test]
     fn timeout_outside_bounds_is_rejected() {
         for timeout in [9, 601] {
             assert!(validate_idle_timeout(Some(timeout)).is_err(), "{timeout}");
@@ -235,11 +295,11 @@ mod tests {
         for (name, raw) in [
             (
                 "schema",
-                r#"{"schema_version":2,"active_character_id":"epsilon","expression_idle_timeout_seconds":20}"#,
+                r#"{"schema_version":3,"active_character_id":"epsilon","expression_idle_timeout_seconds":20}"#,
             ),
             (
                 "timeout",
-                r#"{"schema_version":1,"active_character_id":"epsilon","expression_idle_timeout_seconds":9}"#,
+                r#"{"schema_version":2,"active_character_id":"epsilon","expression_idle_timeout_seconds":9}"#,
             ),
         ] {
             let test = TestLayout::new(name);
@@ -255,16 +315,27 @@ mod tests {
 
     #[test]
     fn changing_timeout_preserves_active_character_id() {
-        let original = settings(Some("epsilon-static"), Some(20));
+        let original = serde_json::from_value(serde_json::json!({
+            "schema_version": 2,
+            "active_character_id": "epsilon-static",
+            "live2d_character_id": "epsilon-live2d",
+            "static_image_character_id": "epsilon-static",
+            "expression_idle_timeout_seconds": 20,
+        }))
+        .expect("deserialize settings with remembered sources");
 
         let updated = with_expression_idle_timeout(original, None).expect("disable idle timeout");
 
         assert_eq!(
-            updated.active_character_id.as_deref(),
-            Some("epsilon-static")
+            serde_json::to_value(updated).unwrap(),
+            serde_json::json!({
+                "schema_version": 2,
+                "active_character_id": "epsilon-static",
+                "live2d_character_id": "epsilon-live2d",
+                "static_image_character_id": "epsilon-static",
+                "expression_idle_timeout_seconds": null,
+            })
         );
-        assert_eq!(updated.expression_idle_timeout_seconds, None);
-        assert_eq!(updated.schema_version, CHARACTER_SETTINGS_SCHEMA_VERSION);
     }
 
     #[test]

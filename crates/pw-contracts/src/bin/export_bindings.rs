@@ -8,8 +8,9 @@ use std::path::Path;
 
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, CharacterRendererDto, CharacterSettingsChangedEventDto,
-    CharacterSettingsDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
+    CharacterManifestDto, CharacterRendererDto, CharacterRendererKindDto,
+    CharacterSettingsChangedEventDto, CharacterSettingsDto, CharacterSetupDto,
+    CharacterSourceStatusDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
     ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationMessageDto,
     ConversationStateDto, ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto,
     FailureClassDto, FrontendDiagnosticDto, FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto,
@@ -30,6 +31,11 @@ fn main() {
     ConversationStateDto::export_all(&config).expect("export ConversationStateDto bindings");
     CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
     CharacterRendererDto::export_all(&config).expect("export CharacterRendererDto bindings");
+    CharacterRendererKindDto::export_all(&config)
+        .expect("export CharacterRendererKindDto bindings");
+    CharacterSourceStatusDto::export_all(&config)
+        .expect("export CharacterSourceStatusDto bindings");
+    CharacterSetupDto::export_all(&config).expect("export CharacterSetupDto bindings");
     StaticExpressionDto::export_all(&config).expect("export StaticExpressionDto bindings");
     CharacterSettingsDto::export_all(&config).expect("export CharacterSettingsDto bindings");
     CharacterSettingsChangedEventDto::export_all(&config)
