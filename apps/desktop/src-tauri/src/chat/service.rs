@@ -789,11 +789,13 @@ impl ChatService {
 fn with_character_abilities<R: Runtime>(app: &AppHandle<R>, base: String) -> String {
     let state = app.state::<CharacterState>();
     match state.manifest_summary() {
-        Some((expressions, motions)) if !expressions.is_empty() || !motions.is_empty() => {
+        Some(capabilities)
+            if !capabilities.expressions.is_empty() || !capabilities.motions.is_empty() =>
+        {
             format!(
                 "{base}\n利用できる表情(emotion): {}\n利用できるモーション(motion): {}",
-                expressions.join(", "),
-                motions.join(", ")
+                capabilities.expressions.join(", "),
+                capabilities.motions.join(", ")
             )
         }
         _ => base,

@@ -3,11 +3,16 @@
 
 use std::sync::Mutex;
 
-use pw_contracts::{CharacterManifestDto, MotionGroupDto, SCHEMA_VERSION};
+use pw_contracts::{
+    CHARACTER_MANIFEST_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
+    CharacterSettingsDto, StaticExpressionDto,
+};
 use pw_platform::paths::AppDataLayout;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
 
-use crate::character::{CharacterManifest, find_first_model3, parse_model3_json};
+use crate::character::{
+    CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer,
+};
 
 /// Event delivered to the character window when an expression is set.
 pub const EXPRESSION_EVENT: &str = "character-expression";
@@ -17,7 +22,7 @@ pub const MOTION_EVENT: &str = "character-motion";
 /// Shared cache of the active character manifest.
 #[derive(Default)]
 pub struct CharacterState {
-    manifest: Mutex<Option<CharacterManifest>>,
+    manifest: Mutex<Option<ResolvedCharacter>>,
 }
 
 pub(crate) trait Live2dWindows {
@@ -78,65 +83,81 @@ impl CharacterState {
     /// Expression and motion-group names of the loaded model, when a
     /// manifest has been fetched.
     #[must_use]
-    pub fn manifest_summary(&self) -> Option<(Vec<String>, Vec<String>)> {
+    pub fn manifest_summary(&self) -> Option<CharacterCapabilities> {
         let guard = self.manifest.lock().ok()?;
-        let manifest = guard.as_ref()?;
-        Some((
-            manifest.expressions.clone(),
-            manifest
-                .motion_groups
-                .iter()
-                .map(|(name, _)| name.clone())
-                .collect(),
-        ))
+        Some(guard.as_ref()?.capabilities())
     }
 }
 
-fn load_manifest(layout: &AppDataLayout) -> Result<CharacterManifest, String> {
-    let model_path = find_first_model3(&layout.characters).ok_or_else(|| {
-        format!(
-            "no character model (*.model3.json) found under {}",
-            layout.characters.display()
-        )
-    })?;
-    let content = std::fs::read_to_string(&model_path)
-        .map_err(|error| format!("failed to read {}: {error}", model_path.display()))?;
-    parse_model3_json(&model_path, &content).map_err(|error| error.to_string())
+fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
+    CharacterCatalog::discover(layout)
+        .and_then(|catalog| catalog.resolve(&CharacterSettingsDto::default()))
+        .map_err(|error| error.to_string())
 }
 
-fn to_dto(manifest: &CharacterManifest) -> CharacterManifestDto {
+fn to_dto(manifest: &ResolvedCharacter) -> CharacterManifestDto {
     CharacterManifestDto {
-        schema_version: SCHEMA_VERSION,
-        model_path: manifest.model_path.to_string_lossy().into_owned(),
-        expressions: manifest.expressions.clone(),
-        motion_groups: manifest
-            .motion_groups
-            .iter()
-            .map(|(name, motion_count)| MotionGroupDto {
-                name: name.clone(),
-                motion_count: *motion_count,
-            })
-            .collect(),
+        schema_version: CHARACTER_MANIFEST_SCHEMA_VERSION,
+        id: manifest.id.clone(),
+        display_name: manifest.display_name.clone(),
+        renderer: match &manifest.renderer {
+            ResolvedRenderer::Live2d {
+                model_path,
+                default_expression,
+                expressions,
+                motion_groups,
+            } => CharacterRendererDto::Live2d {
+                model_path: model_path.to_string_lossy().into_owned(),
+                default_expression: default_expression.clone(),
+                expressions: expressions.clone(),
+                motion_groups: motion_groups.clone(),
+            },
+            ResolvedRenderer::StaticImage {
+                default_expression,
+                expressions,
+                width,
+                height,
+            } => CharacterRendererDto::StaticImage {
+                default_expression: default_expression.clone(),
+                expressions: expressions
+                    .iter()
+                    .map(|expression| StaticExpressionDto {
+                        name: expression.name.clone(),
+                        image_path: expression.image_path.to_string_lossy().into_owned(),
+                    })
+                    .collect(),
+                width: *width,
+                height: *height,
+            },
+        },
     }
 }
 
-fn validate_expression(manifest: &CharacterManifest, name: &str) -> Result<(), String> {
-    if manifest.expressions.iter().any(|known| known == name) {
+fn validate_expression(manifest: &ResolvedCharacter, name: &str) -> Result<(), String> {
+    if manifest
+        .capabilities()
+        .expressions
+        .iter()
+        .any(|known| known == name)
+    {
         Ok(())
     } else {
         Err(format!("unknown expression: {name}"))
     }
 }
 
-fn validate_motion_group(manifest: &CharacterManifest, group: &str) -> Result<(), String> {
-    if manifest
-        .motion_groups
-        .iter()
-        .any(|(known, _)| known == group)
-    {
-        Ok(())
-    } else {
-        Err(format!("unknown motion group: {group}"))
+fn validate_motion_group(manifest: &ResolvedCharacter, group: &str) -> Result<(), String> {
+    match &manifest.renderer {
+        ResolvedRenderer::StaticImage { .. } => {
+            Err("motion is unsupported for the static_image renderer".into())
+        }
+        ResolvedRenderer::Live2d { motion_groups, .. } => {
+            if motion_groups.iter().any(|known| known.name == group) {
+                Ok(())
+            } else {
+                Err(format!("unknown motion group: {group}"))
+            }
+        }
     }
 }
 
@@ -238,9 +259,11 @@ pub fn set_click_through<R: Runtime>(app: AppHandle<R>, enabled: bool) -> Result
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use super::{load_manifest, to_dto, validate_expression, validate_motion_group};
-    use crate::character::CharacterManifest;
+    use crate::character::{ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression};
+    use pw_contracts::{CharacterRendererDto, MotionGroupDto};
     use pw_platform::paths::AppDataLayout;
 
     #[derive(Default)]
@@ -282,26 +305,49 @@ mod tests {
         assert!(windows.character_visible);
     }
 
-    fn manifest() -> CharacterManifest {
-        CharacterManifest {
-            model_path: PathBuf::from("C:/data/characters/eps/Epsilon.model3.json"),
-            expressions: vec!["Normal".into(), "Smile".into()],
-            motion_groups: vec![("Idle".into(), 1), ("Tap".into(), 4)],
+    fn live2d_character() -> ResolvedCharacter {
+        ResolvedCharacter {
+            id: "legacy-live2d".into(),
+            display_name: "Legacy Live2D".into(),
+            profile_root: PathBuf::from("C:/data/characters/eps"),
+            renderer: ResolvedRenderer::Live2d {
+                model_path: PathBuf::from("C:/data/characters/eps/Epsilon.model3.json"),
+                default_expression: Some("Normal".into()),
+                expressions: vec!["Normal".into(), "Smile".into()],
+                motion_groups: vec![
+                    MotionGroupDto {
+                        name: "Idle".into(),
+                        motion_count: 1,
+                    },
+                    MotionGroupDto {
+                        name: "Tap".into(),
+                        motion_count: 4,
+                    },
+                ],
+            },
         }
     }
 
     #[test]
     fn maps_manifest_to_versioned_dto() {
-        let dto = to_dto(&manifest());
-        assert_eq!(dto.schema_version, 1);
-        assert_eq!(dto.expressions, ["Normal", "Smile"]);
-        assert_eq!(dto.motion_groups[1].name, "Tap");
-        assert_eq!(dto.motion_groups[1].motion_count, 4);
+        let dto = to_dto(&live2d_character());
+        assert_eq!(dto.schema_version, 2);
+        let CharacterRendererDto::Live2d {
+            expressions,
+            motion_groups,
+            ..
+        } = dto.renderer
+        else {
+            panic!("expected Live2D renderer")
+        };
+        assert_eq!(expressions, ["Normal", "Smile"]);
+        assert_eq!(motion_groups[1].name, "Tap");
+        assert_eq!(motion_groups[1].motion_count, 4);
     }
 
     #[test]
     fn rejects_unknown_expression_and_motion_names() {
-        let manifest = manifest();
+        let manifest = live2d_character();
         assert!(validate_expression(&manifest, "Smile").is_ok());
         assert!(validate_expression(&manifest, "Rage").is_err());
         assert!(validate_motion_group(&manifest, "Idle").is_ok());
@@ -316,8 +362,71 @@ mod tests {
         layout.create_all().unwrap();
 
         let error = load_manifest(&layout).unwrap_err();
-        assert!(error.contains("no character model"));
+        assert!(error.contains("no character profile"));
 
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    fn static_character() -> ResolvedCharacter {
+        ResolvedCharacter {
+            id: "epsilon-static".into(),
+            display_name: "Epsilon Static".into(),
+            profile_root: PathBuf::from("C:/data/characters/epsilon-static"),
+            renderer: ResolvedRenderer::StaticImage {
+                default_expression: "neutral".into(),
+                expressions: vec![
+                    ResolvedStaticExpression {
+                        name: "neutral".into(),
+                        image_path: PathBuf::from(
+                            "C:/data/characters/epsilon-static/expressions/neutral.png",
+                        ),
+                    },
+                    ResolvedStaticExpression {
+                        name: "happy".into(),
+                        image_path: PathBuf::from(
+                            "C:/data/characters/epsilon-static/expressions/happy.webp",
+                        ),
+                    },
+                ],
+                width: 1024,
+                height: 2048,
+            },
+        }
+    }
+
+    #[test]
+    fn maps_static_character_to_task_one_dto_with_absolute_paths() {
+        let dto = to_dto(&static_character());
+        assert_eq!(dto.id, "epsilon-static");
+        assert_eq!(dto.display_name, "Epsilon Static");
+        let CharacterRendererDto::StaticImage {
+            default_expression,
+            expressions,
+            width,
+            height,
+        } = dto.renderer
+        else {
+            panic!("expected static renderer")
+        };
+        assert_eq!(default_expression, "neutral");
+        assert_eq!(expressions.len(), 2);
+        assert!(PathBuf::from(&expressions[0].image_path).is_absolute());
+        assert_eq!((width, height), (1024, 2048));
+    }
+
+    #[test]
+    fn static_motion_is_rejected_without_corrupting_cached_capabilities() {
+        let character = static_character();
+        let state = super::CharacterState {
+            manifest: Mutex::new(Some(character.clone())),
+        };
+        let before = state.manifest_summary().unwrap();
+
+        let error = validate_motion_group(&character, "Idle").unwrap_err();
+
+        assert!(error.contains("unsupported"));
+        assert_eq!(state.manifest_summary().unwrap(), before);
+        assert_eq!(before.expressions, ["neutral", "happy"]);
+        assert!(before.motions.is_empty());
     }
 }
