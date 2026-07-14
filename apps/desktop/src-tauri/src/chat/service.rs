@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -49,6 +49,8 @@ const CONVERSATION_QUEUE_CAPACITY: usize = 8;
 const ENRICHMENT_QUEUE_CAPACITY: usize = 1;
 const ENRICHMENT_PENDING_CAPACITY: usize = 64;
 const ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
+#[allow(clippy::duration_suboptimal_units)]
+const MEMORY_MAINTENANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(86_400);
 
 struct UnavailableMemoryClassifier;
 
@@ -62,9 +64,14 @@ impl MemoryClassifier for UnavailableMemoryClassifier {
     }
 }
 
-fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
-    let memories = memory
-        .search(query, DEFAULT_MEMORY_LIMIT)
+fn load_memory_context<M: MemoryStore>(
+    memory: &mut M,
+    query: &str,
+    turn_id: u64,
+    now: i64,
+) -> MemoryContext {
+    let candidates = memory
+        .search_active_for_prompt(query, DEFAULT_MEMORY_LIMIT, now)
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "memory search failed; continuing without long-term memory");
             Vec::new()
@@ -75,11 +82,29 @@ fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext
             tracing::warn!(%error, "summary restore failed; continuing without summary");
             None
         });
-    MemoryContext {
+    let context = MemoryContext {
         user_settings: None,
-        memories: memories.into_iter().map(|item| item.content).collect(),
+        memories: candidates.iter().map(|item| item.content.clone()).collect(),
         summary: summary.map(|item| item.content),
     }
+    .bounded();
+    let recalled_ids = candidates
+        .iter()
+        .take(DEFAULT_MEMORY_LIMIT)
+        .filter(|item| !item.content.trim().is_empty())
+        .take(context.memories.len())
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    if !recalled_ids.is_empty()
+        && let Err(error) = memory.record_recalled(
+            &recalled_ids,
+            &EvidenceSource::new(DEFAULT_CONVERSATION_ID, turn_id),
+            now,
+        )
+    {
+        tracing::warn!(%error, "memory recall persistence failed; continuing with loaded context");
+    }
+    context
 }
 
 const SUMMARY_RECENT_MESSAGES: usize = 4;
@@ -282,12 +307,70 @@ fn run_context_worker<M: MemoryStore>(
     context_metrics: Arc<QueueMetrics>,
     conversation_metrics: Arc<QueueMetrics>,
 ) {
-    while let Ok(command) = rx.recv() {
+    run_context_worker_loop(
+        memory,
+        &rx,
+        &conversation_tx,
+        &submit_metrics,
+        &context_metrics,
+        &conversation_metrics,
+        MEMORY_MAINTENANCE_INTERVAL,
+    );
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_pass_by_value)]
+fn run_context_worker_with_interval<M: MemoryStore>(
+    memory: M,
+    rx: Receiver<Command>,
+    conversation_tx: SyncSender<Command>,
+    submit_metrics: Arc<QueueMetrics>,
+    context_metrics: Arc<QueueMetrics>,
+    conversation_metrics: Arc<QueueMetrics>,
+    maintenance_interval: std::time::Duration,
+) {
+    run_context_worker_loop(
+        memory,
+        &rx,
+        &conversation_tx,
+        &submit_metrics,
+        &context_metrics,
+        &conversation_metrics,
+        maintenance_interval,
+    );
+}
+
+fn run_context_worker_loop<M: MemoryStore>(
+    mut memory: M,
+    rx: &Receiver<Command>,
+    conversation_tx: &SyncSender<Command>,
+    submit_metrics: &Arc<QueueMetrics>,
+    context_metrics: &Arc<QueueMetrics>,
+    conversation_metrics: &Arc<QueueMetrics>,
+    maintenance_interval: std::time::Duration,
+) {
+    if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
+        tracing::warn!(%error, "memory maintenance failed; context worker remains available");
+    }
+    let mut next_maintenance = std::time::Instant::now() + maintenance_interval;
+    loop {
+        let timeout = next_maintenance.saturating_duration_since(std::time::Instant::now());
+        let command = match rx.recv_timeout(timeout) {
+            Ok(command) => command,
+            Err(RecvTimeoutError::Timeout) => {
+                if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
+                    tracing::warn!(%error, "memory maintenance failed; context worker remains available");
+                }
+                next_maintenance = std::time::Instant::now() + maintenance_interval;
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         submit_metrics.dequeued();
         match command {
             Command::Submit(text, turn_id) => {
                 context_metrics.enqueued();
-                let context = load_memory_context(&memory, &text);
+                let context = load_memory_context(&mut memory, &text, turn_id, unix_timestamp());
                 context_metrics.dequeued();
                 // Account for the distinct prepared-conversation queue.
                 // Increment before send so a fast consumer cannot underflow depth.
@@ -1161,7 +1244,24 @@ mod tests {
         );
     }
 
-    struct FailingMemory;
+    struct FailingMemory {
+        maintenance_calls: Option<Arc<AtomicU64>>,
+    }
+
+    impl FailingMemory {
+        fn new() -> Self {
+            Self {
+                maintenance_calls: None,
+            }
+        }
+
+        fn tracking_maintenance(calls: Arc<AtomicU64>) -> Self {
+            Self {
+                maintenance_calls: Some(calls),
+            }
+        }
+    }
+
     impl MemoryStore for FailingMemory {
         fn load_summary(
             &self,
@@ -1205,6 +1305,24 @@ mod tests {
             _: &str,
             _: usize,
         ) -> Result<Vec<MemoryRecord>, pw_application::PortError> {
+            Err(pw_application::PortError("failed".into()))
+        }
+        fn search_active_for_prompt(
+            &self,
+            _: &str,
+            _: usize,
+            _: i64,
+        ) -> Result<Vec<MemoryCandidate>, pw_application::PortError> {
+            Err(pw_application::PortError("failed".into()))
+        }
+        fn run_maintenance(
+            &mut self,
+            _: i64,
+            _: usize,
+        ) -> Result<pw_application::memory::MaintenanceReport, pw_application::PortError> {
+            if let Some(calls) = &self.maintenance_calls {
+                calls.fetch_add(1, Ordering::SeqCst);
+            }
             Err(pw_application::PortError("failed".into()))
         }
     }
@@ -1260,10 +1378,75 @@ mod tests {
 
     #[test]
     fn memory_lookup_failure_keeps_the_conversation_path_available() {
+        let mut memory = FailingMemory::new();
         assert_eq!(
-            load_memory_context(&FailingMemory, "hello"),
+            load_memory_context(&mut memory, "hello", 1, 100),
             MemoryContext::default()
         );
+    }
+
+    #[test]
+    fn memory_context_prompt_context_excludes_dormant_and_records_only_included_active_memory() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-context-lifecycle-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        memory
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "cats were an old preference".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                0,
+            )
+            .unwrap();
+        memory.run_maintenance(31 * 86_400, 100).unwrap();
+        let active = memory
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "cats are an active preference".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 2),
+                31 * 86_400,
+            )
+            .unwrap()
+            .unwrap();
+
+        let context = load_memory_context(&mut memory, "cats", 21, 31 * 86_400);
+        let repeated = load_memory_context(&mut memory, "cats", 21, 31 * 86_400);
+
+        assert_eq!(context.memories, ["cats are an active preference"]);
+        assert_eq!(repeated, context);
+        drop(memory);
+        let database = Database::open(&path).unwrap();
+        let recalled = {
+            let mut statement = database
+                .connection()
+                .prepare(
+                    "SELECT source_turn_id FROM memory_evidence WHERE memory_id=?1 AND kind='recalled' ORDER BY id",
+                )
+                .unwrap();
+            statement
+                .query_map([active], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(recalled, [21]);
+        drop(database);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn maintenance_failure_does_not_disconnect_context_worker() {
+        let mut memory = FailingMemory::new();
+        assert!(memory.run_maintenance(100, 100).is_err());
+        let context = load_memory_context(&mut memory, "query", 1, 100);
+        assert!(context.memories.is_empty());
     }
 
     #[test]
@@ -1304,8 +1487,8 @@ mod tests {
         });
         worker.join().unwrap();
 
-        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
-        let context = load_memory_context(&store, "猫");
+        let mut store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let context = load_memory_context(&mut store, "猫", 3, unix_timestamp());
         assert_eq!(context.memories, ["私は猫が好きです"]);
         let candidates = store
             .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
@@ -1441,8 +1624,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restored.len(), 2);
-        let store = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
-        let context = load_memory_context(&store, "猫");
+        let mut store = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        let context = load_memory_context(&mut store, "猫", 2, unix_timestamp());
         let prompt = PromptBuilder {
             system_rules: "rules".into(),
             character_prompt: "character".into(),
@@ -1481,10 +1664,8 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let empty_context = load_memory_context(
-            &SqliteMemoryStore::new(Database::open(&database_path).unwrap()),
-            "猫",
-        );
+        let mut empty_memory = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        let empty_context = load_memory_context(&mut empty_memory, "猫", 3, unix_timestamp());
         assert!(empty_context.summary.is_none());
         assert!(empty_context.memories.is_empty());
         let next_prompt = PromptBuilder {
@@ -1675,6 +1856,39 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_millis(50));
         assert!(matches!(
             conversation_rx.recv().unwrap(),
+            Command::Prepared(_, 1, _)
+        ));
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn context_worker_recovers_from_startup_and_periodic_maintenance_failures() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = sync_channel(8);
+        let (conversation_tx, conversation_rx) = sync_channel(8);
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                FailingMemory::tracking_maintenance(worker_calls),
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", 8)),
+                Arc::new(QueueMetrics::new("test_context", 8)),
+                Arc::new(QueueMetrics::new("test_conversation", 8)),
+                std::time::Duration::from_millis(10),
+            );
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(calls.load(Ordering::SeqCst) >= 2);
+        tx.send(Command::Submit("query".into(), 1)).unwrap();
+        assert!(matches!(
+            conversation_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
             Command::Prepared(_, 1, _)
         ));
         drop(tx);
