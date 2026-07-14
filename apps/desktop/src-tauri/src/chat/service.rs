@@ -33,7 +33,8 @@ use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
-use crate::commands::character::CharacterState;
+use crate::character::CharacterCapabilities;
+use crate::commands::character::{CharacterState, EXPRESSION_EVENT, MOTION_EVENT};
 use crate::diagnostics::QueueMetrics;
 
 pub const MESSAGE_EVENT: &str = "chat-message";
@@ -786,19 +787,64 @@ impl ChatService {
 
 /// Appends the loaded character's expression / motion names so the
 /// model can emit control JSON the renderer understands.
+fn character_instruction(base: &str, capabilities: &CharacterCapabilities) -> String {
+    let mut lines = vec![base.to_owned()];
+    if !capabilities.expressions.is_empty() {
+        lines.push(format!(
+            "利用できる表情(emotion): {}",
+            capabilities.expressions.join(", ")
+        ));
+    }
+    if !capabilities.motions.is_empty() {
+        lines.push(format!(
+            "利用できるモーション(motion): {}",
+            capabilities.motions.join(", ")
+        ));
+    }
+    lines.join("\n")
+}
+
 fn with_character_abilities<R: Runtime>(app: &AppHandle<R>, base: String) -> String {
     let state = app.state::<CharacterState>();
     match state.manifest_summary() {
-        Some(capabilities)
-            if !capabilities.expressions.is_empty() || !capabilities.motions.is_empty() =>
-        {
-            format!(
-                "{base}\n利用できる表情(emotion): {}\n利用できるモーション(motion): {}",
-                capabilities.expressions.join(", "),
-                capabilities.motions.join(", ")
-            )
-        }
+        Some(capabilities) => character_instruction(&base, &capabilities),
         _ => base,
+    }
+}
+
+fn dispatch_character_control(
+    capabilities: &CharacterCapabilities,
+    renderer: &str,
+    control: &ReplyControl,
+    mut emit: impl FnMut(&'static str, &str),
+) {
+    if let Some(emotion) = &control.emotion {
+        if capabilities
+            .expressions
+            .iter()
+            .any(|known| known == emotion)
+        {
+            emit(EXPRESSION_EVENT, emotion);
+        } else {
+            tracing::warn!(
+                renderer = %renderer,
+                control = "emotion",
+                name = %emotion,
+                "ignoring unsupported character control"
+            );
+        }
+    }
+    if let Some(motion) = &control.motion {
+        if capabilities.motions.iter().any(|known| known == motion) {
+            emit(MOTION_EVENT, motion);
+        } else {
+            tracing::warn!(
+                renderer = %renderer,
+                control = "motion",
+                name = %motion,
+                "ignoring unsupported character control"
+            );
+        }
     }
 }
 
@@ -882,22 +928,45 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
     }
 
     fn on_control(&self, _turn: TurnId, control: &ReplyControl) {
-        // Map the control prelude onto the character window; unknown
-        // names are ignored by the renderer.
-        if let Some(emotion) = &control.emotion {
-            let _ = self.app.emit_to(
-                EventTarget::webview_window("character"),
-                "character-expression",
-                emotion.clone(),
-            );
-        }
-        if let Some(motion) = &control.motion {
-            let _ = self.app.emit_to(
-                EventTarget::webview_window("character"),
-                "character-motion",
-                motion.clone(),
-            );
-        }
+        let state = self.app.state::<CharacterState>();
+        let Some(context) = state.control_context() else {
+            if let Some(emotion) = &control.emotion {
+                tracing::warn!(
+                    renderer = "unavailable",
+                    control = "emotion",
+                    name = %emotion,
+                    "ignoring character control before capabilities are loaded"
+                );
+            }
+            if let Some(motion) = &control.motion {
+                tracing::warn!(
+                    renderer = "unavailable",
+                    control = "motion",
+                    name = %motion,
+                    "ignoring character control before capabilities are loaded"
+                );
+            }
+            return;
+        };
+        dispatch_character_control(
+            &context.capabilities,
+            context.renderer,
+            control,
+            |event, name| {
+                if let Err(error) =
+                    self.app
+                        .emit_to(EventTarget::webview_window("character"), event, name)
+                {
+                    tracing::warn!(
+                        %error,
+                        renderer = %context.renderer,
+                        control = %event,
+                        name = %name,
+                        "failed to emit character control"
+                    );
+                }
+            },
+        );
     }
 
     fn on_sentence(&self, turn: TurnId, sentence: &str) {
@@ -935,6 +1004,97 @@ mod tests {
     #[test]
     fn production_llm_timeout_allows_local_streaming_inference() {
         assert!(ADAPTER_TIMEOUT >= std::time::Duration::from_secs(30));
+    }
+
+    fn static_capabilities() -> crate::character::CharacterCapabilities {
+        crate::character::CharacterCapabilities {
+            expressions: vec!["neutral".into(), "happy".into()],
+            motions: Vec::new(),
+        }
+    }
+
+    fn live2d_capabilities() -> crate::character::CharacterCapabilities {
+        crate::character::CharacterCapabilities {
+            expressions: vec!["neutral".into(), "happy".into()],
+            motions: vec!["Idle".into(), "Tap".into()],
+        }
+    }
+
+    #[test]
+    fn static_character_instruction_lists_expressions_without_motion_line() {
+        let instruction = character_instruction("base", &static_capabilities());
+
+        assert!(instruction.contains("利用できる表情(emotion): neutral, happy"));
+        assert!(!instruction.contains("利用できるモーション(motion):"));
+    }
+
+    #[test]
+    fn live2d_character_instruction_lists_expressions_and_motions() {
+        let instruction = character_instruction("base", &live2d_capabilities());
+
+        assert!(instruction.contains("利用できる表情(emotion): neutral, happy"));
+        assert!(instruction.contains("利用できるモーション(motion): Idle, Tap"));
+    }
+
+    #[test]
+    fn unknown_emotion_emits_no_character_event_and_speech_can_continue() {
+        let control = ReplyControl {
+            emotion: Some("surprised".into()),
+            intensity: None,
+            motion: None,
+        };
+        let mut events = Vec::new();
+
+        dispatch_character_control(
+            &static_capabilities(),
+            "static_image",
+            &control,
+            |event, name| events.push((event, name.to_owned())),
+        );
+        events.push((MESSAGE_EVENT, "speech continues".into()));
+
+        assert_eq!(events, vec![(MESSAGE_EVENT, "speech continues".into())]);
+    }
+
+    #[test]
+    fn static_motion_is_ignored_without_emitting_an_event() {
+        let control = ReplyControl {
+            emotion: None,
+            intensity: None,
+            motion: Some("Idle".into()),
+        };
+        let mut events = Vec::new();
+
+        dispatch_character_control(
+            &static_capabilities(),
+            "static_image",
+            &control,
+            |event, name| events.push((event, name.to_owned())),
+        );
+
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn valid_live2d_controls_emit_existing_character_events() {
+        let control = ReplyControl {
+            emotion: Some("happy".into()),
+            intensity: Some(0.75),
+            motion: Some("Tap".into()),
+        };
+        let mut events = Vec::new();
+
+        dispatch_character_control(&live2d_capabilities(), "live2d", &control, |event, name| {
+            events.push((event, name.to_owned()))
+        });
+
+        assert_eq!(
+            events,
+            vec![
+                ("character-expression", "happy".into()),
+                ("character-motion", "Tap".into()),
+            ]
+        );
     }
 
     #[test]

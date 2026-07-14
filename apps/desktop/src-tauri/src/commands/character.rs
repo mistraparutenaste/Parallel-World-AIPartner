@@ -27,6 +27,12 @@ pub struct CharacterState {
     manifest: Mutex<Option<ResolvedCharacter>>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CharacterControlContext {
+    pub renderer: &'static str,
+    pub capabilities: CharacterCapabilities,
+}
+
 pub(crate) trait Live2dWindows {
     fn show_chat(&mut self) -> Result<(), String>;
     fn hide_character(&mut self) -> Result<(), String>;
@@ -88,6 +94,20 @@ impl CharacterState {
     pub fn manifest_summary(&self) -> Option<CharacterCapabilities> {
         let guard = self.manifest.lock().ok()?;
         Some(guard.as_ref()?.capabilities())
+    }
+
+    #[must_use]
+    pub(crate) fn control_context(&self) -> Option<CharacterControlContext> {
+        let guard = self.manifest.lock().ok()?;
+        let manifest = guard.as_ref()?;
+        let renderer = match manifest.renderer {
+            ResolvedRenderer::Live2d { .. } => "live2d",
+            ResolvedRenderer::StaticImage { .. } => "static_image",
+        };
+        Some(CharacterControlContext {
+            renderer,
+            capabilities: manifest.capabilities(),
+        })
     }
 }
 
@@ -467,5 +487,24 @@ mod tests {
         assert_eq!(before.expressions, ["neutral", "happy"]);
         assert!(before.motions.is_empty());
         assert_eq!(*state.manifest.lock().unwrap(), Some(character));
+    }
+
+    #[test]
+    fn control_context_identifies_each_renderer_kind() {
+        let live2d = super::CharacterState {
+            manifest: Mutex::new(Some(live2d_character())),
+        }
+        .control_context()
+        .unwrap();
+        let static_image = super::CharacterState {
+            manifest: Mutex::new(Some(static_character())),
+        }
+        .control_context()
+        .unwrap();
+
+        assert_eq!(live2d.renderer, "live2d");
+        assert_eq!(live2d.capabilities.motions, ["Idle", "Tap"]);
+        assert_eq!(static_image.renderer, "static_image");
+        assert!(static_image.capabilities.motions.is_empty());
     }
 }
