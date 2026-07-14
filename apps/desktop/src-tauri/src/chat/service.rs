@@ -8,15 +8,17 @@ use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pw_application::PortError;
 use pw_application::conversation::{
     ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
     PromptBuilder,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
-    DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryStore,
-    PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator, is_safe_persistent_content,
-    redact_persistent_content,
+    DEFAULT_MEMORY_LIMIT, EvidenceSource, HybridConsolidator, JapanesePersistentFactGenerator,
+    LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, PersistentFactGenerator,
+    ProposedAction, RollingSummaryGenerator, SummaryGenerator, has_explicit_pin_intent,
+    is_safe_persistent_content, redact_persistent_content,
 };
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
@@ -48,6 +50,18 @@ const ENRICHMENT_QUEUE_CAPACITY: usize = 1;
 const ENRICHMENT_PENDING_CAPACITY: usize = 64;
 const ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
+struct UnavailableMemoryClassifier;
+
+impl MemoryClassifier for UnavailableMemoryClassifier {
+    fn classify(
+        &mut self,
+        _: &str,
+        _: &[pw_application::memory::MemoryCandidate],
+    ) -> Result<ProposedAction, PortError> {
+        Err(PortError("memory classifier unavailable".into()))
+    }
+}
+
 fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
     let memories = memory
         .search(query, DEFAULT_MEMORY_LIMIT)
@@ -72,23 +86,52 @@ const SUMMARY_RECENT_MESSAGES: usize = 4;
 const SUMMARY_BATCH_MESSAGES: usize = 8;
 const SUMMARY_MAX_CHARS: usize = 2_000;
 
-fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), String> {
+fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
+    database_path: &Path,
+    job: &EnrichmentJob,
+    consolidator: &mut HybridConsolidator<C>,
+) -> Result<(), String> {
     let history = SqliteConversationHistory::new(
         Database::open(database_path).map_err(|error| error.to_string())?,
     );
     let mut memory =
         SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
     let mut facts = JapanesePersistentFactGenerator;
-    for fact in facts
-        .extract(user_text)
-        .map_err(|error| error.to_string())?
+    let mut statements = facts
+        .extract(&job.user_text)
+        .map_err(|error| error.to_string())?;
+    if has_explicit_pin_intent(&job.user_text)
+        && !statements
+            .iter()
+            .any(|statement| statement == &job.user_text)
     {
-        if let Err(error) =
-            memory.upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
-        {
-            tracing::warn!(%error, "persistent fact rejected; summary enrichment continues");
+        statements.insert(0, job.user_text.clone());
+    }
+    let source = EvidenceSource::new(DEFAULT_CONVERSATION_ID, job.turn_id);
+    for statement in statements {
+        let candidates = match memory.find_consolidation_candidates(
+            &statement,
+            DEFAULT_MEMORY_LIMIT,
+            unix_timestamp(),
+        ) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(%error, "memory candidate search failed; summary enrichment continues");
+                continue;
+            }
+        };
+        let action = consolidator.decide(&statement, &candidates);
+        if let Err(error) = memory.apply_action(&action, &source, unix_timestamp()) {
+            tracing::warn!(%error, "memory action rejected; summary enrichment continues");
         }
     }
+    update_rolling_summary(&history, &mut memory)
+}
+
+fn update_rolling_summary(
+    history: &SqliteConversationHistory,
+    memory: &mut SqliteMemoryStore,
+) -> Result<(), String> {
     let messages = history
         .list_messages(DEFAULT_CONVERSATION_ID)
         .map_err(|error| error.to_string())?;
@@ -148,25 +191,32 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnrichmentJob {
+    user_text: String,
+    turn_id: u64,
+}
+
+#[allow(clippy::needless_pass_by_value)]
 #[derive(Clone)]
 struct EnrichmentSender {
     wake: SyncSender<()>,
-    pending: Arc<Mutex<Option<Vec<String>>>>,
+    pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
 }
 
 impl EnrichmentSender {
-    fn replace_latest(&self, text: String) -> Result<(), ()> {
+    fn replace_latest(&self, job: EnrichmentJob) -> Result<(), ()> {
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let batch = pending.get_or_insert_with(Vec::new);
-        if batch.iter().any(|existing| existing == &text) {
+        if batch.iter().any(|existing| existing.turn_id == job.turn_id) {
             self.metrics.coalesced();
             return Ok(());
         } else if batch.len() < ENRICHMENT_PENDING_CAPACITY {
-            batch.push(text);
+            batch.push(job);
             self.metrics.enqueued();
         } else {
             self.metrics.dropped();
@@ -200,20 +250,23 @@ impl EnrichmentSender {
 fn run_enrichment(
     database_path: &Path,
     rx: Receiver<()>,
-    pending: Arc<Mutex<Option<Vec<String>>>>,
+    pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
+    mut consolidator: HybridConsolidator<Box<dyn MemoryClassifier>>,
 ) {
     while rx.recv().is_ok() {
-        let Some(user_texts) = pending
+        let Some(jobs) = pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             continue;
         };
-        for user_text in user_texts {
+        for job in jobs {
             metrics.dequeued();
-            if let Err(error) = process_enrichment_job(database_path, &user_text) {
+            if let Err(error) =
+                process_enrichment_job_with_consolidator(database_path, &job, &mut consolidator)
+            {
                 tracing::warn!(%error, "memory enrichment job failed; worker remains available");
             }
         }
@@ -362,6 +415,18 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             )
             .is_ok()
             {
+                if let Some(enrichment) = &self.enrichment
+                    && enrichment
+                        .replace_latest(EnrichmentJob {
+                            user_text: user.clone(),
+                            turn_id: retry_turn.value(),
+                        })
+                        .is_err()
+                {
+                    tracing::warn!(
+                        "memory enrichment worker unavailable; conversation remains available"
+                    );
+                }
                 pending.remove(&retry_turn);
             }
         }
@@ -391,7 +456,12 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
             if let Some(enrichment) = &self.enrichment
-                && enrichment.replace_latest(user_text.clone()).is_err()
+                && enrichment
+                    .replace_latest(EnrichmentJob {
+                        user_text: user_text.clone(),
+                        turn_id: turn.value(),
+                    })
+                    .is_err()
             {
                 tracing::warn!(
                     "memory enrichment worker unavailable; conversation remains available"
@@ -662,13 +732,13 @@ impl ChatService {
         app: AppHandle<R>,
         settings: &LlmSettingsDto,
     ) -> Result<Worker, String> {
-        let llm = OpenAiCompatClient::new(LlmClientConfig {
+        let llm_config = LlmClientConfig {
             base_url: settings.base_url.clone(),
             model: settings.model.clone(),
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
-        })
-        .map_err(|error| error.to_string())?;
+        };
+        let llm = OpenAiCompatClient::new(llm_config.clone()).map_err(|error| error.to_string())?;
 
         let character_prompt = with_character_abilities(&app, settings.character_prompt.clone());
         let config = OrchestratorConfig {
@@ -745,7 +815,23 @@ impl ChatService {
             .name("pw-memory-enrichment".into())
             .spawn({
                 let metrics = Arc::clone(&self.enrichment_metrics);
-                move || run_enrichment(&enrichment_path, enrichment_rx, enrichment_pending, metrics)
+                move || {
+                    let enrichment_classifier: Box<dyn MemoryClassifier> =
+                        match OpenAiCompatClient::new(llm_config) {
+                            Ok(client) => Box::new(LlmMemoryClassifier::new(client)),
+                            Err(error) => {
+                                tracing::warn!(%error, "memory classifier unavailable; using exact-match fallback");
+                                Box::new(UnavailableMemoryClassifier)
+                            }
+                        };
+                    run_enrichment(
+                        &enrichment_path,
+                        enrichment_rx,
+                        enrichment_pending,
+                        metrics,
+                        HybridConsolidator::new(enrichment_classifier),
+                    );
+                }
             })
             .map_err(|error| format!("failed to spawn memory enrichment worker: {error}"))?;
 
@@ -923,8 +1009,13 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
 mod tests {
     use std::sync::Mutex;
 
-    use pw_application::history::ConversationHistory;
-    use pw_application::memory::{MemoryRecord, StoredSummary};
+    use pw_application::history::{
+        ConversationHistory, StoredConversation, StoredMessage, StoredTurn,
+    };
+    use pw_application::memory::{
+        HybridConsolidator, MemoryAction, MemoryCandidate, MemoryClassifier, MemoryRecord,
+        MemoryState, ProposedAction, StoredSummary,
+    };
     use pw_domain::reply::TurnTracker;
     use pw_storage::{Database, SqliteConversationHistory};
 
@@ -1000,6 +1091,74 @@ mod tests {
         fn on_error(&self, _: TurnId, message: &str) {
             self.errors.lock().unwrap().push(message.to_owned());
         }
+    }
+
+    struct ExactFakeClassifier;
+
+    impl MemoryClassifier for ExactFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            Ok(candidates
+                .iter()
+                .find(|candidate| candidate.content == statement)
+                .map_or_else(
+                    || ProposedAction::Add {
+                        content: statement.to_owned(),
+                    },
+                    |candidate| ProposedAction::Reinforce {
+                        memory_id: candidate.id,
+                    },
+                ))
+        }
+    }
+
+    struct PinFakeClassifier;
+
+    impl MemoryClassifier for PinFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            if has_explicit_pin_intent(statement) {
+                return Ok(ProposedAction::Pin {
+                    memory_id: candidates.first().map(|candidate| candidate.id),
+                    content: candidates.is_empty().then(|| "私は猫が好きです".to_owned()),
+                });
+            }
+            Ok(ProposedAction::Add {
+                content: statement.to_owned(),
+            })
+        }
+    }
+
+    #[test]
+    fn unavailable_classifier_uses_only_exact_match_fallback() {
+        let candidate = MemoryCandidate {
+            id: 7,
+            content: "私は猫が好きです".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 1,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
+        assert_eq!(
+            consolidator.decide("私は猫が好きです。", std::slice::from_ref(&candidate)),
+            MemoryAction::Reinforce {
+                memory_id: 7,
+                pin: false,
+            }
+        );
+        assert_eq!(
+            consolidator.decide("私は犬が好きです", &[candidate]),
+            MemoryAction::Ignore
+        );
     }
 
     struct FailingMemory;
@@ -1118,6 +1277,7 @@ mod tests {
             ("古い質問", "古い回答"),
             ("次の質問", "次の回答"),
             ("私は猫が好きです", "覚えました"),
+            ("私は猫が好きです", "もう一度覚えました"),
         ] {
             persist_completed_turn(
                 &mut history,
@@ -1130,7 +1290,16 @@ mod tests {
         }
         drop(history);
         let (tx, rx) = sync_channel(8);
-        let pending = Arc::new(Mutex::new(Some(vec!["私は猫が好きです".to_owned()])));
+        let pending = Arc::new(Mutex::new(Some(vec![
+            EnrichmentJob {
+                user_text: "私は猫が好きです".to_owned(),
+                turn_id: 3,
+            },
+            EnrichmentJob {
+                user_text: "私は猫が好きです".to_owned(),
+                turn_id: 4,
+            },
+        ])));
         let worker_pending = Arc::clone(&pending);
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
@@ -1139,6 +1308,7 @@ mod tests {
                 rx,
                 worker_pending,
                 Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(Box::new(ExactFakeClassifier) as Box<dyn MemoryClassifier>),
             );
         });
         tx.send(()).unwrap();
@@ -1149,6 +1319,98 @@ mod tests {
         let context = load_memory_context(&store, "猫");
         assert_eq!(context.memories, ["私は猫が好きです"]);
         assert!(context.summary.unwrap().contains("古い質問"));
+        let candidates = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].mention_count, 2);
+        drop(store);
+        let database = Database::open(&path).unwrap();
+        let evidence_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memory_evidence WHERE kind='user_mention'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(evidence_count, 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    struct FailOnceHistory {
+        inner: SqliteConversationHistory,
+        failed: bool,
+    }
+
+    impl ConversationHistory for FailOnceHistory {
+        fn store_completed_turn(&mut self, turn: &StoredTurn) -> Result<(), PortError> {
+            if !self.failed {
+                self.failed = true;
+                return Err(PortError("injected persistence failure".into()));
+            }
+            self.inner.store_completed_turn(turn)
+        }
+
+        fn max_turn_id(&self, conversation_id: &str) -> Result<Option<u64>, PortError> {
+            self.inner.max_turn_id(conversation_id)
+        }
+
+        fn reserve_turn_id(
+            &mut self,
+            conversation_id: &str,
+            created_at: i64,
+        ) -> Result<u64, PortError> {
+            self.inner.reserve_turn_id(conversation_id, created_at)
+        }
+
+        fn upsert_conversation(
+            &mut self,
+            conversation: &StoredConversation,
+        ) -> Result<(), PortError> {
+            self.inner.upsert_conversation(conversation)
+        }
+
+        fn append_message(&mut self, message: &StoredMessage) -> Result<i64, PortError> {
+            self.inner.append_message(message)
+        }
+
+        fn list_conversations(&self) -> Result<Vec<StoredConversation>, PortError> {
+            self.inner.list_conversations()
+        }
+
+        fn list_messages(&self, conversation_id: &str) -> Result<Vec<StoredMessage>, PortError> {
+            self.inner.list_messages(conversation_id)
+        }
+
+        fn delete_conversation(&mut self, conversation_id: &str) -> Result<bool, PortError> {
+            self.inner.delete_conversation(conversation_id)
+        }
+    }
+
+    #[test]
+    fn explicit_pin_enrichment_preserves_the_original_intent() {
+        let path =
+            std::env::temp_dir().join(format!("pw-enrichment-pin-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut consolidator = HybridConsolidator::new(PinFakeClassifier);
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は猫が好きです。覚えておいて".into(),
+                turn_id: 1,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
+
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let candidates = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].pinned);
+        assert_eq!(candidates[0].mention_count, 1);
         let _ = std::fs::remove_file(path);
     }
 
@@ -1172,7 +1434,15 @@ mod tests {
         )
         .unwrap();
         drop(history);
-        process_enrichment_job(&database_path, "私は猫が好き").unwrap();
+        process_enrichment_job_with_consolidator(
+            &database_path,
+            &EnrichmentJob {
+                user_text: "私は猫が好き".into(),
+                turn_id: 1,
+            },
+            &mut HybridConsolidator::new(ExactFakeClassifier),
+        )
+        .unwrap();
 
         let reopened_history =
             SqliteConversationHistory::new(Database::open(&database_path).unwrap());
@@ -1249,7 +1519,18 @@ mod tests {
             std::env::temp_dir().join(format!("pw-enrichment-recovery-{}", std::process::id()));
         let path = root.join("db.sqlite3");
         let _ = std::fs::remove_dir_all(&root);
-        assert!(process_enrichment_job(&path, "私は猫が好きです").is_err());
+        let mut consolidator = HybridConsolidator::new(ExactFakeClassifier);
+        assert!(
+            process_enrichment_job_with_consolidator(
+                &path,
+                &EnrichmentJob {
+                    user_text: "私は猫が好きです".into(),
+                    turn_id: 8,
+                },
+                &mut consolidator,
+            )
+            .is_err()
+        );
         std::fs::create_dir_all(&root).unwrap();
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let mut tracker = TurnTracker::new();
@@ -1264,12 +1545,28 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "私は猫が好きです").unwrap();
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
+                turn_id: 8,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
             .unwrap();
-        process_enrichment_job(&path, "私は犬が好きです").unwrap();
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は犬が好きです".into(),
+                turn_id: 9,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
@@ -1301,7 +1598,16 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "通常発話").unwrap();
+        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "通常発話".into(),
+                turn_id: 4,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
@@ -1321,7 +1627,15 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "通常発話").unwrap();
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "通常発話".into(),
+                turn_id: 7,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
@@ -1374,6 +1688,46 @@ mod tests {
         assert_eq!(messages[0].content, "kept user");
         assert_eq!(messages[1].content, "kept assistant");
         assert!(messages.iter().all(|message| message.id.is_some()));
+    }
+
+    #[test]
+    fn persistence_retry_enqueues_enrichment_only_after_success() {
+        let (wake, rx) = sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
+        };
+        let history = FailOnceHistory {
+            inner: SqliteConversationHistory::new(Database::open_in_memory().unwrap()),
+            failed: false,
+        };
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            history,
+            "chat",
+            Some(sender),
+        );
+        let mut tracker = TurnTracker::new();
+        let first = tracker.begin_turn();
+        events.on_user_message(first, "私は猫が好きです");
+        events.on_reply_complete(first, "覚えました");
+        assert!(rx.try_recv().is_err());
+
+        events.on_user_message(tracker.begin_turn(), "次の発話");
+
+        rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            pending.lock().unwrap().as_deref(),
+            Some(
+                [EnrichmentJob {
+                    user_text: "私は猫が好きです".into(),
+                    turn_id: first.value(),
+                }]
+                .as_slice()
+            )
+        );
     }
 
     #[test]
@@ -1520,17 +1874,61 @@ mod tests {
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
-        sender.replace_latest("old".into()).unwrap();
-        sender.replace_latest("latest".into()).unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "old".into(),
+                turn_id: 1,
+            })
+            .unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "latest".into(),
+                turn_id: 2,
+            })
+            .unwrap();
         rx.recv().unwrap();
         assert_eq!(
             pending.lock().unwrap().take(),
-            Some(vec!["old".to_owned(), "latest".to_owned()])
+            Some(vec![
+                EnrichmentJob {
+                    user_text: "old".into(),
+                    turn_id: 1,
+                },
+                EnrichmentJob {
+                    user_text: "latest".into(),
+                    turn_id: 2,
+                },
+            ])
         );
         assert!(
             rx.try_recv().is_err(),
             "one wake coalesces multiple updates"
         );
+    }
+
+    #[test]
+    fn enrichment_job_preserves_turn_identity_and_is_idempotent() {
+        let (wake, rx) = sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
+        };
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
+                turn_id: 12,
+            })
+            .unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "本文が変わっても同じターン".into(),
+                turn_id: 12,
+            })
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(pending.lock().unwrap().as_ref().unwrap().len(), 1);
     }
 
     #[test]
@@ -1546,9 +1944,21 @@ mod tests {
             metrics: Arc::clone(&metrics),
         };
         for index in 0..ENRICHMENT_PENDING_CAPACITY {
-            sender.replace_latest(format!("fact-{index}")).unwrap();
+            sender
+                .replace_latest(EnrichmentJob {
+                    user_text: format!("fact-{index}"),
+                    turn_id: u64::try_from(index).unwrap(),
+                })
+                .unwrap();
         }
-        assert!(sender.replace_latest("overflow".into()).is_err());
+        assert!(
+            sender
+                .replace_latest(EnrichmentJob {
+                    user_text: "overflow".into(),
+                    turn_id: u64::try_from(ENRICHMENT_PENDING_CAPACITY).unwrap(),
+                })
+                .is_err()
+        );
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.depth, ENRICHMENT_PENDING_CAPACITY);
         assert_eq!(snapshot.capacity, ENRICHMENT_PENDING_CAPACITY);
