@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use pw_domain::runtime_health::{RuntimeFailure, RuntimeFeature, RuntimeHealth};
+use pw_domain::runtime_health::{FailureClass, RuntimeFailure, RuntimeFeature, RuntimeHealth};
 
 pub trait Clock {
     fn now_ms(&self) -> u64;
@@ -79,6 +79,16 @@ impl<C: Clock, R: RandomSource> FeatureHealthSupervisor<C, R> {
     pub fn record_failure(&mut self, failure: RuntimeFailure) -> HealthUpdate {
         if self.circuit_open {
             return HealthUpdate::Unchanged {
+                decision: BackoffDecision::CircuitOpen,
+            };
+        }
+        if failure.class() == FailureClass::Permanent {
+            self.circuit_open = true;
+            self.next_retry_at_ms = None;
+            self.health.mark_degraded(&failure, self.policy.now_ms());
+            return HealthUpdate::Changed {
+                health: self.health.clone(),
+                attempts: self.policy.attempts(),
                 decision: BackoffDecision::CircuitOpen,
             };
         }

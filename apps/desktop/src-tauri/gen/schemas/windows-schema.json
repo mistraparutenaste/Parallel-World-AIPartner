@@ -357,10 +357,10 @@
           "markdownDescription": "Enables the report_runtime_success command without any pre-configured scope."
         },
         {
-          "description": "Enables the retry_live2d_runtime command without any pre-configured scope.",
+          "description": "Enables the retry_character_renderer command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-retry-live2d-runtime",
-          "markdownDescription": "Enables the retry_live2d_runtime command without any pre-configured scope."
+          "const": "allow-retry-character-renderer",
+          "markdownDescription": "Enables the retry_character_renderer command without any pre-configured scope."
         },
         {
           "description": "Enables the send_chat_message command without any pre-configured scope.",
@@ -621,10 +621,10 @@
           "markdownDescription": "Denies the report_runtime_success command without any pre-configured scope."
         },
         {
-          "description": "Denies the retry_live2d_runtime command without any pre-configured scope.",
+          "description": "Denies the retry_character_renderer command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-retry-live2d-runtime",
-          "markdownDescription": "Denies the retry_live2d_runtime command without any pre-configured scope."
+          "const": "deny-retry-character-renderer",
+          "markdownDescription": "Denies the retry_character_renderer command without any pre-configured scope."
         },
         {
           "description": "Denies the send_chat_message command without any pre-configured scope.",

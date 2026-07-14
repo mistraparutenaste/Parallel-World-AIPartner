@@ -16,7 +16,8 @@ impl Clock for FakeClock {
 #[test]
 fn duplicate_failure_after_open_circuit_is_unchanged() {
     let clock = FakeClock::default();
-    let mut supervisor = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+    let mut supervisor =
+        FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
     for _ in 0..8 {
         let _ = supervisor.record_failure(RuntimeFailure::transient(FailureCode::Internal));
     }
@@ -68,6 +69,29 @@ fn failures_persist_attempts_and_open_the_eighth_circuit() {
 }
 
 #[test]
+fn permanent_failure_opens_circuit_without_scheduling_an_automatic_retry() {
+    let clock = FakeClock::default();
+    let mut supervisor =
+        FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
+
+    let HealthUpdate::Changed {
+        health,
+        attempts,
+        decision,
+    } = supervisor.record_failure(RuntimeFailure::permanent(FailureCode::InvalidConfiguration))
+    else {
+        panic!()
+    };
+
+    assert_eq!(health.status(), HealthStatus::Degraded);
+    assert_eq!(attempts, 0);
+    assert_eq!(decision, BackoffDecision::CircuitOpen);
+    assert!(supervisor.circuit_open());
+    assert!(!supervisor.can_attempt());
+    assert_eq!(supervisor.next_retry_at_ms(), None);
+}
+
+#[test]
 fn sixty_seconds_of_actual_success_resets_only_that_feature() {
     let clock = FakeClock::default();
     let mut supervisor =
@@ -96,7 +120,8 @@ fn sixty_seconds_of_actual_success_resets_only_that_feature() {
 #[test]
 fn duplicate_success_does_not_emit_a_duplicate_transition() {
     let clock = FakeClock::default();
-    let mut supervisor = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+    let mut supervisor =
+        FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
     assert!(matches!(
         supervisor.record_success(),
         HealthTransition::Changed { .. }
@@ -107,7 +132,8 @@ fn duplicate_success_does_not_emit_a_duplicate_transition() {
 #[test]
 fn rearm_requires_an_open_circuit_and_clears_only_current_feature() {
     let clock = FakeClock::default();
-    let mut supervisor = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+    let mut supervisor =
+        FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
     assert!(supervisor.rearm().is_err());
     for _ in 0..8 {
         supervisor.record_failure(RuntimeFailure::transient(FailureCode::Internal));
@@ -120,7 +146,8 @@ fn rearm_requires_an_open_circuit_and_clears_only_current_feature() {
 #[test]
 fn explicit_retry_can_recover_a_failed_frontend_before_the_circuit_opens() {
     let clock = FakeClock::default();
-    let mut supervisor = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+    let mut supervisor =
+        FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
     supervisor.record_failure(RuntimeFailure::transient(FailureCode::Internal));
 
     let HealthTransition::Changed { attempts, health } = supervisor.retry_now().unwrap() else {

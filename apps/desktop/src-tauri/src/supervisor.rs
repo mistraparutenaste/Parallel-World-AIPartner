@@ -402,7 +402,7 @@ const fn feature_bit(feature: RuntimeFeature) -> u64 {
         RuntimeFeature::SpeechToText => 1,
         RuntimeFeature::LanguageModel => 2,
         RuntimeFeature::TextToSpeech => 4,
-        RuntimeFeature::Live2D => 8,
+        RuntimeFeature::CharacterRenderer => 8,
         RuntimeFeature::AudioInput => 16,
     }
 }
@@ -475,14 +475,14 @@ pub fn rearm_managed_process(
 
 /// Rust-owned health state for frontend runtimes which cannot own policy state.
 pub struct FrontendRuntimeHealth {
-    live2d: Mutex<FeatureHealthSupervisor<SystemClock, Jitter>>,
+    character_renderer: Mutex<FeatureHealthSupervisor<SystemClock, Jitter>>,
 }
 
 impl Default for FrontendRuntimeHealth {
     fn default() -> Self {
         Self {
-            live2d: Mutex::new(FeatureHealthSupervisor::new(
-                RuntimeFeature::Live2D,
+            character_renderer: Mutex::new(FeatureHealthSupervisor::new(
+                RuntimeFeature::CharacterRenderer,
                 SystemClock,
                 Jitter(SystemClock.now_ms().max(1)),
             )),
@@ -494,7 +494,7 @@ impl FrontendRuntimeHealth {
     #[must_use]
     pub fn snapshot(&self) -> RuntimeHealthEventDto {
         let health = self
-            .live2d
+            .character_renderer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut event = RuntimeHealthEventDto::from((health.health(), health.attempts()));
@@ -509,22 +509,42 @@ pub enum FrontendFailureCode {
     CoreMissing,
     RendererInitializationFailed,
     ModelLoadFailed,
+    MissingAsset,
+    InvalidManifest,
+    InvalidImage,
+    SelectionRequired,
+    ActiveCharacterUnavailable,
+    TransientAssetRead,
+    WebviewRendererFailed,
 }
 
 impl FrontendFailureCode {
-    const fn domain(self) -> FailureCode {
+    const fn runtime_failure(self) -> RuntimeFailure {
         match self {
-            Self::CoreMissing | Self::ModelLoadFailed => FailureCode::MissingModel,
-            Self::RendererInitializationFailed => FailureCode::Internal,
+            Self::CoreMissing | Self::MissingAsset => {
+                RuntimeFailure::permanent(FailureCode::MissingModel)
+            }
+            Self::InvalidManifest
+            | Self::InvalidImage
+            | Self::SelectionRequired
+            | Self::ActiveCharacterUnavailable => {
+                RuntimeFailure::permanent(FailureCode::InvalidConfiguration)
+            }
+            Self::ModelLoadFailed | Self::TransientAssetRead => {
+                RuntimeFailure::transient(FailureCode::Unavailable)
+            }
+            Self::RendererInitializationFailed | Self::WebviewRendererFailed => {
+                RuntimeFailure::transient(FailureCode::Internal)
+            }
         }
     }
 }
 
-fn require_live2d(feature: pw_contracts::RuntimeFeatureDto) -> Result<(), String> {
-    if feature == pw_contracts::RuntimeFeatureDto::Live2D {
+fn require_character_renderer(feature: pw_contracts::RuntimeFeatureDto) -> Result<(), String> {
+    if feature == pw_contracts::RuntimeFeatureDto::CharacterRenderer {
         Ok(())
     } else {
-        Err("frontend runtime reporting is restricted to Live2D".into())
+        Err("frontend runtime reporting is restricted to the character renderer".into())
     }
 }
 
@@ -553,22 +573,22 @@ fn resolve_application_rearm(
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-/// Records a safe typed `Live2D` failure and emits the resulting health transition.
+/// Records a safe typed character-renderer failure and emits the resulting health transition.
 ///
 /// # Errors
-/// Returns an error when a non-Live2D feature attempts to use this scoped bridge.
+/// Returns an error when another feature attempts to use this scoped bridge.
 pub fn report_runtime_failure<R: tauri::Runtime>(
     feature: pw_contracts::RuntimeFeatureDto,
     code: FrontendFailureCode,
     app: tauri::AppHandle<R>,
     health: tauri::State<'_, FrontendRuntimeHealth>,
 ) -> Result<(), String> {
-    require_live2d(feature)?;
+    require_character_renderer(feature)?;
     let mut supervisor = health
-        .live2d
+        .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let transition = match supervisor.record_failure(RuntimeFailure::transient(code.domain())) {
+    let transition = match supervisor.record_failure(code.runtime_failure()) {
         HealthUpdate::Changed {
             health, attempts, ..
         } => HealthTransition::Changed { health, attempts },
@@ -576,64 +596,64 @@ pub fn report_runtime_failure<R: tauri::Runtime>(
     };
     emit_transition(&app, transition, supervisor.circuit_open());
     drop(supervisor);
-    crate::commands::character::apply_live2d_window_mode(&mut &app, false)?;
+    crate::commands::character::apply_character_renderer_window_mode(&mut &app, false)?;
     Ok(())
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-/// Records a successful `Live2D` boot and emits at most one health transition.
+/// Records a successful character-renderer boot and emits at most one health transition.
 ///
 /// # Errors
-/// Returns an error when a non-Live2D feature attempts to use this scoped bridge.
+/// Returns an error when another feature attempts to use this scoped bridge.
 pub fn report_runtime_success<R: tauri::Runtime>(
     feature: pw_contracts::RuntimeFeatureDto,
     app: tauri::AppHandle<R>,
     health: tauri::State<'_, FrontendRuntimeHealth>,
 ) -> Result<(), String> {
-    require_live2d(feature)?;
+    require_character_renderer(feature)?;
     let mut supervisor = health
-        .live2d
+        .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let transition = supervisor.record_success();
     emit_transition(&app, transition, supervisor.circuit_open());
     drop(supervisor);
-    crate::commands::character::apply_live2d_window_mode(&mut &app, true)?;
+    crate::commands::character::apply_character_renderer_window_mode(&mut &app, true)?;
     Ok(())
 }
 
-fn retry_live2d<R: tauri::Runtime>(
+fn retry_character_renderer_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     health: &FrontendRuntimeHealth,
 ) -> Result<(), String> {
     let mut supervisor = health
-        .live2d
+        .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let transition = supervisor.retry_now().map_err(str::to_owned)?;
     emit_transition(app, transition, supervisor.circuit_open());
     drop(supervisor);
     let mut windows = app;
-    crate::commands::character::apply_live2d_window_mode(&mut windows, true)
+    crate::commands::character::apply_character_renderer_window_mode(&mut windows, true)
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-/// Retries only the frontend `Live2D` runtime.
+/// Retries only the frontend character renderer.
 ///
 /// # Errors
-/// Returns an error when the `Live2D` circuit cannot be retried.
-pub fn retry_live2d_runtime<R: tauri::Runtime>(
+/// Returns an error when the renderer circuit cannot be retried.
+pub fn retry_character_renderer<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     health: tauri::State<'_, FrontendRuntimeHealth>,
 ) -> Result<(), String> {
-    retry_live2d(&app, &health)
+    retry_character_renderer_inner(&app, &health)
 }
 
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-/// Rearms a supported managed process or the frontend `Live2D` circuit.
+/// Rearms a supported managed process or the frontend character-renderer circuit.
 ///
 /// # Errors
 /// Returns an error for unsupported features or when the selected circuit is not open.
@@ -664,7 +684,9 @@ pub fn rearm_runtime_feature<R: tauri::Runtime>(
             }
             Ok(())
         }
-        pw_contracts::RuntimeFeatureDto::Live2D => retry_live2d(&app, &health),
+        pw_contracts::RuntimeFeatureDto::CharacterRenderer => {
+            retry_character_renderer_inner(&app, &health)
+        }
         _ => Err("feature cannot be rearmed from Settings".into()),
     }
 }
@@ -1164,9 +1186,10 @@ mod tests {
     }
 
     #[test]
-    fn live2d_health_opens_once_rearms_and_returns_to_healthy_once() {
+    fn character_renderer_health_opens_once_rearms_and_returns_to_healthy_once() {
         let clock = FakeClock(AtomicU64::new(0));
-        let mut health = FeatureHealthSupervisor::new(RuntimeFeature::Live2D, &clock, MaxRandom);
+        let mut health =
+            FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
         for _ in 0..8 {
             let _ = health.record_failure(RuntimeFailure::transient(FailureCode::Internal));
         }
@@ -1180,6 +1203,58 @@ mod tests {
             HealthTransition::Changed { .. }
         ));
         assert_eq!(health.record_success(), HealthTransition::Unchanged);
+    }
+
+    #[test]
+    fn character_renderer_failure_codes_distinguish_permanent_and_transient_failures() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut permanent =
+            FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
+        let HealthUpdate::Changed {
+            health, decision, ..
+        } = permanent.record_failure(FrontendFailureCode::InvalidManifest.runtime_failure())
+        else {
+            panic!("permanent failure must change health")
+        };
+        assert_eq!(
+            health.status(),
+            pw_domain::runtime_health::HealthStatus::Degraded
+        );
+        assert_eq!(decision, BackoffDecision::CircuitOpen);
+
+        let mut transient =
+            FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
+        let HealthUpdate::Changed {
+            health, decision, ..
+        } = transient.record_failure(FrontendFailureCode::TransientAssetRead.runtime_failure())
+        else {
+            panic!("transient failure must change health")
+        };
+        assert_eq!(
+            health.status(),
+            pw_domain::runtime_health::HealthStatus::Recovering
+        );
+        assert!(matches!(decision, BackoffDecision::RetryAfter(_)));
+    }
+
+    #[test]
+    fn live2d_model_load_failure_remains_transient_for_bounded_retry() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut health =
+            FeatureHealthSupervisor::new(RuntimeFeature::CharacterRenderer, &clock, MaxRandom);
+
+        let HealthUpdate::Changed {
+            health, decision, ..
+        } = health.record_failure(FrontendFailureCode::ModelLoadFailed.runtime_failure())
+        else {
+            panic!("model-load failure must change health")
+        };
+
+        assert_eq!(
+            health.status(),
+            pw_domain::runtime_health::HealthStatus::Recovering
+        );
+        assert!(matches!(decision, BackoffDecision::RetryAfter(_)));
     }
 
     #[test]

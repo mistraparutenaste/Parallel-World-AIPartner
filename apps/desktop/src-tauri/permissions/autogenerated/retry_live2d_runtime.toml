@@ -1,9 +1,0 @@
-[[permission]]
-identifier = "allow-retry-live2d-runtime"
-description = "Enables the retry_live2d_runtime command without any pre-configured scope."
-commands.allow = ["retry_live2d_runtime"]
-
-[[permission]]
-identifier = "deny-retry-live2d-runtime"
-description = "Denies the retry_live2d_runtime command without any pre-configured scope."
-commands.deny = ["retry_live2d_runtime"]

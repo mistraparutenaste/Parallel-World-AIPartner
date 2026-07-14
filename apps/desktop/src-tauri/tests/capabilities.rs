@@ -70,7 +70,7 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
             "allow-set-speech-playback",
             "allow-report-runtime-failure",
             "allow-report-runtime-success",
-            "allow-retry-live2d-runtime",
+            "allow-retry-character-renderer",
             "allow-report-frontend-error"
         ]
     );
@@ -169,7 +169,7 @@ fn updater_commands_are_settings_only() {
 }
 
 #[test]
-fn common_runtime_rearm_is_settings_only_and_character_gets_live2d_retry_only() {
+fn common_runtime_rearm_is_settings_only_and_character_gets_renderer_retry_only() {
     for capability in ["character", "chat"] {
         let (_, permissions) = capability_permissions(capability);
         assert!(
@@ -183,7 +183,7 @@ fn common_runtime_rearm_is_settings_only_and_character_gets_live2d_retry_only() 
     assert!(
         character
             .iter()
-            .any(|permission| permission == "allow-retry-live2d-runtime")
+            .any(|permission| permission == "allow-retry-character-renderer")
     );
 }
 

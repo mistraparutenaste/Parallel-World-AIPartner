@@ -45,6 +45,10 @@ fn main() {
             "set_chat_placement",
             "list_conversation_log",
             "read_technical_log",
+            "report_runtime_failure",
+            "report_runtime_success",
+            "retry_character_renderer",
+            "rearm_runtime_feature",
         ]),
     ))
     .expect("failed to run tauri build script");

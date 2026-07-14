@@ -41,12 +41,12 @@ fn runtime_health_event_is_versioned_and_named() {
 }
 
 #[test]
-fn domain_health_converts_exhaustively_and_live2d_wire_name_is_stable() {
+fn domain_health_converts_exhaustively_and_character_renderer_wire_name_is_stable() {
     let features = [
         RuntimeFeature::SpeechToText,
         RuntimeFeature::LanguageModel,
         RuntimeFeature::TextToSpeech,
-        RuntimeFeature::Live2D,
+        RuntimeFeature::CharacterRenderer,
         RuntimeFeature::AudioInput,
     ];
     for feature in features {
@@ -56,7 +56,7 @@ fn domain_health_converts_exhaustively_and_live2d_wire_name_is_stable() {
         assert_eq!(dto.attempts, 3);
     }
     assert_eq!(
-        serde_json::to_value(RuntimeFeatureDto::Live2D).unwrap(),
-        "live2d"
+        serde_json::to_value(RuntimeFeatureDto::CharacterRenderer).unwrap(),
+        "character_renderer"
     );
 }

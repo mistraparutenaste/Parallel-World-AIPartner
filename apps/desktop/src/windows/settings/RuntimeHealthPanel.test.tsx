@@ -85,11 +85,11 @@ test('settings rearms a circuit-open runtime feature', async () => {
   expect(screen.getByRole('button', { name: /音声合成.*再起動/ })).toBeInTheDocument();
 });
 
-test('settings exposes Live2D retry after the first failed boot', async () => {
+test('settings exposes character renderer retry after the first failed boot', async () => {
   render(<RuntimeHealthPanel />);
   await publish({
     schema_version: 1,
-    feature: 'live2d',
+    feature: 'character_renderer',
     status: 'recovering',
     failure_class: 'transient',
     last_error: 'renderer initialization failed',
@@ -99,8 +99,8 @@ test('settings exposes Live2D retry after the first failed boot', async () => {
     changed_at_ms: 46,
   });
 
-  fireEvent.click(await screen.findByRole('button', { name: 'Live2D を再起動' }));
-  expect(invokeMock).toHaveBeenCalledWith('rearm_runtime_feature', { feature: 'live2d' });
+  fireEvent.click(await screen.findByRole('button', { name: 'キャラクター表示 を再起動' }));
+  expect(invokeMock).toHaveBeenCalledWith('rearm_runtime_feature', { feature: 'character_renderer' });
 });
 
 test('renders all bounded queue diagnostics', async () => {

@@ -33,13 +33,13 @@ pub(crate) struct CharacterControlContext {
     pub capabilities: CharacterCapabilities,
 }
 
-pub(crate) trait Live2dWindows {
+pub(crate) trait CharacterWindows {
     fn show_chat(&mut self) -> Result<(), String>;
     fn hide_character(&mut self) -> Result<(), String>;
     fn show_character(&mut self) -> Result<(), String>;
 }
 
-impl<R: Runtime> Live2dWindows for &AppHandle<R> {
+impl<R: Runtime> CharacterWindows for &AppHandle<R> {
     fn show_chat(&mut self) -> Result<(), String> {
         let layout = self.state::<AppDataLayout>();
         let placement = crate::ui::load_preferences(&layout).chat_placement;
@@ -75,8 +75,8 @@ impl<R: Runtime> Live2dWindows for &AppHandle<R> {
     }
 }
 
-pub(crate) fn apply_live2d_window_mode(
-    windows: &mut impl Live2dWindows,
+pub(crate) fn apply_character_renderer_window_mode(
+    windows: &mut impl CharacterWindows,
     available: bool,
 ) -> Result<(), String> {
     if available {
@@ -120,8 +120,9 @@ impl CharacterState {
 }
 
 fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
+    let settings = load_character_settings(layout);
     CharacterCatalog::discover(layout)
-        .and_then(|catalog| catalog.resolve(&CharacterSettingsDto::default()))
+        .and_then(|catalog| catalog.resolve(&settings))
         .map_err(|error| error.to_string())
 }
 
@@ -326,7 +327,10 @@ mod tests {
 
     use super::{load_manifest, to_dto, validate_expression, validate_motion_group};
     use crate::character::{ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression};
-    use pw_contracts::{CharacterRendererDto, MotionGroupDto};
+    use pw_contracts::{
+        CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterRendererDto, CharacterSettingsDto,
+        MotionGroupDto,
+    };
     use pw_platform::paths::AppDataLayout;
 
     #[derive(Default)]
@@ -335,7 +339,7 @@ mod tests {
         character_visible: bool,
     }
 
-    impl super::Live2dWindows for FakeWindows {
+    impl super::CharacterWindows for FakeWindows {
         fn show_chat(&mut self) -> Result<(), String> {
             self.chat_visible = true;
             Ok(())
@@ -351,20 +355,20 @@ mod tests {
     }
 
     #[test]
-    fn live2d_failure_shows_normal_chat_and_hides_character_surface() {
+    fn renderer_failure_shows_normal_chat_and_hides_character_surface() {
         let mut windows = FakeWindows {
             character_visible: true,
             ..Default::default()
         };
-        super::apply_live2d_window_mode(&mut windows, false).unwrap();
+        super::apply_character_renderer_window_mode(&mut windows, false).unwrap();
         assert!(windows.chat_visible);
         assert!(!windows.character_visible);
     }
 
     #[test]
-    fn live2d_recovery_restores_character_surface() {
+    fn renderer_recovery_restores_character_surface() {
         let mut windows = FakeWindows::default();
-        super::apply_live2d_window_mode(&mut windows, true).unwrap();
+        super::apply_character_renderer_window_mode(&mut windows, true).unwrap();
         assert!(windows.character_visible);
     }
 
@@ -427,6 +431,55 @@ mod tests {
         let error = load_manifest(&layout).unwrap_err();
         assert!(error.contains("no character profile"));
 
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn load_manifest_uses_persisted_active_id_with_multiple_profiles() {
+        let root = std::env::temp_dir().join(format!(
+            "pw-cmd-manifest-selection-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        for id in ["alpha", "beta"] {
+            let profile = layout.characters.join(id);
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(
+                profile.join(format!("{id}.model3.json")),
+                r#"{"FileReferences":{"Expressions":[{"Name":"Normal"}]}}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                profile.join("character.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "schema_version": 1,
+                    "id": id,
+                    "display_name": id,
+                    "renderer": {
+                        "kind": "live2d",
+                        "model": format!("{id}.model3.json"),
+                        "default_expression": "Normal"
+                    }
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        crate::character::save_character_settings(
+            &layout,
+            &CharacterSettingsDto {
+                schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+                active_character_id: Some("beta".into()),
+                expression_idle_timeout_seconds: Some(20),
+            },
+        )
+        .unwrap();
+
+        let manifest = load_manifest(&layout).unwrap();
+
+        assert_eq!(manifest.id, "beta");
         std::fs::remove_dir_all(&root).unwrap();
     }
 

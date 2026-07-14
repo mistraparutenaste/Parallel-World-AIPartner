@@ -1,219 +1,324 @@
 import type {
   CharacterCursorEventDto,
   CharacterManifestDto,
+  CharacterSettingsChangedEventDto,
+  CharacterSettingsDto,
   ConversationStateDto,
+  ConversationStateEventDto,
   RuntimeHealthEventDto,
   SpeechAudioEventDto,
   SpeechStopEventDto,
 } from '@parallel-world/contracts';
 import {
   Live2DController,
-  type Live2DControllerState,
   SpeechAudioPlayer,
   WebAudioSink,
+  type SpeechAudioPlayerOptions,
 } from '@parallel-world/live2d-runtime';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
-import { subscribeEvent } from '../../shared/ipc/event-bus';
 import { StatusBadge } from '../../shared/components/StatusBadge';
-import { createModelSource } from './model-source';
-import { createLive2DFailureReporter, handleLive2DRetry, reportLive2DSuccess, retryLive2D } from './live2d-health';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
+import { CharacterIdleResetController } from './character-idle-reset';
+import type { CharacterRenderer } from './character-renderer';
+import { createCharacterRenderer } from './character-renderer-factory';
+import {
+  classifyCharacterRendererFailure,
+  classifyCharacterRendererLoadFailure,
+  createCharacterRendererFailureReporter,
+  isPermanentCharacterRendererFailure,
+  reportCharacterRendererSuccess,
+  retryCharacterRenderer,
+  type CharacterRendererFailureCode,
+} from './character-renderer-health';
+import { SpeechHopController } from './speech-hop';
 
 const SHADER_PATH = '/live2d/shaders/';
 
-function toBadgeState(state: Live2DControllerState): ConversationStateDto {
-  switch (state) {
-    case 'model-loaded':
-      return 'idle';
-    case 'unavailable':
-      return 'renderer_unavailable';
-    default:
-      return 'starting';
-  }
+type SurfaceState = 'starting' | 'ready' | 'unavailable';
+
+interface SpeechPlayerLike {
+  enqueue(item: { turnId: number; seq: number; url: string }): void;
+  stop(): void;
+  dispose(): void;
 }
 
-/**
- * Transparent always-on-top character surface.
- *
- * Owns one Live2DController per mount. The Cubism adapter is loaded
- * dynamically only after the Core script global is detected, because
- * the vendored framework cannot even be imported without it.
- * Expression / motion commands arrive as Tauri events emitted by the
- * Rust side after validation.
- */
-export function CharacterWindow() {
+interface IdleResetLike {
+  activity(): void;
+  setConversationState(state: ConversationStateDto): void;
+  setAudioActive(active: boolean): void;
+  setTimeoutSeconds(value: number | null): void;
+  dispose(): void;
+}
+
+export interface CharacterWindowDependencies {
+  invoke: typeof invoke;
+  convertFileSrc: typeof convertFileSrc;
+  subscribeEvent: typeof subscribeEvent;
+  createRenderer(
+    manifest: CharacterManifestDto,
+    canvas: HTMLCanvasElement,
+    onControllerState: (state: string) => void,
+  ): Promise<CharacterRenderer>;
+  createSpeechPlayer(options: SpeechAudioPlayerOptions): SpeechPlayerLike;
+  createIdleReset(reset: () => void): IdleResetLike;
+  reportSuccess(): Promise<void>;
+  createFailureReporter(): (code: CharacterRendererFailureCode) => void;
+  retry(): Promise<void>;
+}
+
+const DEFAULT_DEPENDENCIES: CharacterWindowDependencies = {
+  invoke,
+  convertFileSrc,
+  subscribeEvent,
+  async createRenderer(manifest, canvas, onControllerState) {
+    if (manifest.renderer.kind === 'static_image') {
+      const hop = new SpeechHopController(canvas);
+      return createCharacterRenderer(manifest.renderer, {
+        canvas,
+        convertFileSrc,
+        staticImage: { speechReaction: { react: (turnId) => hop.react(turnId), reset: () => hop.cancel() } },
+      });
+    }
+
+    if (!('Live2DCubismCore' in globalThis)) throw new Error('core_missing');
+    const { CubismFrameworkRuntime } = await import('@parallel-world/live2d-runtime/cubism');
+    return createCharacterRenderer(manifest.renderer, {
+      canvas,
+      convertFileSrc,
+      createLive2DController: () => new Live2DController(
+        new CubismFrameworkRuntime({ shaderPath: SHADER_PATH }),
+        onControllerState,
+      ),
+    });
+  },
+  createSpeechPlayer: (options) => new SpeechAudioPlayer(new WebAudioSink(), options),
+  createIdleReset: (reset) => new CharacterIdleResetController(reset),
+  reportSuccess: reportCharacterRendererSuccess,
+  createFailureReporter: createCharacterRendererFailureReporter,
+  retry: retryCharacterRenderer,
+};
+
+function badgeState(state: SurfaceState): ConversationStateDto {
+  if (state === 'ready') return 'idle';
+  if (state === 'unavailable') return 'renderer_unavailable';
+  return 'starting';
+}
+
+function expressionNames(manifest: CharacterManifestDto): ReadonlySet<string> {
+  return new Set(manifest.renderer.kind === 'static_image'
+    ? manifest.renderer.expressions.map(({ name }) => name)
+    : manifest.renderer.expressions);
+}
+
+function defaultExpression(manifest: CharacterManifestDto): string | null {
+  return manifest.renderer.default_expression;
+}
+
+/** Owns the renderer, speech, timers and all character-window subscriptions. */
+export function CharacterWindow({
+  dependencies = DEFAULT_DEPENDENCIES,
+}: { dependencies?: CharacterWindowDependencies } = {}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [state, setState] = useState<Live2DControllerState>('idle');
+  const [state, setState] = useState<SurfaceState>('starting');
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [permanentFailure, setPermanentFailure] = useState(false);
   const [retryGeneration, setRetryGeneration] = useState(0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) {
-      return undefined;
-    }
-    let disposed = false;
-    let controller: Live2DController | null = null;
-    let player: SpeechAudioPlayer | null = null;
-    const unlisteners: Array<() => void> = [];
-    const reportFailureOnce = createLive2DFailureReporter();
-    unlisteners.push(subscribeEvent<RuntimeHealthEventDto>('runtime-health', (event) => {
-      if (event.feature === 'live2d' && event.status === 'starting') {
-        handleLive2DRetry(() => {
-          setLoadError(null);
-          setState('idle');
-          setRetryGeneration((generation) => generation + 1);
-        });
-      }
-    }));
+    if (canvas === null) return undefined;
 
-    const resize = () => {
-      controller?.resize(
-        canvas.clientWidth,
-        canvas.clientHeight,
-        window.devicePixelRatio,
-      );
+    let disposed = false;
+    let loaded = false;
+    let renderer: CharacterRenderer | null = null;
+    let player: SpeechPlayerLike | null = null;
+    let idle: IdleResetLike | null = null;
+    let pendingExpression: string | null = null;
+    let manifest: CharacterManifestDto | null = null;
+    let interactive = true;
+    let settingsRevision = 0;
+    const unlisteners: Array<() => void> = [];
+    const reportFailureOnce = dependencies.createFailureReporter();
+
+    const recordFailure = (error: unknown, fallback?: CharacterRendererFailureCode) => {
+      if (disposed) return;
+      const code = fallback ?? classifyCharacterRendererFailure(error);
+      setLoadError(String(error));
+      setPermanentFailure(isPermanentCharacterRendererFailure(code));
+      setState('unavailable');
+      reportFailureOnce(code);
     };
+
+    const resize = () => renderer?.resize(
+      canvas.clientWidth,
+      canvas.clientHeight,
+      window.devicePixelRatio,
+    );
+
+    // Speech remains available even when the profile is missing or invalid.
+    // Renderer/idle callbacks are optional until a character finishes booting.
+    player = dependencies.createSpeechPlayer({
+      onLevel: (level) => renderer?.setAudioLevel(level),
+      onActiveChange: (active) => {
+        idle?.setAudioActive(active);
+        void dependencies.invoke('set_speech_playback', { active }).catch(
+          (error: unknown) => console.error('failed to report speech playback', error),
+        );
+      },
+      onTurnPlaybackStart: (turnId) => {
+        renderer?.reactToSpeechStart(turnId);
+        idle?.activity();
+      },
+    });
+    const audioPlayer = player;
+    unlisteners.push(
+      dependencies.subscribeEvent<SpeechAudioEventDto>('speech-audio', (payload) => {
+        audioPlayer.enqueue({
+          turnId: payload.turn_id,
+          seq: payload.seq,
+          url: dependencies.convertFileSrc(payload.wav_path),
+        });
+      }),
+      dependencies.subscribeEvent<SpeechStopEventDto>('speech-stop', () => {
+        audioPlayer.stop();
+        renderer?.resetSpeechReaction();
+        idle?.activity();
+      }),
+    );
+
+    unlisteners.push(dependencies.subscribeEvent<RuntimeHealthEventDto>(
+      'runtime-health',
+      (event) => {
+        if (
+          event.feature === 'character_renderer'
+          && event.status === 'starting'
+          && !disposed
+        ) {
+          setLoadError(null);
+          setPermanentFailure(false);
+          setState('starting');
+          setRetryGeneration((generation) => generation + 1);
+        }
+      },
+    ));
 
     const boot = async () => {
-      if (!('Live2DCubismCore' in globalThis)) {
-        setLoadError('Cubism Core script is not loaded');
-        setState('unavailable');
-        reportFailureOnce('core_missing');
-        return;
-      }
-      const { CubismFrameworkRuntime } = await import(
-        '@parallel-world/live2d-runtime/cubism'
-      );
-      if (disposed) {
-        return;
-      }
-      const instance = new Live2DController(
-        new CubismFrameworkRuntime({ shaderPath: SHADER_PATH }),
-        (nextState) => {
-          setState(nextState);
-          if (nextState === 'model-loaded') void reportLive2DSuccess();
-          if (nextState === 'unavailable') reportFailureOnce('renderer_initialization_failed');
-        },
-      );
-      controller = instance;
-      await instance.attach(canvas);
-      if (disposed || instance.state !== 'ready') {
-        return;
-      }
-      resize();
       try {
-        const manifest = await invoke<CharacterManifestDto>(
-          'get_character_manifest',
+        manifest = await dependencies.invoke<CharacterManifestDto>('get_character_manifest');
+      } catch (error) {
+        recordFailure(error);
+        return;
+      }
+      if (disposed) return;
+
+      const names = expressionNames(manifest);
+      const resetExpression = () => {
+        const name = manifest === null ? null : defaultExpression(manifest);
+        if (name !== null) renderer?.setExpression(name);
+      };
+      idle = dependencies.createIdleReset(resetExpression);
+
+      unlisteners.push(
+        dependencies.subscribeEvent<string>('character-expression', (name) => {
+          if (!names.has(name)) return;
+          if (!loaded) pendingExpression = name;
+          else if (renderer?.setExpression(name)) idle?.activity();
+        }),
+        dependencies.subscribeEvent<string>('character-motion', (group) => {
+          if (loaded && renderer?.startMotion(group)) idle?.activity();
+        }),
+        dependencies.subscribeEvent<ConversationStateEventDto>(
+          'conversation-state',
+          ({ state: conversationState }) => {
+            idle?.setConversationState(conversationState);
+            if (conversationState === 'interrupting') renderer?.resetSpeechReaction();
+          },
+        ),
+        dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
+          'character-settings-changed',
+          ({ settings }) => {
+            settingsRevision += 1;
+            idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
+          },
+        ),
+        dependencies.subscribeEvent<CharacterCursorEventDto>('character-cursor', (payload) => {
+          const overCharacter = loaded ? (renderer?.hitTest(payload.x, payload.y) ?? false) : true;
+          if (overCharacter === interactive) return;
+          interactive = overCharacter;
+          void dependencies.invoke('set_click_through', { enabled: !overCharacter }).catch(
+            (error: unknown) => console.error('failed to toggle click-through', error),
+          );
+        }),
+      );
+
+      try {
+        const nextRenderer = await dependencies.createRenderer(
+          manifest,
+          canvas,
+          (controllerState) => {
+            if (controllerState === 'unavailable') {
+              recordFailure(new Error('renderer initialization failed'));
+            }
+          },
         );
         if (disposed) {
+          nextRenderer.dispose();
           return;
         }
-        await instance.loadModel(
-          createModelSource(manifest.model_path, convertFileSrc),
-        );
+        renderer = nextRenderer;
+        resize();
+        await nextRenderer.load(manifest.renderer);
+        if (disposed) return;
+        loaded = true;
+        if (pendingExpression !== null) nextRenderer.setExpression(pendingExpression);
+        pendingExpression = null;
+        resize();
+        idle?.activity();
+        setState('ready');
+        setLoadError(null);
+        setPermanentFailure(false);
       } catch (error) {
-        console.error('failed to load the character model', error);
-        setLoadError(String(error));
-        setState('unavailable');
-        reportFailureOnce('model_load_failed');
+        renderer?.dispose();
+        renderer = null;
+        recordFailure(
+          error,
+          classifyCharacterRendererLoadFailure(manifest.renderer.kind, error),
+        );
         return;
       }
-      const stopExpression = subscribeEvent<string>(
-        'character-expression',
-        (payload) => {
-          instance.setExpression(payload);
-        },
-      );
-      const stopMotion = subscribeEvent<string>('character-motion', (payload) => {
-        instance.startMotion(payload);
+      void dependencies.reportSuccess().catch((error: unknown) => {
+        console.warn('failed to report character renderer health', error);
       });
-      // Speech playback: synthesized sentences arrive as WAV paths and
-      // play in order; the measured level drives the mouth parameters.
-      // While audio is active the microphone capture is muted so the
-      // assistant does not hear itself.
-      const audioPlayer = new SpeechAudioPlayer(new WebAudioSink(), {
-        onLevel: (level) => {
-          instance.setLipSyncValue(level);
-        },
-        onActiveChange: (active) => {
-          invoke('set_speech_playback', { active }).catch((error: unknown) => {
-            console.error('failed to report speech playback', error);
-          });
-        },
-      });
-      player = audioPlayer;
-      const stopAudio = subscribeEvent<SpeechAudioEventDto>(
-        'speech-audio',
-        (payload) => {
-          audioPlayer.enqueue({
-            turnId: payload.turn_id,
-            seq: payload.seq,
-            url: convertFileSrc(payload.wav_path),
-          });
-        },
-      );
-      const stopSpeech = subscribeEvent<SpeechStopEventDto>(
-        'speech-stop',
-        () => {
-          audioPlayer.stop();
-        },
-      );
-      // Click-through: the Rust cursor watcher streams positions even
-      // while mouse events are ignored; clicks pass through unless the
-      // cursor is over an opaque model pixel.
-      let interactive = true;
-      const stopCursor = subscribeEvent<CharacterCursorEventDto>(
-        'character-cursor',
-        (payload) => {
-          const overModel =
-            instance.state === 'model-loaded'
-              ? instance.hitTest(payload.x, payload.y)
-              : true;
-          if (overModel !== interactive) {
-            interactive = overModel;
-            invoke('set_click_through', { enabled: !overModel }).catch(
-              (error: unknown) => {
-                console.error('failed to toggle click-through', error);
-              },
-            );
-          }
-        },
-      );
-      if (disposed) {
-        stopExpression();
-        stopMotion();
-        stopAudio();
-        stopSpeech();
-        stopCursor();
-        audioPlayer.dispose();
-      } else {
-        unlisteners.push(stopExpression, stopMotion, stopAudio, stopSpeech, stopCursor);
+
+      try {
+        const requestedAtRevision = settingsRevision;
+        const settings = await dependencies.invoke<CharacterSettingsDto>('get_character_settings');
+        if (!disposed && settingsRevision === requestedAtRevision) {
+          idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
+        }
+      } catch (error) {
+        console.warn('failed to load character settings; using the default timeout', error);
       }
     };
-    void boot().catch((error: unknown) => {
-      console.error('failed to initialize Live2D', error);
-      setLoadError(String(error));
-      setState('unavailable');
-      reportFailureOnce('renderer_initialization_failed');
-    });
 
     window.addEventListener('resize', resize);
-    const observer =
-      typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
+    const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(resize);
     observer?.observe(canvas);
+    void boot().catch((error: unknown) => recordFailure(error));
 
     return () => {
       disposed = true;
       observer?.disconnect();
       window.removeEventListener('resize', resize);
-      for (const unlisten of unlisteners) {
-        unlisten();
+      for (let index = unlisteners.length - 1; index >= 0; index -= 1) {
+        unlisteners[index]?.();
       }
+      idle?.dispose();
       player?.dispose();
-      controller?.dispose();
+      renderer?.dispose();
     };
-  }, [retryGeneration]);
+  }, [dependencies, retryGeneration]);
 
   return (
     <main aria-label="キャラクター">
@@ -221,25 +326,25 @@ export function CharacterWindow() {
         ref={canvasRef}
         className="character-canvas"
         data-tauri-drag-region
-        data-live2d-surface
+        data-character-surface
         hidden={state === 'unavailable'}
       />
       <div className="character-status">
-        <StatusBadge state={toBadgeState(state)} />
-        {loadError !== null && (
-          <p className="character-error">{loadError}</p>
-        )}
-        {state === 'unavailable' && (
+        <StatusBadge state={badgeState(state)} />
+        {loadError !== null ? <p className="character-error">{loadError}</p> : null}
+        {state === 'unavailable' ? (
           <section aria-label="キャラクター表示フォールバック">
             <p>キャラクター表示を利用できません。チャットは通常どおり利用できます。</p>
-            <button type="button" onClick={() => {
-              void retryLive2D().catch((error: unknown) => {
-                setLoadError(String(error));
-                setState('unavailable');
-              });
-            }}>再試行</button>
+            <button
+              type="button"
+              onClick={() => {
+                void dependencies.retry().catch((error: unknown) => setLoadError(String(error)));
+              }}
+            >
+              {permanentFailure ? '設定修正後に再読み込み' : '再試行'}
+            </button>
           </section>
-        )}
+        ) : null}
       </div>
     </main>
   );

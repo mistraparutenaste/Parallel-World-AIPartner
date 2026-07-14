@@ -5,7 +5,7 @@ pub enum RuntimeFeature {
     SpeechToText,
     LanguageModel,
     TextToSpeech,
-    Live2D,
+    CharacterRenderer,
     AudioInput,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +70,10 @@ impl RuntimeFailure {
     pub const fn with_system_code(mut self, code: i64) -> Self {
         self.system_code = Some(code);
         self
+    }
+    #[must_use]
+    pub const fn class(self) -> FailureClass {
+        self.class
     }
     fn safe_message(self) -> String {
         self.system_code.map_or_else(
