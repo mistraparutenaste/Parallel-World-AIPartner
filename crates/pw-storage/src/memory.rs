@@ -1,9 +1,11 @@
 use crate::Database;
 use pw_application::PortError;
 use pw_application::memory::{
-    MemoryRecord, MemoryStore, StoredSummary, is_safe_persistent_content,
+    DORMANT_DELETE_AFTER_SECONDS, EvidenceKind, EvidenceSource, MaintenanceReport, MemoryAction,
+    MemoryCandidate, MemoryEvidence, MemoryRecord, MemoryState, MemoryStore, StoredSummary,
+    is_safe_persistent_content, memory_strength, prompt_rank, should_become_dormant,
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 pub struct SqliteMemoryStore {
     database: Database,
@@ -13,6 +15,288 @@ impl SqliteMemoryStore {
     pub const fn new(database: Database) -> Self {
         Self { database }
     }
+
+    fn lifecycle_search(
+        &self,
+        query: &str,
+        limit: usize,
+        now: i64,
+        active_only: bool,
+    ) -> Result<Vec<MemoryCandidate>, PortError> {
+        if query.trim().is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let mut rows = if query.trim().chars().count() < 3 {
+            let escaped = query
+                .trim()
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let pattern = format!("%{escaped}%");
+            let sql = if active_only {
+                "SELECT id,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE state='active' AND content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
+            } else {
+                "SELECT id,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
+            };
+            query_candidate_rows(self.database.connection(), sql, &pattern, limit)?
+        } else {
+            let phrase = format!("\"{}\"", query.trim().replace('"', "\"\""));
+            let sql = if active_only {
+                "SELECT m.id,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 AND m.state='active' ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
+            } else {
+                "SELECT m.id,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
+            };
+            query_candidate_rows(self.database.connection(), sql, &phrase, limit)?
+        };
+        let best = rows
+            .iter()
+            .map(|row| row.bm25)
+            .fold(f64::INFINITY, f64::min);
+        let worst = rows
+            .iter()
+            .map(|row| row.bm25)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let has_bm25_range = rows.len() > 1 && (worst - best).abs() > f64::EPSILON;
+        let mut candidates = Vec::with_capacity(rows.len());
+        for row in rows.drain(..) {
+            let evidence = load_evidence(self.database.connection(), row.id)?;
+            let lexical_relevance = if has_bm25_range {
+                (worst - row.bm25) / (worst - best)
+            } else {
+                1.0
+            };
+            candidates.push(MemoryCandidate {
+                id: row.id,
+                content: row.content,
+                state: parse_state(&row.state)?,
+                pinned: row.pinned,
+                mention_count: u64::try_from(row.mention_count)
+                    .map_err(|error| PortError(error.to_string()))?,
+                last_seen_at: row.last_seen_at,
+                lexical_relevance,
+                strength: memory_strength(&evidence, now),
+            });
+        }
+        candidates.sort_by(|left, right| {
+            prompt_rank(right.lexical_relevance, right.strength)
+                .total_cmp(&prompt_rank(left.lexical_relevance, left.strength))
+                .then_with(|| right.last_seen_at.cmp(&left.last_seen_at))
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(candidates)
+    }
+}
+
+struct CandidateRow {
+    id: i64,
+    content: String,
+    state: String,
+    pinned: bool,
+    mention_count: i64,
+    last_seen_at: i64,
+    bm25: f64,
+}
+
+fn query_candidate_rows(
+    connection: &Connection,
+    sql: &str,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<CandidateRow>, PortError> {
+    let mut statement = connection
+        .prepare(sql)
+        .map_err(|error| PortError(error.to_string()))?;
+    statement
+        .query_map(params![query, limit], |row| {
+            Ok(CandidateRow {
+                id: row.get(0)?,
+                content: row.get(1)?,
+                state: row.get(2)?,
+                pinned: row.get(3)?,
+                mention_count: row.get(4)?,
+                last_seen_at: row.get(5)?,
+                bm25: row.get(6)?,
+            })
+        })
+        .map_err(|error| PortError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PortError(error.to_string()))
+}
+
+fn parse_state(state: &str) -> Result<MemoryState, PortError> {
+    match state {
+        "active" => Ok(MemoryState::Active),
+        "dormant" => Ok(MemoryState::Dormant),
+        "superseded" => Ok(MemoryState::Superseded),
+        value => Err(PortError(format!("unknown memory state: {value}"))),
+    }
+}
+
+fn parse_evidence_kind(kind: &str) -> Result<EvidenceKind, PortError> {
+    match kind {
+        "user_mention" => Ok(EvidenceKind::UserMention),
+        "recalled" => Ok(EvidenceKind::Recalled),
+        "pinned" => Ok(EvidenceKind::Pinned),
+        "imported" => Ok(EvidenceKind::Imported),
+        value => Err(PortError(format!("unknown memory evidence kind: {value}"))),
+    }
+}
+
+fn load_evidence(
+    connection: &Connection,
+    memory_id: i64,
+) -> Result<Vec<MemoryEvidence>, PortError> {
+    let mut statement = connection
+        .prepare(
+            "SELECT id,kind,occurred_at,weight FROM memory_evidence WHERE memory_id=?1 ORDER BY id",
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    let rows = statement
+        .query_map([memory_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })
+        .map_err(|error| PortError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PortError(error.to_string()))?;
+    rows.into_iter()
+        .map(|(id, kind, occurred_at, weight)| {
+            Ok(MemoryEvidence {
+                id,
+                kind: parse_evidence_kind(&kind)?,
+                occurred_at,
+                weight,
+            })
+        })
+        .collect()
+}
+
+fn source_turn_id(source: &EvidenceSource) -> Result<i64, PortError> {
+    i64::try_from(source.turn_id).map_err(|error| PortError(error.to_string()))
+}
+
+fn insert_evidence(
+    transaction: &Transaction<'_>,
+    memory_id: i64,
+    kind: &str,
+    weight: f64,
+    source: &EvidenceSource,
+    now: i64,
+) -> Result<usize, PortError> {
+    transaction
+        .execute(
+            "INSERT OR IGNORE INTO memory_evidence(memory_id,kind,occurred_at,source_conversation_id,source_turn_id,weight) VALUES(?1,?2,?3,?4,?5,?6)",
+            params![memory_id, kind, now, source.conversation_id, source_turn_id(source)?, weight],
+        )
+        .map_err(|error| PortError(error.to_string()))
+}
+
+fn find_source_memory(
+    transaction: &Transaction<'_>,
+    content: &str,
+    source: &EvidenceSource,
+) -> Result<Option<i64>, PortError> {
+    transaction
+        .query_row(
+            "SELECT m.id FROM memories m JOIN memory_evidence e ON e.memory_id=m.id WHERE m.content=?1 AND e.kind='user_mention' AND e.source_conversation_id=?2 AND e.source_turn_id=?3 ORDER BY m.id LIMIT 1",
+            params![content, source.conversation_id, source_turn_id(source)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| PortError(error.to_string()))
+}
+
+fn create_memory(
+    transaction: &Transaction<'_>,
+    content: &str,
+    pinned: bool,
+    source: &EvidenceSource,
+    now: i64,
+) -> Result<i64, PortError> {
+    transaction
+        .execute(
+            "INSERT INTO memories(content,created_at,updated_at,state,pinned,mention_count,last_seen_at) VALUES(?1,?2,?2,'active',?3,1,?2)",
+            params![content, now, pinned],
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    let id = transaction.last_insert_rowid();
+    insert_evidence(transaction, id, "user_mention", 1.0, source, now)?;
+    Ok(id)
+}
+
+fn ensure_memory_exists(transaction: &Transaction<'_>, id: i64) -> Result<(), PortError> {
+    let exists = transaction
+        .query_row("SELECT 1 FROM memories WHERE id=?1", [id], |_| Ok(()))
+        .optional()
+        .map_err(|error| PortError(error.to_string()))?
+        .is_some();
+    if exists {
+        Ok(())
+    } else {
+        Err(PortError(format!("memory {id} does not exist")))
+    }
+}
+
+fn apply_add(
+    transaction: &Transaction<'_>,
+    content: &str,
+    pinned: bool,
+    source: &EvidenceSource,
+    now: i64,
+) -> Result<i64, PortError> {
+    if let Some(id) = find_source_memory(transaction, content, source)? {
+        Ok(id)
+    } else {
+        create_memory(transaction, content, pinned, source, now)
+    }
+}
+
+fn apply_reinforce(
+    transaction: &Transaction<'_>,
+    memory_id: i64,
+    pin: bool,
+    source: &EvidenceSource,
+    now: i64,
+) -> Result<i64, PortError> {
+    ensure_memory_exists(transaction, memory_id)?;
+    let inserted = insert_evidence(transaction, memory_id, "user_mention", 1.0, source, now)?;
+    if inserted == 0 {
+        return Ok(memory_id);
+    }
+    transaction
+        .execute(
+            "UPDATE memories SET mention_count=mention_count+?1,last_seen_at=MAX(last_seen_at,?2),updated_at=MAX(updated_at,?2),pinned=CASE WHEN state!='superseded' AND ?3 THEN 1 ELSE pinned END,state_changed_at=CASE WHEN state='dormant' THEN NULL ELSE state_changed_at END,state=CASE WHEN state='dormant' THEN 'active' ELSE state END WHERE id=?4",
+            params![1, now, pin, memory_id],
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    Ok(memory_id)
+}
+
+fn apply_supersede(
+    transaction: &Transaction<'_>,
+    old_memory_id: i64,
+    content: &str,
+    pin_replacement: bool,
+    source: &EvidenceSource,
+    now: i64,
+) -> Result<i64, PortError> {
+    ensure_memory_exists(transaction, old_memory_id)?;
+    if let Some(id) = find_source_memory(transaction, content, source)? {
+        return Ok(id);
+    }
+    let replacement_id = create_memory(transaction, content, pin_replacement, source, now)?;
+    transaction
+        .execute(
+            "UPDATE memories SET state='superseded',pinned=0,state_changed_at=?1,superseded_by=?2,updated_at=MAX(updated_at,?1) WHERE id=?3",
+            params![now, replacement_id, old_memory_id],
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    Ok(replacement_id)
 }
 
 impl MemoryStore for SqliteMemoryStore {
@@ -125,13 +409,160 @@ impl MemoryStore for SqliteMemoryStore {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| PortError(e.to_string()))
     }
+
+    fn find_consolidation_candidates(
+        &self,
+        query: &str,
+        limit: usize,
+        now: i64,
+    ) -> Result<Vec<MemoryCandidate>, PortError> {
+        self.lifecycle_search(query, limit, now, false)
+    }
+
+    fn apply_action(
+        &mut self,
+        action: &MemoryAction,
+        source: &EvidenceSource,
+        now: i64,
+    ) -> Result<Option<i64>, PortError> {
+        if let MemoryAction::Add { content, .. } | MemoryAction::Supersede { content, .. } = action
+            && !is_safe_persistent_content(content)
+        {
+            return Err(PortError(
+                "refusing to persist secret-shaped memory content".into(),
+            ));
+        }
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(|error| PortError(error.to_string()))?;
+        let result = match action {
+            MemoryAction::Add { content, pinned } => {
+                Some(apply_add(&transaction, content, *pinned, source, now)?)
+            }
+            MemoryAction::Reinforce { memory_id, pin } => Some(apply_reinforce(
+                &transaction,
+                *memory_id,
+                *pin,
+                source,
+                now,
+            )?),
+            MemoryAction::Supersede {
+                old_memory_id,
+                content,
+                pin_replacement,
+            } => Some(apply_supersede(
+                &transaction,
+                *old_memory_id,
+                content,
+                *pin_replacement,
+                source,
+                now,
+            )?),
+            MemoryAction::Ignore => None,
+        };
+        transaction
+            .commit()
+            .map_err(|error| PortError(error.to_string()))?;
+        Ok(result)
+    }
+
+    fn record_recalled(
+        &mut self,
+        ids: &[i64],
+        source: &EvidenceSource,
+        now: i64,
+    ) -> Result<(), PortError> {
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(|error| PortError(error.to_string()))?;
+        for id in ids {
+            insert_evidence(&transaction, *id, "recalled", 0.15, source, now)?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| PortError(error.to_string()))
+    }
+
+    fn search_active_for_prompt(
+        &self,
+        query: &str,
+        limit: usize,
+        now: i64,
+    ) -> Result<Vec<MemoryCandidate>, PortError> {
+        self.lifecycle_search(query, limit, now, true)
+    }
+
+    fn run_maintenance(&mut self, now: i64, limit: usize) -> Result<MaintenanceReport, PortError> {
+        if limit == 0 {
+            return Ok(MaintenanceReport::default());
+        }
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(|error| PortError(error.to_string()))?;
+        let active_ids = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT id FROM memories WHERE state='active' AND pinned=0 ORDER BY last_seen_at,id LIMIT ?1",
+                )
+                .map_err(|error| PortError(error.to_string()))?;
+            statement
+                .query_map([sql_limit], |row| row.get::<_, i64>(0))
+                .map_err(|error| PortError(error.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| PortError(error.to_string()))?
+        };
+        let mut dormant = 0;
+        for id in active_ids {
+            let evidence = load_evidence(&transaction, id)?;
+            if should_become_dormant(&evidence, now) {
+                dormant += transaction
+                    .execute(
+                        "UPDATE memories SET state='dormant',state_changed_at=?1,updated_at=MAX(updated_at,?1) WHERE id=?2 AND state='active' AND pinned=0",
+                        params![now, id],
+                    )
+                    .map_err(|error| PortError(error.to_string()))?;
+            }
+        }
+        let cutoff = now.saturating_sub(DORMANT_DELETE_AFTER_SECONDS);
+        let expired_ids = {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT id FROM memories WHERE state IN ('dormant','superseded') AND pinned=0 AND state_changed_at<=?1 ORDER BY state_changed_at,id LIMIT ?2",
+                )
+                .map_err(|error| PortError(error.to_string()))?;
+            statement
+                .query_map(params![cutoff, sql_limit], |row| row.get::<_, i64>(0))
+                .map_err(|error| PortError(error.to_string()))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| PortError(error.to_string()))?
+        };
+        let mut deleted = 0;
+        for id in expired_ids {
+            deleted += transaction
+                .execute("DELETE FROM memories WHERE id=?1", [id])
+                .map_err(|error| PortError(error.to_string()))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| PortError(error.to_string()))?;
+        Ok(MaintenanceReport { dormant, deleted })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::SqliteMemoryStore;
     use crate::Database;
-    use pw_application::memory::MemoryStore;
+    use pw_application::memory::{
+        DORMANT_DELETE_AFTER_SECONDS, EvidenceSource, MemoryAction, MemoryState, MemoryStore,
+    };
 
     #[test]
     fn summary_and_memory_survive_reopen_and_search_by_relevance() {
@@ -199,5 +630,200 @@ mod tests {
                 .upsert_summary("missing", "パスワード=x", 1, 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn reinforce_revives_dormant_memory_once_per_turn() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let first_source = EvidenceSource::new("default", 7);
+        let id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "猫が好き".into(),
+                    pinned: false,
+                },
+                &first_source,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .database
+            .connection()
+            .execute(
+                "UPDATE memories SET state='dormant',state_changed_at=2 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        let second_source = EvidenceSource::new("default", 8);
+        store
+            .apply_action(
+                &MemoryAction::Reinforce {
+                    memory_id: id,
+                    pin: false,
+                },
+                &second_source,
+                3,
+            )
+            .unwrap();
+        store
+            .apply_action(
+                &MemoryAction::Reinforce {
+                    memory_id: id,
+                    pin: false,
+                },
+                &second_source,
+                99,
+            )
+            .unwrap();
+        let candidate = store
+            .find_consolidation_candidates("猫", 10, 3)
+            .unwrap()
+            .remove(0);
+        assert_eq!(candidate.state, MemoryState::Active);
+        assert_eq!(candidate.mention_count, 2);
+        assert_eq!(candidate.last_seen_at, 3);
+        let count: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memory_evidence WHERE memory_id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn superseded_and_expired_rows_never_reach_prompt_search() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source = EvidenceSource::new("default", 9);
+        let old = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "猫が好き".into(),
+                    pinned: true,
+                },
+                &source,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let new = store
+            .apply_action(
+                &MemoryAction::Supersede {
+                    old_memory_id: old,
+                    content: "犬が好き".into(),
+                    pin_replacement: false,
+                },
+                &source,
+                2,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .apply_action(
+                &MemoryAction::Supersede {
+                    old_memory_id: old,
+                    content: "犬が好き".into(),
+                    pin_replacement: false,
+                },
+                &source,
+                99,
+            )
+            .unwrap();
+        let changed_at: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT state_changed_at FROM memories WHERE id=?1",
+                [old],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(changed_at, 2);
+        assert!(
+            store
+                .search_active_for_prompt("猫", 10, 2)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.search_active_for_prompt("犬", 10, 2).unwrap()[0].id,
+            new
+        );
+        store
+            .run_maintenance(2 + DORMANT_DELETE_AFTER_SECONDS, 100)
+            .unwrap();
+        assert!(
+            store
+                .find_consolidation_candidates("猫", 10, i64::MAX)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn pin_secret_filter_and_recall_idempotency_are_enforced() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source = EvidenceSource::new("default", 10);
+        let pinned = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "猫が好き".into(),
+                    pinned: true,
+                },
+                &source,
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .apply_action(
+                    &MemoryAction::Add {
+                        content: "Authorization: Bearer raw-secret".into(),
+                        pinned: false,
+                    },
+                    &EvidenceSource::new("default", 11),
+                    1,
+                )
+                .is_err()
+        );
+        store
+            .record_recalled(&[pinned], &EvidenceSource::new("default", 12), 2)
+            .unwrap();
+        store
+            .record_recalled(&[pinned], &EvidenceSource::new("default", 12), 2)
+            .unwrap();
+        store.run_maintenance(i64::MAX / 2, 100).unwrap();
+        assert_eq!(
+            store
+                .search_active_for_prompt("猫", 10, i64::MAX / 2)
+                .unwrap()[0]
+                .id,
+            pinned
+        );
+        let recalled: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memory_evidence WHERE memory_id=?1 AND kind='recalled'",
+                [pinned],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(recalled, 1);
+        let unsafe_count: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE content LIKE '%raw-secret%'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unsafe_count, 0);
     }
 }
