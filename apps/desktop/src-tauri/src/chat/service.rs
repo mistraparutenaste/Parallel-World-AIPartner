@@ -1271,54 +1271,42 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("pw-enrichment-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            history,
+            DEFAULT_CONVERSATION_ID,
+            Some(sender),
+        );
         let mut tracker = TurnTracker::new();
-        for (user, assistant) in [
-            ("古い質問", "古い回答"),
-            ("次の質問", "次の回答"),
-            ("私は猫が好きです", "覚えました"),
-            ("私は猫が好きです", "もう一度覚えました"),
-        ] {
-            persist_completed_turn(
-                &mut history,
-                DEFAULT_CONVERSATION_ID,
-                tracker.begin_turn(),
-                user,
-                assistant,
-            )
-            .unwrap();
+        for assistant in ["覚えました", "もう一度覚えました"] {
+            let turn = tracker.begin_turn();
+            events.on_user_message(turn, "私は猫が好きです");
+            events.on_reply_complete(turn, assistant);
         }
-        drop(history);
-        let (tx, rx) = sync_channel(8);
-        let pending = Arc::new(Mutex::new(Some(vec![
-            EnrichmentJob {
-                user_text: "私は猫が好きです".to_owned(),
-                turn_id: 3,
-            },
-            EnrichmentJob {
-                user_text: "私は猫が好きです".to_owned(),
-                turn_id: 4,
-            },
-        ])));
-        let worker_pending = Arc::clone(&pending);
+        drop(events);
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
             run_enrichment(
                 &worker_path,
                 rx,
-                worker_pending,
+                pending,
                 Arc::new(QueueMetrics::new("test_enrichment", 8)),
                 HybridConsolidator::new(Box::new(ExactFakeClassifier) as Box<dyn MemoryClassifier>),
             );
         });
-        tx.send(()).unwrap();
-        drop(tx);
         worker.join().unwrap();
 
         let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
         let context = load_memory_context(&store, "猫");
         assert_eq!(context.memories, ["私は猫が好きです"]);
-        assert!(context.summary.unwrap().contains("古い質問"));
         let candidates = store
             .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
             .unwrap();
@@ -1598,20 +1586,42 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
-        process_enrichment_job_with_consolidator(
-            &path,
-            &EnrichmentJob {
-                user_text: "通常発話".into(),
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(
+                    Box::new(UnavailableMemoryClassifier) as Box<dyn MemoryClassifier>
+                ),
+            );
+        });
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
                 turn_id: 4,
-            },
-            &mut consolidator,
-        )
-        .unwrap();
-        let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
+            })
+            .unwrap();
+        drop(sender);
+        worker.join().unwrap();
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let first = store
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
             .unwrap();
+        assert!(store.search("猫", DEFAULT_MEMORY_LIMIT).unwrap().is_empty());
+        drop(store);
+        assert!(first.through_message_id > 0);
+        assert!(!first.content.is_empty());
         assert!(first.content.contains("[REDACTED]"));
         assert!(!first.content.contains("abc"));
         assert!(!first.content.contains("xyz"));
@@ -1627,6 +1637,7 @@ mod tests {
             .unwrap();
         }
         drop(history);
+        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
         process_enrichment_job_with_consolidator(
             &path,
             &EnrichmentJob {
