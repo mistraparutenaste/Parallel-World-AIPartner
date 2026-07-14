@@ -268,9 +268,8 @@ fn discover_profile_files(characters: &Path) -> Result<Vec<PathBuf>, CharacterPr
             continue;
         }
         let manifest_path = entry_path.join("character.json");
-        match fs::metadata(&manifest_path) {
-            Ok(metadata) if metadata.is_file() => paths.push(manifest_path),
-            Ok(_) => {}
+        match fs::symlink_metadata(&manifest_path) {
+            Ok(_) => paths.push(manifest_path),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(source) => {
                 return Err(CharacterProfileError::Io {
@@ -468,8 +467,7 @@ fn resolve_static(
         } else {
             expected_dimensions = Some((width, height));
         }
-        total_decoded = total_decoded.saturating_add(decoded_bytes);
-        ensure_total_decoded_limit(total_decoded)?;
+        add_decoded_bytes(&mut total_decoded, decoded_bytes)?;
         resolved.push(ResolvedStaticExpression {
             name: expression.name,
             image_path,
@@ -659,12 +657,19 @@ fn canonical_regular_file(
     Ok(canonical)
 }
 
-pub(crate) fn ensure_total_decoded_limit(bytes: u64) -> Result<(), CharacterProfileError> {
+fn ensure_total_decoded_limit(bytes: u64) -> Result<(), CharacterProfileError> {
     if bytes > MAX_TOTAL_DECODED_BYTES {
         Err(CharacterProfileError::DecodedImageLimit { bytes })
     } else {
         Ok(())
     }
+}
+
+fn add_decoded_bytes(total: &mut u64, decoded_bytes: u64) -> Result<(), CharacterProfileError> {
+    let updated = total.checked_add(decoded_bytes).unwrap_or(u64::MAX);
+    ensure_total_decoded_limit(updated)?;
+    *total = updated;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -684,8 +689,7 @@ mod tests {
     use pw_platform::paths::AppDataLayout;
 
     use super::{
-        CharacterCatalog, CharacterProfileError, MAX_TOTAL_DECODED_BYTES,
-        ensure_total_decoded_limit,
+        CharacterCatalog, CharacterProfileError, MAX_TOTAL_DECODED_BYTES, add_decoded_bytes,
     };
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -785,6 +789,26 @@ mod tests {
 
     fn default_settings() -> CharacterSettingsDto {
         CharacterSettingsDto::default()
+    }
+
+    #[cfg(windows)]
+    fn create_symlink_or_report(target: &Path, link: &Path) -> bool {
+        use std::os::windows::fs::symlink_file;
+
+        match symlink_file(target, link) {
+            Ok(()) => true,
+            Err(error) if std::env::var_os("CI").is_some() => {
+                panic!("CI must support the symlink escape regression test: {error}")
+            }
+            Err(error) => {
+                eprintln!(
+                    "SKIP symlink escape regression: cannot create {} -> {}: {error}",
+                    link.display(),
+                    target.display()
+                );
+                false
+            }
+        }
     }
 
     #[test]
@@ -931,17 +955,47 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn character_json_directory_blocks_legacy_fallback() {
+        let fixture = Fixture::new("manifest-directory");
+        let invalid_profile = fixture.profile_dir("invalid-profile");
+        std::fs::create_dir_all(invalid_profile.join("character.json")).unwrap();
+        let legacy = fixture.profile_dir("legacy").join("Legacy.model3.json");
+        std::fs::write(&legacy, "{}").unwrap();
+
+        assert!(matches!(
+            CharacterCatalog::discover(&fixture.layout),
+            Err(CharacterProfileError::InvalidProfile { .. })
+        ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn broken_character_json_symlink_blocks_legacy_fallback_when_symlinks_are_available() {
+        let fixture = Fixture::new("broken-manifest-link");
+        let invalid_profile = fixture.profile_dir("invalid-profile");
+        let missing_target = fixture.root.join("missing-character.json");
+        if !create_symlink_or_report(&missing_target, &invalid_profile.join("character.json")) {
+            return;
+        }
+        let legacy = fixture.profile_dir("legacy").join("Legacy.model3.json");
+        std::fs::write(&legacy, "{}").unwrap();
+
+        assert!(matches!(
+            CharacterCatalog::discover(&fixture.layout),
+            Err(CharacterProfileError::Io { .. })
+        ));
+    }
+
     #[cfg(windows)]
     #[test]
     fn rejects_symlink_escape_when_symlinks_are_available() {
-        use std::os::windows::fs::symlink_file;
-
         let fixture = Fixture::new("symlink-escape");
         let outside = fixture.root.join("outside.png");
         write_png(&outside, 1, 1, true);
         let profile = fixture.profile_dir("linked");
         let link = profile.join("neutral.png");
-        if symlink_file(&outside, &link).is_err() {
+        if !create_symlink_or_report(&outside, &link) {
             return;
         }
         fixture.add_static_profile("linked", "linked", &[("neutral", "neutral.png")]);
@@ -1070,10 +1124,16 @@ mod tests {
             Err(CharacterProfileError::ImageFileTooLarge { .. })
         ));
 
+        let mut decoded_total = 0;
+        for _ in 0..4 {
+            add_decoded_bytes(&mut decoded_total, MAX_TOTAL_DECODED_BYTES / 4).unwrap();
+        }
+        assert_eq!(decoded_total, MAX_TOTAL_DECODED_BYTES);
         assert!(matches!(
-            ensure_total_decoded_limit(MAX_TOTAL_DECODED_BYTES + 1),
+            add_decoded_bytes(&mut decoded_total, 1),
             Err(CharacterProfileError::DecodedImageLimit { .. })
         ));
+        assert_eq!(decoded_total, MAX_TOTAL_DECODED_BYTES);
     }
 
     #[test]

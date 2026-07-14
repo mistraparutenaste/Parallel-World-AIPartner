@@ -428,5 +428,6 @@ mod tests {
         assert_eq!(state.manifest_summary().unwrap(), before);
         assert_eq!(before.expressions, ["neutral", "happy"]);
         assert!(before.motions.is_empty());
+        assert_eq!(*state.manifest.lock().unwrap(), Some(character));
     }
 }
