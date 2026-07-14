@@ -96,6 +96,14 @@ impl CharacterState {
         Some(guard.as_ref()?.capabilities())
     }
 
+    pub(crate) fn cache_manifest(&self, manifest: ResolvedCharacter) -> Result<(), String> {
+        *self
+            .manifest
+            .lock()
+            .map_err(|_| "character state is poisoned".to_owned())? = Some(manifest);
+        Ok(())
+    }
+
     #[must_use]
     pub(crate) fn control_context(&self) -> Option<CharacterControlContext> {
         let guard = self.manifest.lock().ok()?;
@@ -196,10 +204,7 @@ pub fn get_character_manifest(
 ) -> Result<CharacterManifestDto, String> {
     let manifest = load_manifest(&layout)?;
     let dto = to_dto(&manifest);
-    *state
-        .manifest
-        .lock()
-        .map_err(|_| "character state is poisoned".to_owned())? = Some(manifest);
+    state.cache_manifest(manifest)?;
     Ok(dto)
 }
 
@@ -491,16 +496,12 @@ mod tests {
 
     #[test]
     fn control_context_identifies_each_renderer_kind() {
-        let live2d = super::CharacterState {
-            manifest: Mutex::new(Some(live2d_character())),
-        }
-        .control_context()
-        .unwrap();
-        let static_image = super::CharacterState {
-            manifest: Mutex::new(Some(static_character())),
-        }
-        .control_context()
-        .unwrap();
+        let live2d_state = super::CharacterState::default();
+        live2d_state.cache_manifest(live2d_character()).unwrap();
+        let live2d = live2d_state.control_context().unwrap();
+        let static_state = super::CharacterState::default();
+        static_state.cache_manifest(static_character()).unwrap();
+        let static_image = static_state.control_context().unwrap();
 
         assert_eq!(live2d.renderer, "live2d");
         assert_eq!(live2d.capabilities.motions, ["Idle", "Tap"]);

@@ -39,6 +39,7 @@ use crate::diagnostics::QueueMetrics;
 
 pub const MESSAGE_EVENT: &str = "chat-message";
 pub const STATE_EVENT: &str = "conversation-state";
+const CHARACTER_WEBVIEW: &str = "character";
 
 /// Kept messages of context (user + assistant combined).
 const MAX_HISTORY_MESSAGES: usize = 20;
@@ -714,7 +715,7 @@ impl ChatService {
         }).unwrap_or(0);
         let events = PersistentConversationEvents::new_with_enrichment(
             TauriConversationEvents {
-                app,
+                runtime: AppConversationEventRuntime { app },
                 health: Arc::clone(&self.health),
             },
             history,
@@ -848,12 +849,65 @@ fn dispatch_character_control(
     }
 }
 
-struct TauriConversationEvents<R: Runtime> {
+trait ConversationEventRuntime: Send {
+    fn character_context(&self) -> Option<crate::commands::character::CharacterControlContext>;
+    fn emit_to_webview(
+        &self,
+        target: &'static str,
+        event: &'static str,
+        name: &str,
+    ) -> Result<(), String>;
+    fn emit_chat_message(&self, payload: ChatMessageEventDto);
+    fn emit_conversation_state(&self, payload: ConversationStateEventDto);
+    fn emit_runtime_health(&self, payload: RuntimeHealthEventDto);
+    fn enqueue_speech(&self, turn: TurnId, sentence: &str);
+}
+
+struct AppConversationEventRuntime<R: Runtime> {
     app: AppHandle<R>,
+}
+
+impl<R: Runtime> ConversationEventRuntime for AppConversationEventRuntime<R> {
+    fn character_context(&self) -> Option<crate::commands::character::CharacterControlContext> {
+        self.app.state::<CharacterState>().control_context()
+    }
+
+    fn emit_to_webview(
+        &self,
+        target: &'static str,
+        event: &'static str,
+        name: &str,
+    ) -> Result<(), String> {
+        self.app
+            .emit_to(EventTarget::webview_window(target), event, name)
+            .map_err(|error| error.to_string())
+    }
+
+    fn emit_chat_message(&self, payload: ChatMessageEventDto) {
+        let _ = self.app.emit(MESSAGE_EVENT, payload);
+    }
+
+    fn emit_conversation_state(&self, payload: ConversationStateEventDto) {
+        let _ = self.app.emit(STATE_EVENT, payload);
+    }
+
+    fn emit_runtime_health(&self, payload: RuntimeHealthEventDto) {
+        let _ = self.app.emit(RUNTIME_HEALTH_EVENT, payload);
+    }
+
+    fn enqueue_speech(&self, turn: TurnId, sentence: &str) {
+        self.app
+            .state::<crate::tts::TtsService>()
+            .enqueue(&self.app, turn, sentence);
+    }
+}
+
+struct TauriConversationEvents<A: ConversationEventRuntime> {
+    runtime: A,
     health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
 }
 
-impl<R: Runtime> TauriConversationEvents<R> {
+impl<A: ConversationEventRuntime> TauriConversationEvents<A> {
     fn emit_health(&self, healthy: bool) {
         let mut health = self
             .health
@@ -872,10 +926,8 @@ impl<R: Runtime> TauriConversationEvents<R> {
             }
         };
         if let HealthTransition::Changed { health, attempts } = transition {
-            let _ = self.app.emit(
-                RUNTIME_HEALTH_EVENT,
-                RuntimeHealthEventDto::from((&health, attempts)),
-            );
+            self.runtime
+                .emit_runtime_health(RuntimeHealthEventDto::from((&health, attempts)));
         }
     }
     fn emit_message(&self, turn: TurnId, role: ChatRoleDto, text: &str) {
@@ -887,7 +939,7 @@ impl<R: Runtime> TauriConversationEvents<R> {
             text: text.to_owned(),
         };
         // Single broadcast: see the event conventions note.
-        let _ = self.app.emit(MESSAGE_EVENT, payload);
+        self.runtime.emit_chat_message(payload);
     }
 
     fn emit_state(&self, state: ConversationState, message: Option<String>) {
@@ -914,11 +966,11 @@ impl<R: Runtime> TauriConversationEvents<R> {
             state: dto,
             message,
         };
-        let _ = self.app.emit(STATE_EVENT, payload);
+        self.runtime.emit_conversation_state(payload);
     }
 }
 
-impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
+impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents<A> {
     fn on_state(&self, state: ConversationState) {
         self.emit_state(state, None);
     }
@@ -928,8 +980,7 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
     }
 
     fn on_control(&self, _turn: TurnId, control: &ReplyControl) {
-        let state = self.app.state::<CharacterState>();
-        let Some(context) = state.control_context() else {
+        let Some(context) = self.runtime.character_context() else {
             if let Some(emotion) = &control.emotion {
                 tracing::warn!(
                     renderer = "unavailable",
@@ -953,10 +1004,7 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
             context.renderer,
             control,
             |event, name| {
-                if let Err(error) =
-                    self.app
-                        .emit_to(EventTarget::webview_window("character"), event, name)
-                {
+                if let Err(error) = self.runtime.emit_to_webview(CHARACTER_WEBVIEW, event, name) {
                     tracing::warn!(
                         %error,
                         renderer = %context.renderer,
@@ -973,9 +1021,7 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
         self.emit_message(turn, ChatRoleDto::Assistant, sentence);
         // Sentence-level read-ahead: synthesis of this sentence runs
         // while earlier ones are still playing (基本設計 8章).
-        self.app
-            .state::<crate::tts::TtsService>()
-            .enqueue(&self.app, turn, sentence);
+        self.runtime.enqueue_speech(turn, sentence);
     }
 
     fn on_reply_complete(&self, _turn: TurnId, _speech_text: &str) {
@@ -992,14 +1038,19 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::sync::Mutex;
-
-    use pw_application::history::ConversationHistory;
-    use pw_application::memory::{MemoryRecord, StoredSummary};
-    use pw_domain::reply::TurnTracker;
-    use pw_storage::{Database, SqliteConversationHistory};
+    use std::sync::atomic::AtomicBool;
 
     use super::*;
+    use pw_application::PortError;
+    use pw_application::conversation::LlmClient;
+    use pw_application::history::ConversationHistory;
+    use pw_application::memory::{MemoryRecord, StoredSummary};
+    use pw_contracts::MotionGroupDto;
+    use pw_domain::reply::TurnTracker;
+    use pw_storage::{Database, SqliteConversationHistory};
 
     #[test]
     fn production_llm_timeout_allows_local_streaming_inference() {
@@ -1036,65 +1087,262 @@ mod tests {
         assert!(instruction.contains("利用できるモーション(motion): Idle, Tap"));
     }
 
-    #[test]
-    fn unknown_emotion_emits_no_character_event_and_speech_can_continue() {
-        let control = ReplyControl {
-            emotion: Some("surprised".into()),
-            intensity: None,
-            motion: None,
-        };
-        let mut events = Vec::new();
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedCharacterEvent {
+        target: String,
+        event: String,
+        name: String,
+    }
 
-        dispatch_character_control(
-            &static_capabilities(),
-            "static_image",
-            &control,
-            |event, name| events.push((event, name.to_owned())),
-        );
-        events.push((MESSAGE_EVENT, "speech continues".into()));
+    struct RecordingConversationRuntime {
+        state: Arc<CharacterState>,
+        attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
+        fail_emit: bool,
+        speech: Arc<Mutex<Vec<(TurnId, String)>>>,
+    }
 
-        assert_eq!(events, vec![(MESSAGE_EVENT, "speech continues".into())]);
+    impl ConversationEventRuntime for RecordingConversationRuntime {
+        fn character_context(&self) -> Option<crate::commands::character::CharacterControlContext> {
+            self.state.control_context()
+        }
+
+        fn emit_to_webview(
+            &self,
+            target: &'static str,
+            event: &'static str,
+            name: &str,
+        ) -> Result<(), String> {
+            self.attempts.lock().unwrap().push(RecordedCharacterEvent {
+                target: target.into(),
+                event: event.into(),
+                name: name.into(),
+            });
+            if self.fail_emit {
+                Err("injected character event failure".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn emit_chat_message(&self, _payload: ChatMessageEventDto) {}
+
+        fn emit_conversation_state(&self, _payload: ConversationStateEventDto) {}
+
+        fn emit_runtime_health(&self, _payload: RuntimeHealthEventDto) {}
+
+        fn enqueue_speech(&self, turn: TurnId, sentence: &str) {
+            self.speech.lock().unwrap().push((turn, sentence.into()));
+        }
+    }
+
+    fn live2d_character() -> crate::character::ResolvedCharacter {
+        crate::character::ResolvedCharacter {
+            id: "live2d-test".into(),
+            display_name: "Live2D Test".into(),
+            profile_root: PathBuf::from("C:/characters/live2d-test"),
+            renderer: crate::character::ResolvedRenderer::Live2d {
+                model_path: PathBuf::from("C:/characters/live2d-test/model.model3.json"),
+                default_expression: Some("neutral".into()),
+                expressions: vec!["neutral".into(), "happy".into()],
+                motion_groups: vec![MotionGroupDto {
+                    name: "Tap".into(),
+                    motion_count: 1,
+                }],
+            },
+        }
+    }
+
+    fn static_character() -> crate::character::ResolvedCharacter {
+        crate::character::ResolvedCharacter {
+            id: "static-test".into(),
+            display_name: "Static Test".into(),
+            profile_root: PathBuf::from("C:/characters/static-test"),
+            renderer: crate::character::ResolvedRenderer::StaticImage {
+                default_expression: "neutral".into(),
+                expressions: vec![
+                    crate::character::ResolvedStaticExpression {
+                        name: "neutral".into(),
+                        image_path: PathBuf::from("C:/characters/static-test/neutral.png"),
+                    },
+                    crate::character::ResolvedStaticExpression {
+                        name: "happy".into(),
+                        image_path: PathBuf::from("C:/characters/static-test/happy.png"),
+                    },
+                ],
+                width: 512,
+                height: 1024,
+            },
+        }
+    }
+
+    fn test_health() -> Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>> {
+        Arc::new(Mutex::new(FeatureHealthSupervisor::new(
+            RuntimeFeature::LanguageModel,
+            SystemClock,
+            TimeJitter::default(),
+        )))
+    }
+
+    fn recording_events(
+        state: Arc<CharacterState>,
+        attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
+        fail_emit: bool,
+        speech: Arc<Mutex<Vec<(TurnId, String)>>>,
+    ) -> TauriConversationEvents<RecordingConversationRuntime> {
+        TauriConversationEvents {
+            runtime: RecordingConversationRuntime {
+                state,
+                attempts,
+                fail_emit,
+                speech,
+            },
+            health: test_health(),
+        }
     }
 
     #[test]
-    fn static_motion_is_ignored_without_emitting_an_event() {
-        let control = ReplyControl {
-            emotion: None,
-            intensity: None,
-            motion: Some("Idle".into()),
-        };
-        let mut events = Vec::new();
+    fn unknown_emotion_uses_cached_state_and_sends_no_webview_event() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(static_character()).unwrap();
+        let before = state.control_context();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            Arc::clone(&state),
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let turn = TurnTracker::new().begin_turn();
 
-        dispatch_character_control(
-            &static_capabilities(),
-            "static_image",
-            &control,
-            |event, name| events.push((event, name.to_owned())),
+        events.on_control(
+            turn,
+            &ReplyControl {
+                emotion: Some("surprised".into()),
+                intensity: None,
+                motion: None,
+            },
         );
 
-        assert!(events.is_empty());
+        assert!(attempts.lock().unwrap().is_empty());
+        assert_eq!(state.control_context(), before);
     }
 
     #[test]
-    fn valid_live2d_controls_emit_existing_character_events() {
-        let control = ReplyControl {
-            emotion: Some("happy".into()),
-            intensity: Some(0.75),
-            motion: Some("Tap".into()),
-        };
-        let mut events = Vec::new();
+    fn static_motion_uses_cached_state_and_sends_no_webview_event() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(static_character()).unwrap();
+        let before = state.control_context();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            Arc::clone(&state),
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let turn = TurnTracker::new().begin_turn();
 
-        dispatch_character_control(&live2d_capabilities(), "live2d", &control, |event, name| {
-            events.push((event, name.to_owned()))
-        });
+        events.on_control(
+            turn,
+            &ReplyControl {
+                emotion: None,
+                intensity: None,
+                motion: Some("Tap".into()),
+            },
+        );
+
+        assert!(attempts.lock().unwrap().is_empty());
+        assert_eq!(state.control_context(), before);
+    }
+
+    #[test]
+    fn valid_live2d_controls_target_only_the_character_webview() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(live2d_character()).unwrap();
+        let before = state.control_context();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            Arc::clone(&state),
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let turn = TurnTracker::new().begin_turn();
+
+        events.on_control(
+            turn,
+            &ReplyControl {
+                emotion: Some("happy".into()),
+                intensity: Some(0.75),
+                motion: Some("Tap".into()),
+            },
+        );
 
         assert_eq!(
-            events,
-            vec![
-                ("character-expression", "happy".into()),
-                ("character-motion", "Tap".into()),
+            *attempts.lock().unwrap(),
+            [
+                RecordedCharacterEvent {
+                    target: "character".into(),
+                    event: EXPRESSION_EVENT.into(),
+                    name: "happy".into(),
+                },
+                RecordedCharacterEvent {
+                    target: "character".into(),
+                    event: MOTION_EVENT.into(),
+                    name: "Tap".into(),
+                },
             ]
         );
+        assert_eq!(state.control_context(), before);
+    }
+
+    struct ScriptedLlm(&'static str);
+
+    impl LlmClient for ScriptedLlm {
+        fn stream_chat(
+            &mut self,
+            _messages: &[ChatMessage],
+            _cancel: &AtomicBool,
+            on_delta: &mut dyn FnMut(&str),
+        ) -> Result<(), PortError> {
+            on_delta(self.0);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn character_emit_failure_does_not_stop_sentence_or_tts_enqueue() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(live2d_character()).unwrap();
+        let before = state.control_context();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let speech = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            Arc::clone(&state),
+            Arc::clone(&attempts),
+            true,
+            Arc::clone(&speech),
+        );
+        let mut orchestrator = ConversationOrchestrator::new(
+            OrchestratorConfig {
+                prompt: PromptBuilder {
+                    system_rules: "rules".into(),
+                    character_prompt: "character".into(),
+                },
+                max_history_messages: 4,
+                strip_emoji: true,
+            },
+            ScriptedLlm("{\"emotion\":\"happy\"}\n続きます。"),
+            events,
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("話して");
+
+        assert_eq!(attempts.lock().unwrap().len(), 1);
+        assert_eq!(attempts.lock().unwrap()[0].target, "character");
+        assert_eq!(speech.lock().unwrap().len(), 1);
+        assert_eq!(speech.lock().unwrap()[0].1, "続きます。");
+        assert_eq!(state.control_context(), before);
     }
 
     #[test]
