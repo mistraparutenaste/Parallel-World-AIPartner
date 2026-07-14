@@ -28,10 +28,25 @@ pub(crate) trait Live2dWindows {
 
 impl<R: Runtime> Live2dWindows for &AppHandle<R> {
     fn show_chat(&mut self) -> Result<(), String> {
-        self.get_webview_window("chat")
-            .ok_or_else(|| "chat window is not available".to_owned())?
-            .show()
-            .map_err(|error| error.to_string())
+        let layout = self.state::<AppDataLayout>();
+        let placement = crate::ui::load_preferences(&layout).chat_placement;
+        let label = match placement {
+            pw_contracts::ChatPlacementDto::Docked => "settings",
+            pw_contracts::ChatPlacementDto::Popped => "chat",
+        };
+        let window = self
+            .get_webview_window(label)
+            .ok_or_else(|| format!("{label} window is not available"))?;
+        window.show().map_err(|error| error.to_string())?;
+        window.set_focus().map_err(|error| error.to_string())?;
+        if label == "settings" {
+            let _ = self.emit_to(
+                EventTarget::webview_window("settings"),
+                "control-center-navigate",
+                "conversation",
+            );
+        }
+        Ok(())
     }
     fn hide_character(&mut self) -> Result<(), String> {
         self.get_webview_window("character")

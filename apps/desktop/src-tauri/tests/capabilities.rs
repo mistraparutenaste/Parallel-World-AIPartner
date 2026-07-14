@@ -81,6 +81,8 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
         custom_permissions(&permissions),
         [
             "allow-get-app-status",
+            "allow-get-ui-preferences",
+            "allow-set-chat-placement",
             "allow-send-chat-message",
             "allow-cancel-turn",
             "allow-list-conversation-history",
@@ -107,6 +109,14 @@ fn settings_capability_exposes_status_character_and_audio_control() {
         custom_permissions(&permissions),
         [
             "allow-get-app-status",
+            "allow-get-ui-preferences",
+            "allow-set-theme-preference",
+            "allow-set-chat-placement",
+            "allow-send-chat-message",
+            "allow-cancel-turn",
+            "allow-list-conversation-history",
+            "allow-list-conversation-log",
+            "allow-read-technical-log",
             "allow-get-character-manifest",
             "allow-set-expression",
             "allow-start-motion",
@@ -205,4 +215,41 @@ fn chat_capability_never_gains_microphone_control() {
             "audio command leaked into chat: {permission}"
         );
     }
+}
+
+#[test]
+fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
+    let (_, settings) = capability_permissions("settings");
+    for permission in [
+        "allow-get-ui-preferences",
+        "allow-set-theme-preference",
+        "allow-set-chat-placement",
+        "allow-list-conversation-log",
+        "allow-read-technical-log",
+        "allow-send-chat-message",
+        "allow-cancel-turn",
+        "allow-list-conversation-history",
+    ] {
+        assert!(
+            settings.iter().any(|item| item == permission),
+            "{permission}"
+        );
+    }
+    let (_, chat) = capability_permissions("chat");
+    for permission in ["allow-get-ui-preferences", "allow-set-chat-placement"] {
+        assert!(chat.iter().any(|item| item == permission), "{permission}");
+    }
+    assert!(
+        chat.iter().all(|permission| {
+            !permission.contains("conversation-log") && !permission.contains("technical-log")
+        }),
+        "read-only log commands leaked into chat"
+    );
+    let (_, character) = capability_permissions("character");
+    assert!(character.iter().all(|permission| {
+        !permission.contains("ui-preferences")
+            && !permission.contains("chat-placement")
+            && !permission.contains("conversation-log")
+            && !permission.contains("technical-log")
+    }));
 }

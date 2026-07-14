@@ -8,6 +8,7 @@ mod chat;
 mod diagnostics;
 mod runtime_health;
 mod tts;
+mod ui;
 mod update;
 
 pub use app_status::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
@@ -18,10 +19,13 @@ pub use audio::{
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{CharacterManifestDto, MotionGroupDto};
 pub use chat::{
-    ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationMessageDto,
-    ConversationStateEventDto, LlmSettingsDto,
+    ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
+    ConversationMessageDto, ConversationStateEventDto, LlmSettingsDto,
 };
-pub use diagnostics::{DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto};
+pub use diagnostics::{
+    DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
+    TechnicalLogCursorDto,
+};
 pub use runtime_health::{
     FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
     RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
@@ -30,4 +34,5 @@ pub use tts::{
     SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
     UserDictWordDto,
 };
+pub use ui::{ChatPlacementDto, ThemePreferenceDto, UiPreferencesDto};
 pub use update::{UpdateStateDto, UpdateStatusDto};

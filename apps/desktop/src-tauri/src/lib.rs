@@ -13,6 +13,7 @@ pub mod speech;
 pub mod stability_heartbeat;
 pub mod supervisor;
 pub mod tts;
+pub mod ui;
 pub mod updates;
 pub mod windows;
 
@@ -51,14 +52,19 @@ pub fn run() {
             commands::diagnostics::report_frontend_error,
             commands::diagnostics::list_diagnostic_reports,
             commands::diagnostics::export_diagnostic_reports,
+            commands::diagnostics::read_technical_log,
             commands::chat::send_chat_message,
             commands::chat::cancel_turn,
             commands::chat::get_llm_settings,
             commands::chat::set_llm_settings,
             commands::data::list_conversation_history,
+            commands::data::list_conversation_log,
             commands::data::export_user_data,
             commands::data::delete_conversation_history,
             commands::data::delete_memories,
+            commands::ui::get_ui_preferences,
+            commands::ui::set_theme_preference,
+            commands::ui::set_chat_placement,
             commands::tts::get_tts_settings,
             commands::tts::set_tts_settings,
             commands::tts::list_tts_speakers,
@@ -124,8 +130,26 @@ pub fn run() {
             }
             windows::create_missing_windows(app.handle())?;
             restore_window_states(app.handle());
+            if let Err(error) = commands::ui::restore_chat_placement(
+                app.handle(),
+                &app.state::<pw_platform::paths::AppDataLayout>(),
+            ) {
+                tracing::warn!(%error, "failed to restore chat placement");
+            }
             windows::spawn_cursor_watcher(app.handle().clone());
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "chat"
+                && let tauri::WindowEvent::CloseRequested { api, .. } = event
+            {
+                api.prevent_close();
+                let app = window.app_handle();
+                let layout = app.state::<pw_platform::paths::AppDataLayout>();
+                if let Err(error) = commands::ui::dock_chat_on_close(app, &layout) {
+                    tracing::warn!(%error, "failed to dock chat on close");
+                }
+            }
         })
         .build(tauri::generate_context!())
         .expect("error while building parallel-world")

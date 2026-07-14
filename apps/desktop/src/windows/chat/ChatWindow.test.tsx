@@ -3,7 +3,7 @@ import type {
   ConversationStateEventDto,
   TtsStateEventDto,
 } from '@parallel-world/contracts';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatWindow } from './ChatWindow';
 
@@ -63,6 +63,19 @@ describe('ChatWindow', () => {
 
     expect(screen.getByText(/こんにちは$/)).toBeInTheDocument();
     expect(screen.getByText('やあ、こんにちは。')).toBeInTheDocument();
+  });
+
+  it('applies theme changes from shared UI preferences', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_ui_preferences') {
+        return Promise.resolve({ schema_version: 1, theme: 'dark', chat_placement: 'popped' });
+      }
+      if (command === 'list_conversation_history') return Promise.resolve([]);
+      return Promise.resolve(null);
+    });
+    render(<ChatWindow />);
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-theme', 'dark'));
+    act(() => document.documentElement.removeAttribute('data-theme'));
   });
 
   it('loads persisted history and deduplicates a matching live event', async () => {

@@ -20,6 +20,7 @@ pw-platform = { workspace = true }
 pw-stt-sherpa = { workspace = true }
 pw-storage = { workspace = true }
 pw-tts = { workspace = true }
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 same-file = { workspace = true }

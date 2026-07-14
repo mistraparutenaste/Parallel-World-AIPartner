@@ -13,6 +13,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <ChatWindow />
+    <ChatWindow placementControl="dock" />
   </StrictMode>,
 );
