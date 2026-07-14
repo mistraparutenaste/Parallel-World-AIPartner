@@ -24,6 +24,10 @@ class FakeSink implements AudioSink {
   endCurrent(index: number) {
     this.requests[index]?.onEnded();
   }
+
+  startCurrent(index: number) {
+    this.requests[index]?.onStarted();
+  }
 }
 
 function urls(sink: FakeSink): string[] {
@@ -122,6 +126,70 @@ describe('SpeechAudioPlayer', () => {
 
     player.enqueue({ turnId: 1, seq: 0, url: 'a.wav' });
     expect(sink.requests[0].volume).toBe(0.25);
+  });
+
+  it('reports a turn only after playback actually starts', () => {
+    const sink = new FakeSink();
+    const started = vi.fn();
+    const player = new SpeechAudioPlayer(sink, {
+      onTurnPlaybackStart: started,
+    });
+
+    player.enqueue({ turnId: 1, seq: 0, url: 'a.wav' });
+    expect(started).not.toHaveBeenCalled();
+
+    sink.startCurrent(0);
+    expect(started).toHaveBeenCalledOnce();
+    expect(started).toHaveBeenLastCalledWith(1);
+  });
+
+  it('reports at most once per turn across sequential chunks and once for a new turn', () => {
+    const sink = new FakeSink();
+    const started = vi.fn();
+    const player = new SpeechAudioPlayer(sink, {
+      onTurnPlaybackStart: started,
+    });
+
+    player.enqueue({ turnId: 1, seq: 0, url: 'a.wav' });
+    player.enqueue({ turnId: 1, seq: 1, url: 'b.wav' });
+    sink.startCurrent(0);
+    sink.endCurrent(0);
+    sink.startCurrent(1);
+    player.enqueue({ turnId: 2, seq: 0, url: 'c.wav' });
+    sink.startCurrent(2);
+
+    expect(started.mock.calls).toEqual([[1], [2]]);
+  });
+
+  it('ignores stale start callbacks after stop and dispose', () => {
+    const sink = new FakeSink();
+    const started = vi.fn();
+    const player = new SpeechAudioPlayer(sink, {
+      onTurnPlaybackStart: started,
+    });
+
+    player.enqueue({ turnId: 1, seq: 0, url: 'a.wav' });
+    player.stop();
+    sink.startCurrent(0);
+
+    player.enqueue({ turnId: 2, seq: 0, url: 'b.wav' });
+    player.dispose();
+    sink.startCurrent(1);
+
+    expect(started).not.toHaveBeenCalled();
+  });
+
+  it('does not report a failed playback that ends before starting', () => {
+    const sink = new FakeSink();
+    const started = vi.fn();
+    const player = new SpeechAudioPlayer(sink, {
+      onTurnPlaybackStart: started,
+    });
+
+    player.enqueue({ turnId: 1, seq: 0, url: 'failed.wav' });
+    sink.endCurrent(0);
+
+    expect(started).not.toHaveBeenCalled();
   });
 
   it('dispose stops playback and releases the sink', () => {

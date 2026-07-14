@@ -79,6 +79,7 @@ export class WebAudioSink implements AudioSink {
         }
       };
       source.start();
+      request.onStarted();
       tick();
     };
 
