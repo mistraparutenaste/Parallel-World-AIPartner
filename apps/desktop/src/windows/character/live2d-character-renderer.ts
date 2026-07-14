@@ -41,11 +41,15 @@ export class Live2DCharacterRenderer implements CharacterRenderer {
     }
     this.#ensureActive();
     if (this.#controller.state === 'idle') {
-      await this.#controller.attach(this.#canvas);
+      await this.#awaitWhileActive(this.#controller.attach(this.#canvas));
     }
+    // Recheck in the outer continuation as disposal can occur after the
+    // attach guard resolves but before this load continuation resumes.
     this.#ensureActive();
-    await this.#controller.loadModel(
-      createModelSource(renderer.model_path, this.#convertFileSrc),
+    await this.#awaitWhileActive(
+      this.#controller.loadModel(
+        createModelSource(renderer.model_path, this.#convertFileSrc),
+      ),
     );
   }
 
@@ -83,6 +87,22 @@ export class Live2DCharacterRenderer implements CharacterRenderer {
 
   #ensureActive(): void {
     if (this.#disposed) throw new Error('Live2DCharacterRenderer is disposed');
+  }
+
+  async #awaitWhileActive(operation: Promise<void>): Promise<void> {
+    try {
+      await operation;
+    } catch (error) {
+      if (this.#disposed) this.#controller.dispose();
+      throw error;
+    }
+    if (this.#disposed) {
+      // The underlying controller can transition back to ready/model-loaded
+      // after dispose when an in-flight runtime promise settles. Re-dispose
+      // that late state before aborting the adapter load.
+      this.#controller.dispose();
+      throw new Error('Live2DCharacterRenderer is disposed');
+    }
   }
 }
 

@@ -22,21 +22,29 @@ export function createCharacterRenderer(
   renderer: CharacterRendererDto,
   dependencies: CharacterRendererFactoryDependencies,
 ): CharacterRenderer {
-  if (renderer.kind === 'static_image') {
-    const defaults = defaultStaticImageDependencies(dependencies.convertFileSrc);
-    return new StaticImageCharacterRenderer(dependencies.canvas, {
-      ...defaults,
-      ...dependencies.staticImage,
-      convertFileSrc: dependencies.convertFileSrc,
-    });
+  switch (renderer.kind) {
+    case 'static_image': {
+      const defaults = defaultStaticImageDependencies(dependencies.convertFileSrc);
+      return new StaticImageCharacterRenderer(dependencies.canvas, {
+        ...defaults,
+        ...dependencies.staticImage,
+        convertFileSrc: dependencies.convertFileSrc,
+      });
+    }
+    case 'live2d': {
+      const createController = dependencies.createLive2DController;
+      if (createController === undefined) {
+        throw new Error('createLive2DController is required for a live2d renderer');
+      }
+      return new Live2DCharacterRenderer(
+        dependencies.canvas,
+        createController(),
+        dependencies.convertFileSrc,
+      );
+    }
+    default: {
+      const unsupported = renderer as { kind: string };
+      throw new Error(`unsupported character renderer kind: ${unsupported.kind}`);
+    }
   }
-  const createController = dependencies.createLive2DController;
-  if (createController === undefined) {
-    throw new Error('createLive2DController is required for a live2d renderer');
-  }
-  return new Live2DCharacterRenderer(
-    dependencies.canvas,
-    createController(),
-    dependencies.convertFileSrc,
-  );
 }

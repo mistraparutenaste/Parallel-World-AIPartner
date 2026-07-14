@@ -151,21 +151,43 @@ describe('StaticImageCharacterRenderer', () => {
   });
 
   it('rejects mismatched decoded dimensions and decode failures without drawing', async () => {
+    const wrongBitmap = bitmap('neutral', undefined, 3, 2);
+    const validAfterMismatch = bitmap('happy');
     const wrong = harness({
-      'asset:C:\\characters\\neutral.png': bitmap('neutral', undefined, 3, 2),
-      'asset:C:\\characters\\happy.png': bitmap('happy'),
+      'asset:C:\\characters\\neutral.png': wrongBitmap,
+      'asset:C:\\characters\\happy.png': validAfterMismatch,
     });
     const first = new StaticImageCharacterRenderer(wrong.canvas, wrong.deps);
     await expect(first.load(manifest)).rejects.toThrow('dimensions');
     expect(wrong.drawImage).not.toHaveBeenCalled();
 
+    expect(wrongBitmap.close).toHaveBeenCalledTimes(1);
+    expect(validAfterMismatch.close).toHaveBeenCalledTimes(1);
+
+    const validBeforeFailure = bitmap('neutral');
     const failed = harness({
-      'asset:C:\\characters\\neutral.png': bitmap('neutral'),
+      'asset:C:\\characters\\neutral.png': validBeforeFailure,
       'asset:C:\\characters\\happy.png': Promise.reject(new Error('decode failed')),
     });
     const second = new StaticImageCharacterRenderer(failed.canvas, failed.deps);
     await expect(second.load(manifest)).rejects.toThrow('decode failed');
     expect(failed.drawImage).not.toHaveBeenCalled();
+    expect(validBeforeFailure.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes successful frames exactly once across repeated disposal', async () => {
+    const neutral = bitmap('neutral');
+    const happy = bitmap('happy');
+    const h = harness({
+      'asset:C:\\characters\\neutral.png': neutral,
+      'asset:C:\\characters\\happy.png': happy,
+    });
+    const renderer = new StaticImageCharacterRenderer(h.canvas, h.deps);
+    await renderer.load(manifest);
+    renderer.dispose();
+    renderer.dispose();
+    expect(neutral.close).toHaveBeenCalledTimes(1);
+    expect(happy.close).toHaveBeenCalledTimes(1);
   });
 
   it('closes every decoded bitmap exactly once and never draws late completions after dispose', async () => {
