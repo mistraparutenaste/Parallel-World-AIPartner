@@ -1,3 +1,4 @@
+use super::{MemoryAction, MemoryCandidate};
 use crate::PortError;
 use crate::conversation::ChatMessage;
 
@@ -15,6 +16,29 @@ pub struct MemoryRecord {
 pub struct StoredSummary {
     pub content: String,
     pub through_message_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvidenceSource {
+    pub conversation_id: String,
+    pub turn_id: u64,
+}
+
+impl EvidenceSource {
+    #[must_use]
+    pub fn new(conversation_id: impl Into<String>, turn_id: u64) -> Self {
+        Self {
+            conversation_id: conversation_id.into(),
+            turn_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MaintenanceReport {
+    pub dormant: usize,
+    pub deleted: usize,
+    pub remaining: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -77,6 +101,45 @@ pub trait MemoryStore {
     fn delete_memory(&mut self, id: i64) -> Result<(), PortError>;
     fn delete_summary(&mut self, conversation_id: &str) -> Result<(), PortError>;
     fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryRecord>, PortError>;
+    fn find_consolidation_candidates(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _now: i64,
+    ) -> Result<Vec<MemoryCandidate>, PortError> {
+        Ok(Vec::new())
+    }
+    fn apply_action(
+        &mut self,
+        _action: &MemoryAction,
+        _source: &EvidenceSource,
+        _now: i64,
+    ) -> Result<Option<i64>, PortError> {
+        Err(PortError("memory lifecycle mutation unsupported".into()))
+    }
+    fn record_recalled(
+        &mut self,
+        _ids: &[i64],
+        _source: &EvidenceSource,
+        _now: i64,
+    ) -> Result<(), PortError> {
+        Ok(())
+    }
+    fn search_active_for_prompt(
+        &self,
+        _query: &str,
+        _limit: usize,
+        _now: i64,
+    ) -> Result<Vec<MemoryCandidate>, PortError> {
+        Ok(Vec::new())
+    }
+    fn run_maintenance(
+        &mut self,
+        _now: i64,
+        _limit: usize,
+    ) -> Result<MaintenanceReport, PortError> {
+        Ok(MaintenanceReport::default())
+    }
 }
 
 #[allow(clippy::missing_errors_doc)]

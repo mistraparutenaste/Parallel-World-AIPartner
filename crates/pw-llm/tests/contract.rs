@@ -102,6 +102,37 @@ fn hung_server_is_bounded_by_the_production_client_timeout() {
 }
 
 #[test]
+fn cancellation_interrupts_a_request_waiting_for_response_headers() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let _connection = listener.accept().unwrap();
+        std::thread::sleep(Duration::from_secs(2));
+    });
+    let mut client = OpenAiCompatClient::new(LlmClientConfig {
+        base_url: format!("http://127.0.0.1:{port}/v1"),
+        model: "test-model".into(),
+        allow_remote: false,
+        timeout: Duration::from_secs(30),
+    })
+    .unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_in = Arc::clone(&cancel);
+    let canceller = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        cancel_in.store(true, Ordering::Relaxed);
+    });
+
+    let started = std::time::Instant::now();
+    client
+        .stream_chat(&messages(), &cancel, &mut |_| {})
+        .unwrap();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    canceller.join().unwrap();
+    server.join().unwrap();
+}
+
+#[test]
 fn sends_the_openai_chat_request_shape_and_joins_deltas() {
     let server = spawn_server(200, sse_body(&["こん", "にちは。"]));
     let mut client = client_for(server.port);

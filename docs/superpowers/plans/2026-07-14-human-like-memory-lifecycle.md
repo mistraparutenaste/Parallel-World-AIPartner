@@ -321,6 +321,7 @@ git commit -m "feat(storage): migrate memories to lifecycle schema"
 
 **Files:**
 - Modify: `crates/pw-application/src/memory/context.rs`
+- Modify: `crates/pw-application/src/memory/mod.rs`
 - Modify: `crates/pw-storage/src/memory.rs`
 
 **Interfaces:**
@@ -624,7 +625,7 @@ Expected: validation, pin-intent, JSON parsing, and exact-match fallback tests p
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add crates/pw-application/Cargo.toml crates/pw-application/src/memory/consolidation.rs crates/pw-application/src/memory/mod.rs Cargo.lock
+git add crates/pw-application/Cargo.toml crates/pw-application/src/memory/consolidation.rs crates/pw-application/src/memory/mod.rs
 git commit -m "feat(memory): classify and validate memory updates"
 ```
 

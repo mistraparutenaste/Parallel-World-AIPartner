@@ -4,19 +4,21 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pw_application::PortError;
 use pw_application::conversation::{
     ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
     PromptBuilder,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
-    DEFAULT_MEMORY_LIMIT, JapanesePersistentFactGenerator, MemoryContext, MemoryStore,
-    PersistentFactGenerator, RollingSummaryGenerator, SummaryGenerator, is_safe_persistent_content,
-    redact_persistent_content,
+    DEFAULT_MEMORY_LIMIT, EvidenceSource, HybridConsolidator, JapanesePersistentFactGenerator,
+    LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, PersistentFactGenerator,
+    ProposedAction, RollingSummaryGenerator, SummaryGenerator, has_explicit_pin_intent,
+    is_safe_persistent_content, redact_persistent_content,
 };
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
@@ -47,10 +49,30 @@ const CONVERSATION_QUEUE_CAPACITY: usize = 8;
 const ENRICHMENT_QUEUE_CAPACITY: usize = 1;
 const ENRICHMENT_PENDING_CAPACITY: usize = 64;
 const ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
+#[allow(clippy::duration_suboptimal_units)]
+const MEMORY_MAINTENANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(86_400);
+const MEMORY_MAINTENANCE_FOLLOWUP: std::time::Duration = std::time::Duration::from_millis(100);
 
-fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext {
-    let memories = memory
-        .search(query, DEFAULT_MEMORY_LIMIT)
+struct UnavailableMemoryClassifier;
+
+impl MemoryClassifier for UnavailableMemoryClassifier {
+    fn classify(
+        &mut self,
+        _: &str,
+        _: &[pw_application::memory::MemoryCandidate],
+    ) -> Result<ProposedAction, PortError> {
+        Err(PortError("memory classifier unavailable".into()))
+    }
+}
+
+fn load_memory_context<M: MemoryStore>(
+    memory: &mut M,
+    query: &str,
+    turn_id: u64,
+    now: i64,
+) -> MemoryContext {
+    let candidates = memory
+        .search_active_for_prompt(query, DEFAULT_MEMORY_LIMIT, now)
         .unwrap_or_else(|error| {
             tracing::warn!(%error, "memory search failed; continuing without long-term memory");
             Vec::new()
@@ -61,34 +83,81 @@ fn load_memory_context<M: MemoryStore>(memory: &M, query: &str) -> MemoryContext
             tracing::warn!(%error, "summary restore failed; continuing without summary");
             None
         });
-    MemoryContext {
+    let context = MemoryContext {
         user_settings: None,
-        memories: memories.into_iter().map(|item| item.content).collect(),
+        memories: candidates.iter().map(|item| item.content.clone()).collect(),
         summary: summary.map(|item| item.content),
     }
+    .bounded();
+    let recalled_ids = candidates
+        .iter()
+        .take(DEFAULT_MEMORY_LIMIT)
+        .filter(|item| !item.content.trim().is_empty())
+        .take(context.memories.len())
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    if !recalled_ids.is_empty()
+        && let Err(error) = memory.record_recalled(
+            &recalled_ids,
+            &EvidenceSource::new(DEFAULT_CONVERSATION_ID, turn_id),
+            now,
+        )
+    {
+        tracing::warn!(%error, "memory recall persistence failed; continuing with loaded context");
+    }
+    context
 }
 
 const SUMMARY_RECENT_MESSAGES: usize = 4;
 const SUMMARY_BATCH_MESSAGES: usize = 8;
 const SUMMARY_MAX_CHARS: usize = 2_000;
 
-fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), String> {
+fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
+    database_path: &Path,
+    job: &EnrichmentJob,
+    consolidator: &mut HybridConsolidator<C>,
+) -> Result<(), String> {
     let history = SqliteConversationHistory::new(
         Database::open(database_path).map_err(|error| error.to_string())?,
     );
     let mut memory =
         SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
     let mut facts = JapanesePersistentFactGenerator;
-    for fact in facts
-        .extract(user_text)
-        .map_err(|error| error.to_string())?
+    let mut statements = facts
+        .extract(&job.user_text)
+        .map_err(|error| error.to_string())?;
+    if has_explicit_pin_intent(&job.user_text)
+        && !statements
+            .iter()
+            .any(|statement| statement == &job.user_text)
     {
-        if let Err(error) =
-            memory.upsert_memory(Some(DEFAULT_CONVERSATION_ID), &fact, unix_timestamp())
-        {
-            tracing::warn!(%error, "persistent fact rejected; summary enrichment continues");
+        statements.insert(0, job.user_text.clone());
+    }
+    let source = EvidenceSource::new(DEFAULT_CONVERSATION_ID, job.turn_id);
+    for statement in statements {
+        let candidates = match memory.find_consolidation_candidates(
+            &statement,
+            DEFAULT_MEMORY_LIMIT,
+            unix_timestamp(),
+        ) {
+            Ok(candidates) => candidates,
+            Err(error) => {
+                tracing::warn!(%error, "memory candidate search failed; summary enrichment continues");
+                continue;
+            }
+        };
+        let action = consolidator.decide(&statement, &candidates);
+        if let Err(error) = memory.apply_action(&action, &source, unix_timestamp()) {
+            tracing::warn!(%error, "memory action rejected; summary enrichment continues");
         }
     }
+    update_rolling_summary(&history, &mut memory)
+}
+
+fn update_rolling_summary(
+    history: &SqliteConversationHistory,
+    memory: &mut SqliteMemoryStore,
+) -> Result<(), String> {
     let messages = history
         .list_messages(DEFAULT_CONVERSATION_ID)
         .map_err(|error| error.to_string())?;
@@ -148,25 +217,32 @@ fn process_enrichment_job(database_path: &Path, user_text: &str) -> Result<(), S
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EnrichmentJob {
+    user_text: String,
+    turn_id: u64,
+}
+
+#[allow(clippy::needless_pass_by_value)]
 #[derive(Clone)]
 struct EnrichmentSender {
     wake: SyncSender<()>,
-    pending: Arc<Mutex<Option<Vec<String>>>>,
+    pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
 }
 
 impl EnrichmentSender {
-    fn replace_latest(&self, text: String) -> Result<(), ()> {
+    fn replace_latest(&self, job: EnrichmentJob) -> Result<(), ()> {
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let batch = pending.get_or_insert_with(Vec::new);
-        if batch.iter().any(|existing| existing == &text) {
+        if batch.iter().any(|existing| existing.turn_id == job.turn_id) {
             self.metrics.coalesced();
             return Ok(());
         } else if batch.len() < ENRICHMENT_PENDING_CAPACITY {
-            batch.push(text);
+            batch.push(job);
             self.metrics.enqueued();
         } else {
             self.metrics.dropped();
@@ -200,20 +276,23 @@ impl EnrichmentSender {
 fn run_enrichment(
     database_path: &Path,
     rx: Receiver<()>,
-    pending: Arc<Mutex<Option<Vec<String>>>>,
+    pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
+    mut consolidator: HybridConsolidator<Box<dyn MemoryClassifier>>,
 ) {
     while rx.recv().is_ok() {
-        let Some(user_texts) = pending
+        let Some(jobs) = pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         else {
             continue;
         };
-        for user_text in user_texts {
+        for job in jobs {
             metrics.dequeued();
-            if let Err(error) = process_enrichment_job(database_path, &user_text) {
+            if let Err(error) =
+                process_enrichment_job_with_consolidator(database_path, &job, &mut consolidator)
+            {
                 tracing::warn!(%error, "memory enrichment job failed; worker remains available");
             }
         }
@@ -229,12 +308,68 @@ fn run_context_worker<M: MemoryStore>(
     context_metrics: Arc<QueueMetrics>,
     conversation_metrics: Arc<QueueMetrics>,
 ) {
-    while let Ok(command) = rx.recv() {
+    run_context_worker_loop(
+        memory,
+        &rx,
+        &conversation_tx,
+        &submit_metrics,
+        &context_metrics,
+        &conversation_metrics,
+        MEMORY_MAINTENANCE_INTERVAL,
+    );
+}
+
+#[cfg(test)]
+#[allow(clippy::needless_pass_by_value)]
+fn run_context_worker_with_interval<M: MemoryStore>(
+    memory: M,
+    rx: Receiver<Command>,
+    conversation_tx: SyncSender<Command>,
+    submit_metrics: Arc<QueueMetrics>,
+    context_metrics: Arc<QueueMetrics>,
+    conversation_metrics: Arc<QueueMetrics>,
+    maintenance_interval: std::time::Duration,
+) {
+    run_context_worker_loop(
+        memory,
+        &rx,
+        &conversation_tx,
+        &submit_metrics,
+        &context_metrics,
+        &conversation_metrics,
+        maintenance_interval,
+    );
+}
+
+fn run_context_worker_loop<M: MemoryStore>(
+    mut memory: M,
+    rx: &Receiver<Command>,
+    conversation_tx: &SyncSender<Command>,
+    submit_metrics: &Arc<QueueMetrics>,
+    context_metrics: &Arc<QueueMetrics>,
+    conversation_metrics: &Arc<QueueMetrics>,
+    maintenance_interval: std::time::Duration,
+) {
+    let mut next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+    loop {
+        let now = std::time::Instant::now();
+        if now >= next_maintenance {
+            next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+        }
+        let timeout = next_maintenance.saturating_duration_since(std::time::Instant::now());
+        let command = match rx.recv_timeout(timeout) {
+            Ok(command) => command,
+            Err(RecvTimeoutError::Timeout) => {
+                next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+                continue;
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        };
         submit_metrics.dequeued();
         match command {
             Command::Submit(text, turn_id) => {
                 context_metrics.enqueued();
-                let context = load_memory_context(&memory, &text);
+                let context = load_memory_context(&mut memory, &text, turn_id, unix_timestamp());
                 context_metrics.dequeued();
                 // Account for the distinct prepared-conversation queue.
                 // Increment before send so a fast consumer cannot underflow depth.
@@ -251,6 +386,21 @@ fn run_context_worker<M: MemoryStore>(
             Command::Prepared(..) => {}
         }
     }
+}
+
+fn maintenance_deadline<M: MemoryStore>(
+    memory: &mut M,
+    maintenance_interval: std::time::Duration,
+) -> std::time::Instant {
+    let delay = match memory.run_maintenance(unix_timestamp(), 100) {
+        Ok(report) if report.remaining => MEMORY_MAINTENANCE_FOLLOWUP.min(maintenance_interval),
+        Ok(_) => maintenance_interval,
+        Err(error) => {
+            tracing::warn!(%error, "memory maintenance failed; context worker remains available");
+            maintenance_interval
+        }
+    };
+    std::time::Instant::now() + delay
 }
 
 fn unix_timestamp() -> i64 {
@@ -362,6 +512,18 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             )
             .is_ok()
             {
+                if let Some(enrichment) = &self.enrichment
+                    && enrichment
+                        .replace_latest(EnrichmentJob {
+                            user_text: user.clone(),
+                            turn_id: retry_turn.value(),
+                        })
+                        .is_err()
+                {
+                    tracing::warn!(
+                        "memory enrichment worker unavailable; conversation remains available"
+                    );
+                }
                 pending.remove(&retry_turn);
             }
         }
@@ -391,7 +553,12 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             tracing::warn!(%error, "conversation history persistence degraded to memory");
         } else {
             if let Some(enrichment) = &self.enrichment
-                && enrichment.replace_latest(user_text.clone()).is_err()
+                && enrichment
+                    .replace_latest(EnrichmentJob {
+                        user_text: user_text.clone(),
+                        turn_id: turn.value(),
+                    })
+                    .is_err()
             {
                 tracing::warn!(
                     "memory enrichment worker unavailable; conversation remains available"
@@ -444,12 +611,14 @@ struct Worker {
     thread: Option<std::thread::JoinHandle<()>>,
     context_thread: Option<std::thread::JoinHandle<()>>,
     enrichment_thread: Option<std::thread::JoinHandle<()>>,
+    enrichment_cancel: Arc<AtomicBool>,
 }
 
 impl Worker {
     fn shutdown(mut self) -> Result<(), String> {
         // Dropping the sole submit sender disconnects the bounded queue even when full.
         // The context worker then drops its conversation sender, cascading shutdown.
+        self.enrichment_cancel.store(true, Ordering::SeqCst);
         drop(self.tx);
         let result = join_worker(self.context_thread.take(), "context");
         let conversation = join_worker(self.thread.take(), "conversation");
@@ -662,13 +831,13 @@ impl ChatService {
         app: AppHandle<R>,
         settings: &LlmSettingsDto,
     ) -> Result<Worker, String> {
-        let llm = OpenAiCompatClient::new(LlmClientConfig {
+        let llm_config = LlmClientConfig {
             base_url: settings.base_url.clone(),
             model: settings.model.clone(),
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
-        })
-        .map_err(|error| error.to_string())?;
+        };
+        let llm = OpenAiCompatClient::new(llm_config.clone()).map_err(|error| error.to_string())?;
 
         let character_prompt = with_character_abilities(&app, settings.character_prompt.clone());
         let config = OrchestratorConfig {
@@ -684,6 +853,7 @@ impl ChatService {
         let (conversation_tx, rx) = sync_channel::<Command>(CONVERSATION_QUEUE_CAPACITY);
         let (enrichment_wake, enrichment_rx) = sync_channel::<()>(ENRICHMENT_QUEUE_CAPACITY);
         let enrichment_pending = Arc::new(Mutex::new(None));
+        let enrichment_cancel = Arc::new(AtomicBool::new(false));
         let enrichment_tx = EnrichmentSender {
             wake: enrichment_wake,
             pending: Arc::clone(&enrichment_pending),
@@ -745,7 +915,27 @@ impl ChatService {
             .name("pw-memory-enrichment".into())
             .spawn({
                 let metrics = Arc::clone(&self.enrichment_metrics);
-                move || run_enrichment(&enrichment_path, enrichment_rx, enrichment_pending, metrics)
+                let classifier_cancel = Arc::clone(&enrichment_cancel);
+                move || {
+                    let enrichment_classifier: Box<dyn MemoryClassifier> =
+                        match OpenAiCompatClient::new(llm_config) {
+                            Ok(client) => Box::new(LlmMemoryClassifier::new_with_cancel(
+                                client,
+                                classifier_cancel,
+                            )),
+                            Err(error) => {
+                                tracing::warn!(%error, "memory classifier unavailable; using exact-match fallback");
+                                Box::new(UnavailableMemoryClassifier)
+                            }
+                        };
+                    run_enrichment(
+                        &enrichment_path,
+                        enrichment_rx,
+                        enrichment_pending,
+                        metrics,
+                        HybridConsolidator::new(enrichment_classifier),
+                    );
+                }
             })
             .map_err(|error| format!("failed to spawn memory enrichment worker: {error}"))?;
 
@@ -780,6 +970,7 @@ impl ChatService {
             thread: Some(thread),
             context_thread: Some(context_thread),
             enrichment_thread: Some(enrichment_thread),
+            enrichment_cancel,
         })
     }
 }
@@ -923,8 +1114,13 @@ impl<R: Runtime> ConversationEvents for TauriConversationEvents<R> {
 mod tests {
     use std::sync::Mutex;
 
-    use pw_application::history::ConversationHistory;
-    use pw_application::memory::{MemoryRecord, StoredSummary};
+    use pw_application::history::{
+        ConversationHistory, StoredConversation, StoredMessage, StoredTurn,
+    };
+    use pw_application::memory::{
+        HybridConsolidator, MemoryAction, MemoryCandidate, MemoryClassifier, MemoryRecord,
+        MemoryState, ProposedAction, StoredSummary,
+    };
     use pw_domain::reply::TurnTracker;
     use pw_storage::{Database, SqliteConversationHistory};
 
@@ -980,6 +1176,7 @@ mod tests {
             thread: Some(std::thread::spawn(|| panic!("injected"))),
             context_thread: None,
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert!(service.reset().is_err());
         assert!(!service.cancel.load(Ordering::SeqCst));
@@ -1002,7 +1199,136 @@ mod tests {
         }
     }
 
-    struct FailingMemory;
+    struct ExactFakeClassifier;
+
+    impl MemoryClassifier for ExactFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            Ok(candidates
+                .iter()
+                .find(|candidate| candidate.content == statement)
+                .map_or_else(
+                    || ProposedAction::Add {
+                        content: statement.to_owned(),
+                    },
+                    |candidate| ProposedAction::Reinforce {
+                        memory_id: candidate.id,
+                    },
+                ))
+        }
+    }
+
+    struct PinFakeClassifier;
+
+    impl MemoryClassifier for PinFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            if has_explicit_pin_intent(statement) {
+                return Ok(ProposedAction::Pin {
+                    memory_id: candidates.first().map(|candidate| candidate.id),
+                    content: candidates.is_empty().then(|| "私は猫が好きです".to_owned()),
+                });
+            }
+            Ok(ProposedAction::Add {
+                content: statement.to_owned(),
+            })
+        }
+    }
+
+    struct ContradictionFakeClassifier;
+
+    impl MemoryClassifier for ContradictionFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            Ok(candidates.first().map_or_else(
+                || ProposedAction::Add {
+                    content: statement.to_owned(),
+                },
+                |candidate| ProposedAction::Supersede {
+                    old_memory_id: candidate.id,
+                    content: statement.to_owned(),
+                },
+            ))
+        }
+    }
+
+    #[test]
+    fn unavailable_classifier_uses_only_exact_match_fallback() {
+        let candidate = MemoryCandidate {
+            id: 7,
+            content: "私は猫が好きです".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 1,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
+        assert_eq!(
+            consolidator.decide("私は猫が好きです。", std::slice::from_ref(&candidate)),
+            MemoryAction::Reinforce {
+                memory_id: 7,
+                pin: false,
+            }
+        );
+        assert_eq!(
+            consolidator.decide("私は犬が好きです", &[candidate]),
+            MemoryAction::Ignore
+        );
+    }
+
+    type MaintenanceCalls = Arc<Mutex<Vec<(i64, usize)>>>;
+
+    struct FailingMemory {
+        maintenance_calls: Option<MaintenanceCalls>,
+        active_candidates: Option<Vec<MemoryCandidate>>,
+        recalled_ids: Option<Arc<Mutex<Vec<i64>>>>,
+        recall_fails: bool,
+    }
+
+    impl FailingMemory {
+        fn new() -> Self {
+            Self {
+                maintenance_calls: None,
+                active_candidates: None,
+                recalled_ids: None,
+                recall_fails: false,
+            }
+        }
+
+        fn tracking_maintenance(calls: MaintenanceCalls) -> Self {
+            Self {
+                maintenance_calls: Some(calls),
+                active_candidates: None,
+                recalled_ids: None,
+                recall_fails: false,
+            }
+        }
+
+        fn recording_recall(
+            candidates: Vec<MemoryCandidate>,
+            recalled_ids: Arc<Mutex<Vec<i64>>>,
+            recall_fails: bool,
+        ) -> Self {
+            Self {
+                maintenance_calls: None,
+                active_candidates: Some(candidates),
+                recalled_ids: Some(recalled_ids),
+                recall_fails,
+            }
+        }
+    }
+
     impl MemoryStore for FailingMemory {
         fn load_summary(
             &self,
@@ -1046,6 +1372,41 @@ mod tests {
             _: &str,
             _: usize,
         ) -> Result<Vec<MemoryRecord>, pw_application::PortError> {
+            Err(pw_application::PortError("failed".into()))
+        }
+        fn search_active_for_prompt(
+            &self,
+            _: &str,
+            _: usize,
+            _: i64,
+        ) -> Result<Vec<MemoryCandidate>, pw_application::PortError> {
+            self.active_candidates
+                .clone()
+                .ok_or_else(|| pw_application::PortError("failed".into()))
+        }
+        fn record_recalled(
+            &mut self,
+            ids: &[i64],
+            _: &EvidenceSource,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            if let Some(recalled_ids) = &self.recalled_ids {
+                recalled_ids.lock().unwrap().extend_from_slice(ids);
+            }
+            if self.recall_fails {
+                Err(pw_application::PortError("failed".into()))
+            } else {
+                Ok(())
+            }
+        }
+        fn run_maintenance(
+            &mut self,
+            now: i64,
+            limit: usize,
+        ) -> Result<pw_application::memory::MaintenanceReport, pw_application::PortError> {
+            if let Some(calls) = &self.maintenance_calls {
+                calls.lock().unwrap().push((now, limit));
+            }
             Err(pw_application::PortError("failed".into()))
         }
     }
@@ -1099,12 +1460,169 @@ mod tests {
         }
     }
 
+    struct RemainingMaintenance {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl MemoryStore for RemainingMaintenance {
+        fn load_summary(&self, _: &str) -> Result<Option<StoredSummary>, PortError> {
+            Ok(None)
+        }
+        fn upsert_summary(&mut self, _: &str, _: &str, _: i64, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn upsert_memory(&mut self, _: Option<&str>, _: &str, _: i64) -> Result<i64, PortError> {
+            unreachable!()
+        }
+        fn update_memory(&mut self, _: i64, _: &str, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn delete_memory(&mut self, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn delete_summary(&mut self, _: &str) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn search(&self, _: &str, _: usize) -> Result<Vec<MemoryRecord>, PortError> {
+            Ok(Vec::new())
+        }
+        fn run_maintenance(
+            &mut self,
+            _: i64,
+            _: usize,
+        ) -> Result<pw_application::memory::MaintenanceReport, PortError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(pw_application::memory::MaintenanceReport {
+                dormant: 0,
+                deleted: 0,
+                remaining: call == 0,
+            })
+        }
+    }
+
     #[test]
     fn memory_lookup_failure_keeps_the_conversation_path_available() {
+        let mut memory = FailingMemory::new();
         assert_eq!(
-            load_memory_context(&FailingMemory, "hello"),
+            load_memory_context(&mut memory, "hello", 1, 100),
             MemoryContext::default()
         );
+    }
+
+    #[test]
+    fn memory_context_prompt_context_excludes_dormant_and_records_only_included_active_memory() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-context-lifecycle-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        memory
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "cats were an old preference".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                0,
+            )
+            .unwrap();
+        memory.run_maintenance(31 * 86_400, 100).unwrap();
+        let active = memory
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "cats are an active preference".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 2),
+                31 * 86_400,
+            )
+            .unwrap()
+            .unwrap();
+
+        let context = load_memory_context(&mut memory, "cats", 21, 31 * 86_400);
+        let repeated = load_memory_context(&mut memory, "cats", 21, 31 * 86_400);
+
+        assert_eq!(context.memories, ["cats are an active preference"]);
+        assert_eq!(repeated, context);
+        drop(memory);
+        let database = Database::open(&path).unwrap();
+        let recalled = {
+            let mut statement = database
+                .connection()
+                .prepare(
+                    "SELECT source_turn_id FROM memory_evidence WHERE memory_id=?1 AND kind='recalled' ORDER BY id",
+                )
+                .unwrap();
+            statement
+                .query_map([active], |row| row.get::<_, i64>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(recalled, [21]);
+        drop(database);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn maintenance_failure_does_not_disconnect_context_worker() {
+        let mut memory = FailingMemory::new();
+        assert!(memory.run_maintenance(100, 100).is_err());
+        let context = load_memory_context(&mut memory, "query", 1, 100);
+        assert!(context.memories.is_empty());
+    }
+
+    fn candidate(id: i64, content: impl Into<String>) -> MemoryCandidate {
+        MemoryCandidate {
+            id,
+            content: content.into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 1,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        }
+    }
+
+    #[test]
+    fn memory_context_records_only_ids_retained_by_count_empty_and_character_bounds() {
+        let recalled_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut memory = FailingMemory::recording_recall(
+            vec![
+                candidate(1, ""),
+                candidate(2, "a".repeat(1_999)),
+                candidate(3, "bc"),
+                candidate(4, "excluded by character bound"),
+                candidate(5, "also excluded"),
+                candidate(6, "excluded by count bound"),
+            ],
+            Arc::clone(&recalled_ids),
+            false,
+        );
+
+        let context = load_memory_context(&mut memory, "query", 7, 100);
+
+        assert_eq!(context.memories.len(), 2);
+        assert_eq!(context.memories[0].chars().count(), 1_999);
+        assert_eq!(context.memories[1], "b");
+        assert_eq!(*recalled_ids.lock().unwrap(), [2, 3]);
+    }
+
+    #[test]
+    fn memory_context_survives_recall_persistence_failure() {
+        let recalled_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut memory = FailingMemory::recording_recall(
+            vec![candidate(9, "kept memory")],
+            Arc::clone(&recalled_ids),
+            true,
+        );
+
+        let context = load_memory_context(&mut memory, "query", 8, 200);
+
+        assert_eq!(context.memories, ["kept memory"]);
+        assert_eq!(*recalled_ids.lock().unwrap(), [9]);
     }
 
     #[test]
@@ -1112,43 +1630,177 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("pw-enrichment-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            history,
+            DEFAULT_CONVERSATION_ID,
+            Some(sender),
+        );
         let mut tracker = TurnTracker::new();
-        for (user, assistant) in [
-            ("古い質問", "古い回答"),
-            ("次の質問", "次の回答"),
-            ("私は猫が好きです", "覚えました"),
-        ] {
-            persist_completed_turn(
-                &mut history,
-                DEFAULT_CONVERSATION_ID,
-                tracker.begin_turn(),
-                user,
-                assistant,
-            )
-            .unwrap();
+        for assistant in ["覚えました", "もう一度覚えました"] {
+            let turn = tracker.begin_turn();
+            events.on_user_message(turn, "私は猫が好きです");
+            events.on_reply_complete(turn, assistant);
         }
-        drop(history);
-        let (tx, rx) = sync_channel(8);
-        let pending = Arc::new(Mutex::new(Some(vec!["私は猫が好きです".to_owned()])));
-        let worker_pending = Arc::clone(&pending);
+        drop(events);
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
             run_enrichment(
                 &worker_path,
                 rx,
-                worker_pending,
+                pending,
                 Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(Box::new(ExactFakeClassifier) as Box<dyn MemoryClassifier>),
             );
         });
-        tx.send(()).unwrap();
-        drop(tx);
         worker.join().unwrap();
 
-        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
-        let context = load_memory_context(&store, "猫");
+        let mut store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let context = load_memory_context(&mut store, "猫", 3, unix_timestamp());
         assert_eq!(context.memories, ["私は猫が好きです"]);
-        assert!(context.summary.unwrap().contains("古い質問"));
+        let candidates = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].mention_count, 2);
+        drop(store);
+        let database = Database::open(&path).unwrap();
+        let evidence_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memory_evidence WHERE kind='user_mention'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(evidence_count, 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    struct FailOnceHistory {
+        inner: SqliteConversationHistory,
+        failed: bool,
+    }
+
+    impl ConversationHistory for FailOnceHistory {
+        fn store_completed_turn(&mut self, turn: &StoredTurn) -> Result<(), PortError> {
+            if !self.failed {
+                self.failed = true;
+                return Err(PortError("injected persistence failure".into()));
+            }
+            self.inner.store_completed_turn(turn)
+        }
+
+        fn max_turn_id(&self, conversation_id: &str) -> Result<Option<u64>, PortError> {
+            self.inner.max_turn_id(conversation_id)
+        }
+
+        fn reserve_turn_id(
+            &mut self,
+            conversation_id: &str,
+            created_at: i64,
+        ) -> Result<u64, PortError> {
+            self.inner.reserve_turn_id(conversation_id, created_at)
+        }
+
+        fn upsert_conversation(
+            &mut self,
+            conversation: &StoredConversation,
+        ) -> Result<(), PortError> {
+            self.inner.upsert_conversation(conversation)
+        }
+
+        fn append_message(&mut self, message: &StoredMessage) -> Result<i64, PortError> {
+            self.inner.append_message(message)
+        }
+
+        fn list_conversations(&self) -> Result<Vec<StoredConversation>, PortError> {
+            self.inner.list_conversations()
+        }
+
+        fn list_messages(&self, conversation_id: &str) -> Result<Vec<StoredMessage>, PortError> {
+            self.inner.list_messages(conversation_id)
+        }
+
+        fn delete_conversation(&mut self, conversation_id: &str) -> Result<bool, PortError> {
+            self.inner.delete_conversation(conversation_id)
+        }
+    }
+
+    #[test]
+    fn explicit_pin_enrichment_preserves_the_original_intent() {
+        let path =
+            std::env::temp_dir().join(format!("pw-enrichment-pin-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let mut consolidator = HybridConsolidator::new(PinFakeClassifier);
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は猫が好きです。覚えておいて".into(),
+                turn_id: 1,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
+
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let candidates = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert!(candidates[0].pinned);
+        assert_eq!(candidates[0].mention_count, 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn enrichment_supersedes_a_lexically_related_contradiction() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-enrichment-supersede-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut consolidator = HybridConsolidator::new(ContradictionFakeClassifier);
+        for (turn_id, user_text) in [(1, "私は猫が好きです"), (2, "私は犬が好きです")]
+        {
+            process_enrichment_job_with_consolidator(
+                &path,
+                &EnrichmentJob {
+                    user_text: user_text.into(),
+                    turn_id,
+                },
+                &mut consolidator,
+            )
+            .unwrap();
+        }
+
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        assert!(
+            store
+                .search_active_for_prompt("私は猫が好きです", 5, unix_timestamp())
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate.content != "私は猫が好きです")
+        );
+        let active = store
+            .search_active_for_prompt("私は犬が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].content, "私は犬が好きです");
+        let old = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert!(old.iter().any(|candidate| {
+            candidate.content == "私は猫が好きです" && candidate.state == MemoryState::Superseded
+        }));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1172,7 +1824,15 @@ mod tests {
         )
         .unwrap();
         drop(history);
-        process_enrichment_job(&database_path, "私は猫が好き").unwrap();
+        process_enrichment_job_with_consolidator(
+            &database_path,
+            &EnrichmentJob {
+                user_text: "私は猫が好き".into(),
+                turn_id: 1,
+            },
+            &mut HybridConsolidator::new(ExactFakeClassifier),
+        )
+        .unwrap();
 
         let reopened_history =
             SqliteConversationHistory::new(Database::open(&database_path).unwrap());
@@ -1183,8 +1843,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(restored.len(), 2);
-        let store = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
-        let context = load_memory_context(&store, "猫");
+        let mut store = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        let context = load_memory_context(&mut store, "猫", 2, unix_timestamp());
         let prompt = PromptBuilder {
             system_rules: "rules".into(),
             character_prompt: "character".into(),
@@ -1223,10 +1883,8 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        let empty_context = load_memory_context(
-            &SqliteMemoryStore::new(Database::open(&database_path).unwrap()),
-            "猫",
-        );
+        let mut empty_memory = SqliteMemoryStore::new(Database::open(&database_path).unwrap());
+        let empty_context = load_memory_context(&mut empty_memory, "猫", 3, unix_timestamp());
         assert!(empty_context.summary.is_none());
         assert!(empty_context.memories.is_empty());
         let next_prompt = PromptBuilder {
@@ -1249,7 +1907,18 @@ mod tests {
             std::env::temp_dir().join(format!("pw-enrichment-recovery-{}", std::process::id()));
         let path = root.join("db.sqlite3");
         let _ = std::fs::remove_dir_all(&root);
-        assert!(process_enrichment_job(&path, "私は猫が好きです").is_err());
+        let mut consolidator = HybridConsolidator::new(ExactFakeClassifier);
+        assert!(
+            process_enrichment_job_with_consolidator(
+                &path,
+                &EnrichmentJob {
+                    user_text: "私は猫が好きです".into(),
+                    turn_id: 8,
+                },
+                &mut consolidator,
+            )
+            .is_err()
+        );
         std::fs::create_dir_all(&root).unwrap();
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let mut tracker = TurnTracker::new();
@@ -1264,12 +1933,28 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "私は猫が好きです").unwrap();
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
+                turn_id: 8,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
             .unwrap();
-        process_enrichment_job(&path, "私は犬が好きです").unwrap();
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "私は犬が好きです".into(),
+                turn_id: 9,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
@@ -1301,11 +1986,42 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "通常発話").unwrap();
-        let first = SqliteMemoryStore::new(Database::open(&path).unwrap())
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(
+                    Box::new(UnavailableMemoryClassifier) as Box<dyn MemoryClassifier>
+                ),
+            );
+        });
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
+                turn_id: 4,
+            })
+            .unwrap();
+        drop(sender);
+        worker.join().unwrap();
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let first = store
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
             .unwrap();
+        assert!(store.search("猫", DEFAULT_MEMORY_LIMIT).unwrap().is_empty());
+        drop(store);
+        assert!(first.through_message_id > 0);
+        assert!(!first.content.is_empty());
         assert!(first.content.contains("[REDACTED]"));
         assert!(!first.content.contains("abc"));
         assert!(!first.content.contains("xyz"));
@@ -1321,7 +2037,16 @@ mod tests {
             .unwrap();
         }
         drop(history);
-        process_enrichment_job(&path, "通常発話").unwrap();
+        let mut consolidator = HybridConsolidator::new(UnavailableMemoryClassifier);
+        process_enrichment_job_with_consolidator(
+            &path,
+            &EnrichmentJob {
+                user_text: "通常発話".into(),
+                turn_id: 7,
+            },
+            &mut consolidator,
+        )
+        .unwrap();
         let second = SqliteMemoryStore::new(Database::open(&path).unwrap())
             .load_summary(DEFAULT_CONVERSATION_ID)
             .unwrap()
@@ -1357,6 +2082,107 @@ mod tests {
     }
 
     #[test]
+    fn context_worker_recovers_from_startup_and_periodic_maintenance_failures() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = sync_channel(8);
+        let (conversation_tx, conversation_rx) = sync_channel(8);
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                FailingMemory::tracking_maintenance(worker_calls),
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", 8)),
+                Arc::new(QueueMetrics::new("test_context", 8)),
+                Arc::new(QueueMetrics::new("test_conversation", 8)),
+                std::time::Duration::from_millis(10),
+            );
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.len() >= 2);
+        assert!(recorded.iter().all(|(_, limit)| *limit == 100));
+        assert!(recorded.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+        tx.send(Command::Submit("query".into(), 1)).unwrap();
+        assert!(matches!(
+            conversation_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Command::Prepared(_, 1, _)
+        ));
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn context_worker_promptly_follows_up_when_maintenance_has_more_rows() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = sync_channel(1);
+        let (conversation_tx, _conversation_rx) = sync_channel(1);
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                RemainingMaintenance {
+                    calls: worker_calls,
+                },
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", 1)),
+                Arc::new(QueueMetrics::new("test_context", 1)),
+                Arc::new(QueueMetrics::new("test_conversation", 1)),
+                std::time::Duration::from_mins(1),
+            );
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn context_worker_runs_maintenance_while_submit_queue_stays_nonempty() {
+        const QUEUED_COMMANDS: usize = 100_000;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = sync_channel(QUEUED_COMMANDS);
+        let (conversation_tx, conversation_rx) = sync_channel(QUEUED_COMMANDS);
+        for turn_id in 0..QUEUED_COMMANDS {
+            tx.send(Command::Submit(
+                "query".into(),
+                u64::try_from(turn_id).unwrap(),
+            ))
+            .unwrap();
+        }
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                FailingMemory::tracking_maintenance(worker_calls),
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", QUEUED_COMMANDS)),
+                Arc::new(QueueMetrics::new("test_context", QUEUED_COMMANDS)),
+                Arc::new(QueueMetrics::new("test_conversation", QUEUED_COMMANDS)),
+                std::time::Duration::from_millis(1),
+            );
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(calls.lock().unwrap().len() >= 2);
+
+        drop(conversation_rx);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn persists_only_completed_user_and_assistant_messages() {
         let history = SqliteConversationHistory::new(Database::open_in_memory().unwrap());
         let events = PersistentConversationEvents::new(NoopEvents::default(), history, "chat");
@@ -1374,6 +2200,46 @@ mod tests {
         assert_eq!(messages[0].content, "kept user");
         assert_eq!(messages[1].content, "kept assistant");
         assert!(messages.iter().all(|message| message.id.is_some()));
+    }
+
+    #[test]
+    fn persistence_retry_enqueues_enrichment_only_after_success() {
+        let (wake, rx) = sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
+        };
+        let history = FailOnceHistory {
+            inner: SqliteConversationHistory::new(Database::open_in_memory().unwrap()),
+            failed: false,
+        };
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            history,
+            "chat",
+            Some(sender),
+        );
+        let mut tracker = TurnTracker::new();
+        let first = tracker.begin_turn();
+        events.on_user_message(first, "私は猫が好きです");
+        events.on_reply_complete(first, "覚えました");
+        assert!(rx.try_recv().is_err());
+
+        events.on_user_message(tracker.begin_turn(), "次の発話");
+
+        rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        assert_eq!(
+            pending.lock().unwrap().as_deref(),
+            Some(
+                [EnrichmentJob {
+                    user_text: "私は猫が好きです".into(),
+                    turn_id: first.value(),
+                }]
+                .as_slice()
+            )
+        );
     }
 
     #[test]
@@ -1464,6 +2330,7 @@ mod tests {
             thread: Some(thread),
             context_thread: None,
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         worker.tx.send(Command::Submit("turn".into(), 1)).unwrap();
 
@@ -1520,17 +2387,61 @@ mod tests {
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
-        sender.replace_latest("old".into()).unwrap();
-        sender.replace_latest("latest".into()).unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "old".into(),
+                turn_id: 1,
+            })
+            .unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "latest".into(),
+                turn_id: 2,
+            })
+            .unwrap();
         rx.recv().unwrap();
         assert_eq!(
             pending.lock().unwrap().take(),
-            Some(vec!["old".to_owned(), "latest".to_owned()])
+            Some(vec![
+                EnrichmentJob {
+                    user_text: "old".into(),
+                    turn_id: 1,
+                },
+                EnrichmentJob {
+                    user_text: "latest".into(),
+                    turn_id: 2,
+                },
+            ])
         );
         assert!(
             rx.try_recv().is_err(),
             "one wake coalesces multiple updates"
         );
+    }
+
+    #[test]
+    fn enrichment_job_preserves_turn_identity_and_is_idempotent() {
+        let (wake, rx) = sync_channel(1);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake,
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
+        };
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "私は猫が好きです".into(),
+                turn_id: 12,
+            })
+            .unwrap();
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "本文が変わっても同じターン".into(),
+                turn_id: 12,
+            })
+            .unwrap();
+        rx.recv().unwrap();
+        assert_eq!(pending.lock().unwrap().as_ref().unwrap().len(), 1);
     }
 
     #[test]
@@ -1546,9 +2457,21 @@ mod tests {
             metrics: Arc::clone(&metrics),
         };
         for index in 0..ENRICHMENT_PENDING_CAPACITY {
-            sender.replace_latest(format!("fact-{index}")).unwrap();
+            sender
+                .replace_latest(EnrichmentJob {
+                    user_text: format!("fact-{index}"),
+                    turn_id: u64::try_from(index).unwrap(),
+                })
+                .unwrap();
         }
-        assert!(sender.replace_latest("overflow".into()).is_err());
+        assert!(
+            sender
+                .replace_latest(EnrichmentJob {
+                    user_text: "overflow".into(),
+                    turn_id: u64::try_from(ENRICHMENT_PENDING_CAPACITY).unwrap(),
+                })
+                .is_err()
+        );
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.depth, ENRICHMENT_PENDING_CAPACITY);
         assert_eq!(snapshot.capacity, ENRICHMENT_PENDING_CAPACITY);
@@ -1566,9 +2489,64 @@ mod tests {
             thread: None,
             context_thread: Some(context),
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         let started = std::time::Instant::now();
         worker.shutdown().unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    struct WaitForCancelLlm {
+        started: Arc<AtomicBool>,
+    }
+
+    impl pw_application::conversation::LlmClient for WaitForCancelLlm {
+        fn stream_chat(
+            &mut self,
+            _: &[ChatMessage],
+            cancel: &AtomicBool,
+            _: &mut dyn FnMut(&str),
+        ) -> Result<(), PortError> {
+            self.started.store(true, Ordering::SeqCst);
+            while !cancel.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn worker_shutdown_cancels_an_in_flight_enrichment_classifier() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let classifier_cancel = Arc::clone(&cancel);
+        let started = Arc::new(AtomicBool::new(false));
+        let classifier_started = Arc::clone(&started);
+        let enrichment_thread = std::thread::spawn(move || {
+            let mut classifier = LlmMemoryClassifier::new_with_cancel(
+                WaitForCancelLlm {
+                    started: classifier_started,
+                },
+                classifier_cancel,
+            );
+            let _ = classifier.classify("私は猫が好き", &[]);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !started.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(started.load(Ordering::SeqCst));
+        let (tx, _rx) = sync_channel(1);
+        let worker = Worker {
+            tx,
+            settings_fingerprint: String::new(),
+            thread: None,
+            context_thread: None,
+            enrichment_thread: Some(enrichment_thread),
+            enrichment_cancel: cancel,
+        };
+
+        let shutdown_started = std::time::Instant::now();
+        worker.shutdown().unwrap();
+        assert!(shutdown_started.elapsed() < std::time::Duration::from_secs(1));
     }
 }
