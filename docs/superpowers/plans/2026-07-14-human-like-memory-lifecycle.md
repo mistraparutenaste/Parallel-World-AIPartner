@@ -321,6 +321,7 @@ git commit -m "feat(storage): migrate memories to lifecycle schema"
 
 **Files:**
 - Modify: `crates/pw-application/src/memory/context.rs`
+- Modify: `crates/pw-application/src/memory/mod.rs`
 - Modify: `crates/pw-storage/src/memory.rs`
 
 **Interfaces:**
