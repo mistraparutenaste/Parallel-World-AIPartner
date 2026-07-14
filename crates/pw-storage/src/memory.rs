@@ -292,7 +292,7 @@ fn apply_supersede(
     let replacement_id = create_memory(transaction, content, pin_replacement, source, now)?;
     transaction
         .execute(
-            "UPDATE memories SET state='superseded',pinned=0,state_changed_at=?1,superseded_by=?2,updated_at=MAX(updated_at,?1) WHERE id=?3",
+            "UPDATE memories SET state='superseded',pinned=0,state_changed_at=MAX(COALESCE(state_changed_at,updated_at,?1),updated_at,?1),superseded_by=?2,updated_at=MAX(updated_at,?1) WHERE id=?3",
             params![now, replacement_id, old_memory_id],
         )
         .map_err(|error| PortError(error.to_string()))?;
@@ -562,6 +562,7 @@ mod tests {
     use crate::Database;
     use pw_application::memory::{
         DORMANT_DELETE_AFTER_SECONDS, EvidenceSource, MemoryAction, MemoryState, MemoryStore,
+        prompt_rank,
     };
 
     #[test]
@@ -762,6 +763,155 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        let fts_count: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memories_fts WHERE memories_fts MATCH ?1",
+                ["\"猫が好き\""],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_count, 0);
+    }
+
+    #[test]
+    fn supersede_timestamps_never_move_backwards() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let old = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "prefers green tea".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 20),
+                100,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .database
+            .connection()
+            .execute("UPDATE memories SET state_changed_at=80 WHERE id=?1", [old])
+            .unwrap();
+        store
+            .apply_action(
+                &MemoryAction::Supersede {
+                    old_memory_id: old,
+                    content: "prefers black tea".into(),
+                    pin_replacement: false,
+                },
+                &EvidenceSource::new("default", 21),
+                50,
+            )
+            .unwrap();
+        let timestamps = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT state_changed_at,updated_at FROM memories WHERE id=?1",
+                [old],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .unwrap();
+        assert_eq!(timestamps, (100, 100));
+    }
+
+    #[test]
+    fn fts_bm25_normalization_and_prompt_rank_are_applied() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let lexical_best = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee coffee coffee coffee".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 30),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        let stronger_but_lexically_worse = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee preference alongside hiking music books travel cooking".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 31),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        for turn_id in 32..36 {
+            store
+                .apply_action(
+                    &MemoryAction::Reinforce {
+                        memory_id: stronger_but_lexically_worse,
+                        pin: false,
+                    },
+                    &EvidenceSource::new("default", turn_id),
+                    0,
+                )
+                .unwrap();
+        }
+        let candidates = store
+            .find_consolidation_candidates("coffee", 10, 120 * 86_400)
+            .unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].id, lexical_best);
+        assert!((candidates[0].lexical_relevance - 1.0).abs() < f64::EPSILON);
+        assert!((candidates[1].lexical_relevance - 0.0).abs() < f64::EPSILON);
+        assert!(candidates[0].strength < candidates[1].strength);
+        let best_rank = prompt_rank(candidates[0].lexical_relevance, candidates[0].strength);
+        let worst_rank = prompt_rank(candidates[1].lexical_relevance, candidates[1].strength);
+        assert!((best_rank - 0.85).abs() < f64::EPSILON);
+        assert!((worst_rank - 0.30).abs() < f64::EPSILON);
+
+        let mut tied_store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let weaker = tied_store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee cats".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 40),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        let stronger = tied_store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee dogs".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 41),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        tied_store
+            .apply_action(
+                &MemoryAction::Reinforce {
+                    memory_id: stronger,
+                    pin: false,
+                },
+                &EvidenceSource::new("default", 42),
+                0,
+            )
+            .unwrap();
+        let tied = tied_store
+            .search_active_for_prompt("coffee", 10, 120 * 86_400)
+            .unwrap();
+        assert_eq!(
+            tied.iter().map(|item| item.id).collect::<Vec<_>>(),
+            [stronger, weaker]
+        );
+        assert!(
+            tied.iter()
+                .all(|item| (item.lexical_relevance - 1.0).abs() < f64::EPSILON)
+        );
+        assert!(tied[0].strength > tied[1].strength);
     }
 
     #[test]
