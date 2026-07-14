@@ -354,6 +354,13 @@ fn run_context_worker_loop<M: MemoryStore>(
     }
     let mut next_maintenance = std::time::Instant::now() + maintenance_interval;
     loop {
+        let now = std::time::Instant::now();
+        if now >= next_maintenance {
+            if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
+                tracing::warn!(%error, "memory maintenance failed; context worker remains available");
+            }
+            next_maintenance = std::time::Instant::now() + maintenance_interval;
+        }
         let timeout = next_maintenance.saturating_duration_since(std::time::Instant::now());
         let command = match rx.recv_timeout(timeout) {
             Ok(command) => command,
@@ -1244,20 +1251,44 @@ mod tests {
         );
     }
 
+    type MaintenanceCalls = Arc<Mutex<Vec<(i64, usize)>>>;
+
     struct FailingMemory {
-        maintenance_calls: Option<Arc<AtomicU64>>,
+        maintenance_calls: Option<MaintenanceCalls>,
+        active_candidates: Option<Vec<MemoryCandidate>>,
+        recalled_ids: Option<Arc<Mutex<Vec<i64>>>>,
+        recall_fails: bool,
     }
 
     impl FailingMemory {
         fn new() -> Self {
             Self {
                 maintenance_calls: None,
+                active_candidates: None,
+                recalled_ids: None,
+                recall_fails: false,
             }
         }
 
-        fn tracking_maintenance(calls: Arc<AtomicU64>) -> Self {
+        fn tracking_maintenance(calls: MaintenanceCalls) -> Self {
             Self {
                 maintenance_calls: Some(calls),
+                active_candidates: None,
+                recalled_ids: None,
+                recall_fails: false,
+            }
+        }
+
+        fn recording_recall(
+            candidates: Vec<MemoryCandidate>,
+            recalled_ids: Arc<Mutex<Vec<i64>>>,
+            recall_fails: bool,
+        ) -> Self {
+            Self {
+                maintenance_calls: None,
+                active_candidates: Some(candidates),
+                recalled_ids: Some(recalled_ids),
+                recall_fails,
             }
         }
     }
@@ -1313,15 +1344,32 @@ mod tests {
             _: usize,
             _: i64,
         ) -> Result<Vec<MemoryCandidate>, pw_application::PortError> {
-            Err(pw_application::PortError("failed".into()))
+            self.active_candidates
+                .clone()
+                .ok_or_else(|| pw_application::PortError("failed".into()))
+        }
+        fn record_recalled(
+            &mut self,
+            ids: &[i64],
+            _: &EvidenceSource,
+            _: i64,
+        ) -> Result<(), pw_application::PortError> {
+            if let Some(recalled_ids) = &self.recalled_ids {
+                recalled_ids.lock().unwrap().extend_from_slice(ids);
+            }
+            if self.recall_fails {
+                Err(pw_application::PortError("failed".into()))
+            } else {
+                Ok(())
+            }
         }
         fn run_maintenance(
             &mut self,
-            _: i64,
-            _: usize,
+            now: i64,
+            limit: usize,
         ) -> Result<pw_application::memory::MaintenanceReport, pw_application::PortError> {
             if let Some(calls) = &self.maintenance_calls {
-                calls.fetch_add(1, Ordering::SeqCst);
+                calls.lock().unwrap().push((now, limit));
             }
             Err(pw_application::PortError("failed".into()))
         }
@@ -1447,6 +1495,58 @@ mod tests {
         assert!(memory.run_maintenance(100, 100).is_err());
         let context = load_memory_context(&mut memory, "query", 1, 100);
         assert!(context.memories.is_empty());
+    }
+
+    fn candidate(id: i64, content: impl Into<String>) -> MemoryCandidate {
+        MemoryCandidate {
+            id,
+            content: content.into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 1,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        }
+    }
+
+    #[test]
+    fn memory_context_records_only_ids_retained_by_count_empty_and_character_bounds() {
+        let recalled_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut memory = FailingMemory::recording_recall(
+            vec![
+                candidate(1, ""),
+                candidate(2, "a".repeat(1_999)),
+                candidate(3, "bc"),
+                candidate(4, "excluded by character bound"),
+                candidate(5, "also excluded"),
+                candidate(6, "excluded by count bound"),
+            ],
+            Arc::clone(&recalled_ids),
+            false,
+        );
+
+        let context = load_memory_context(&mut memory, "query", 7, 100);
+
+        assert_eq!(context.memories.len(), 2);
+        assert_eq!(context.memories[0].chars().count(), 1_999);
+        assert_eq!(context.memories[1], "b");
+        assert_eq!(*recalled_ids.lock().unwrap(), [2, 3]);
+    }
+
+    #[test]
+    fn memory_context_survives_recall_persistence_failure() {
+        let recalled_ids = Arc::new(Mutex::new(Vec::new()));
+        let mut memory = FailingMemory::recording_recall(
+            vec![candidate(9, "kept memory")],
+            Arc::clone(&recalled_ids),
+            true,
+        );
+
+        let context = load_memory_context(&mut memory, "query", 8, 200);
+
+        assert_eq!(context.memories, ["kept memory"]);
+        assert_eq!(*recalled_ids.lock().unwrap(), [9]);
     }
 
     #[test]
@@ -1864,7 +1964,7 @@ mod tests {
 
     #[test]
     fn context_worker_recovers_from_startup_and_periodic_maintenance_failures() {
-        let calls = Arc::new(AtomicU64::new(0));
+        let calls = Arc::new(Mutex::new(Vec::new()));
         let (tx, rx) = sync_channel(8);
         let (conversation_tx, conversation_rx) = sync_channel(8);
         let worker_calls = Arc::clone(&calls);
@@ -1880,10 +1980,13 @@ mod tests {
             );
         });
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-        while calls.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
+        while calls.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
             std::thread::yield_now();
         }
-        assert!(calls.load(Ordering::SeqCst) >= 2);
+        let recorded = calls.lock().unwrap().clone();
+        assert!(recorded.len() >= 2);
+        assert!(recorded.iter().all(|(_, limit)| *limit == 100));
+        assert!(recorded.windows(2).all(|pair| pair[0].0 <= pair[1].0));
         tx.send(Command::Submit("query".into(), 1)).unwrap();
         assert!(matches!(
             conversation_rx
@@ -1891,6 +1994,40 @@ mod tests {
                 .unwrap(),
             Command::Prepared(_, 1, _)
         ));
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn context_worker_runs_maintenance_while_submit_queue_stays_nonempty() {
+        const QUEUED_COMMANDS: usize = 100_000;
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = sync_channel(QUEUED_COMMANDS);
+        let (conversation_tx, conversation_rx) = sync_channel(QUEUED_COMMANDS);
+        for turn_id in 0..QUEUED_COMMANDS {
+            tx.send(Command::Submit(
+                "query".into(),
+                u64::try_from(turn_id).unwrap(),
+            ))
+            .unwrap();
+        }
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                FailingMemory::tracking_maintenance(worker_calls),
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", QUEUED_COMMANDS)),
+                Arc::new(QueueMetrics::new("test_context", QUEUED_COMMANDS)),
+                Arc::new(QueueMetrics::new("test_conversation", QUEUED_COMMANDS)),
+                std::time::Duration::from_millis(1),
+            );
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(calls.lock().unwrap().len() >= 2);
+
+        drop(conversation_rx);
         drop(tx);
         worker.join().unwrap();
     }
