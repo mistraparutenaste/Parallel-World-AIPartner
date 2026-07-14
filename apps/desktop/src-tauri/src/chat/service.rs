@@ -51,6 +51,7 @@ const ENRICHMENT_PENDING_CAPACITY: usize = 64;
 const ADAPTER_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 #[allow(clippy::duration_suboptimal_units)]
 const MEMORY_MAINTENANCE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(86_400);
+const MEMORY_MAINTENANCE_FOLLOWUP: std::time::Duration = std::time::Duration::from_millis(100);
 
 struct UnavailableMemoryClassifier;
 
@@ -349,26 +350,17 @@ fn run_context_worker_loop<M: MemoryStore>(
     conversation_metrics: &Arc<QueueMetrics>,
     maintenance_interval: std::time::Duration,
 ) {
-    if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
-        tracing::warn!(%error, "memory maintenance failed; context worker remains available");
-    }
-    let mut next_maintenance = std::time::Instant::now() + maintenance_interval;
+    let mut next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
     loop {
         let now = std::time::Instant::now();
         if now >= next_maintenance {
-            if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
-                tracing::warn!(%error, "memory maintenance failed; context worker remains available");
-            }
-            next_maintenance = std::time::Instant::now() + maintenance_interval;
+            next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
         }
         let timeout = next_maintenance.saturating_duration_since(std::time::Instant::now());
         let command = match rx.recv_timeout(timeout) {
             Ok(command) => command,
             Err(RecvTimeoutError::Timeout) => {
-                if let Err(error) = memory.run_maintenance(unix_timestamp(), 100) {
-                    tracing::warn!(%error, "memory maintenance failed; context worker remains available");
-                }
-                next_maintenance = std::time::Instant::now() + maintenance_interval;
+                next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -394,6 +386,21 @@ fn run_context_worker_loop<M: MemoryStore>(
             Command::Prepared(..) => {}
         }
     }
+}
+
+fn maintenance_deadline<M: MemoryStore>(
+    memory: &mut M,
+    maintenance_interval: std::time::Duration,
+) -> std::time::Instant {
+    let delay = match memory.run_maintenance(unix_timestamp(), 100) {
+        Ok(report) if report.remaining => MEMORY_MAINTENANCE_FOLLOWUP.min(maintenance_interval),
+        Ok(_) => maintenance_interval,
+        Err(error) => {
+            tracing::warn!(%error, "memory maintenance failed; context worker remains available");
+            maintenance_interval
+        }
+    };
+    std::time::Instant::now() + delay
 }
 
 fn unix_timestamp() -> i64 {
@@ -604,12 +611,14 @@ struct Worker {
     thread: Option<std::thread::JoinHandle<()>>,
     context_thread: Option<std::thread::JoinHandle<()>>,
     enrichment_thread: Option<std::thread::JoinHandle<()>>,
+    enrichment_cancel: Arc<AtomicBool>,
 }
 
 impl Worker {
     fn shutdown(mut self) -> Result<(), String> {
         // Dropping the sole submit sender disconnects the bounded queue even when full.
         // The context worker then drops its conversation sender, cascading shutdown.
+        self.enrichment_cancel.store(true, Ordering::SeqCst);
         drop(self.tx);
         let result = join_worker(self.context_thread.take(), "context");
         let conversation = join_worker(self.thread.take(), "conversation");
@@ -844,6 +853,7 @@ impl ChatService {
         let (conversation_tx, rx) = sync_channel::<Command>(CONVERSATION_QUEUE_CAPACITY);
         let (enrichment_wake, enrichment_rx) = sync_channel::<()>(ENRICHMENT_QUEUE_CAPACITY);
         let enrichment_pending = Arc::new(Mutex::new(None));
+        let enrichment_cancel = Arc::new(AtomicBool::new(false));
         let enrichment_tx = EnrichmentSender {
             wake: enrichment_wake,
             pending: Arc::clone(&enrichment_pending),
@@ -905,10 +915,14 @@ impl ChatService {
             .name("pw-memory-enrichment".into())
             .spawn({
                 let metrics = Arc::clone(&self.enrichment_metrics);
+                let classifier_cancel = Arc::clone(&enrichment_cancel);
                 move || {
                     let enrichment_classifier: Box<dyn MemoryClassifier> =
                         match OpenAiCompatClient::new(llm_config) {
-                            Ok(client) => Box::new(LlmMemoryClassifier::new(client)),
+                            Ok(client) => Box::new(LlmMemoryClassifier::new_with_cancel(
+                                client,
+                                classifier_cancel,
+                            )),
                             Err(error) => {
                                 tracing::warn!(%error, "memory classifier unavailable; using exact-match fallback");
                                 Box::new(UnavailableMemoryClassifier)
@@ -956,6 +970,7 @@ impl ChatService {
             thread: Some(thread),
             context_thread: Some(context_thread),
             enrichment_thread: Some(enrichment_thread),
+            enrichment_cancel,
         })
     }
 }
@@ -1161,6 +1176,7 @@ mod tests {
             thread: Some(std::thread::spawn(|| panic!("injected"))),
             context_thread: None,
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert!(service.reset().is_err());
         assert!(!service.cancel.load(Ordering::SeqCst));
@@ -1222,6 +1238,26 @@ mod tests {
             Ok(ProposedAction::Add {
                 content: statement.to_owned(),
             })
+        }
+    }
+
+    struct ContradictionFakeClassifier;
+
+    impl MemoryClassifier for ContradictionFakeClassifier {
+        fn classify(
+            &mut self,
+            statement: &str,
+            candidates: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            Ok(candidates.first().map_or_else(
+                || ProposedAction::Add {
+                    content: statement.to_owned(),
+                },
+                |candidate| ProposedAction::Supersede {
+                    old_memory_id: candidate.id,
+                    content: statement.to_owned(),
+                },
+            ))
         }
     }
 
@@ -1421,6 +1457,46 @@ mod tests {
         ) -> Result<Vec<MemoryRecord>, pw_application::PortError> {
             std::thread::sleep(std::time::Duration::from_millis(200));
             Ok(Vec::new())
+        }
+    }
+
+    struct RemainingMaintenance {
+        calls: Arc<AtomicU64>,
+    }
+
+    impl MemoryStore for RemainingMaintenance {
+        fn load_summary(&self, _: &str) -> Result<Option<StoredSummary>, PortError> {
+            Ok(None)
+        }
+        fn upsert_summary(&mut self, _: &str, _: &str, _: i64, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn upsert_memory(&mut self, _: Option<&str>, _: &str, _: i64) -> Result<i64, PortError> {
+            unreachable!()
+        }
+        fn update_memory(&mut self, _: i64, _: &str, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn delete_memory(&mut self, _: i64) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn delete_summary(&mut self, _: &str) -> Result<(), PortError> {
+            unreachable!()
+        }
+        fn search(&self, _: &str, _: usize) -> Result<Vec<MemoryRecord>, PortError> {
+            Ok(Vec::new())
+        }
+        fn run_maintenance(
+            &mut self,
+            _: i64,
+            _: usize,
+        ) -> Result<pw_application::memory::MaintenanceReport, PortError> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(pw_application::memory::MaintenanceReport {
+                dormant: 0,
+                deleted: 0,
+                remaining: call == 0,
+            })
         }
     }
 
@@ -1682,6 +1758,49 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert!(candidates[0].pinned);
         assert_eq!(candidates[0].mention_count, 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn enrichment_supersedes_a_lexically_related_contradiction() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-enrichment-supersede-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut consolidator = HybridConsolidator::new(ContradictionFakeClassifier);
+        for (turn_id, user_text) in [(1, "私は猫が好きです"), (2, "私は犬が好きです")]
+        {
+            process_enrichment_job_with_consolidator(
+                &path,
+                &EnrichmentJob {
+                    user_text: user_text.into(),
+                    turn_id,
+                },
+                &mut consolidator,
+            )
+            .unwrap();
+        }
+
+        let store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        assert!(
+            store
+                .search_active_for_prompt("私は猫が好きです", 5, unix_timestamp())
+                .unwrap()
+                .iter()
+                .all(|candidate| candidate.content != "私は猫が好きです")
+        );
+        let active = store
+            .search_active_for_prompt("私は犬が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].content, "私は犬が好きです");
+        let old = store
+            .find_consolidation_candidates("私は猫が好きです", 5, unix_timestamp())
+            .unwrap();
+        assert!(old.iter().any(|candidate| {
+            candidate.content == "私は猫が好きです" && candidate.state == MemoryState::Superseded
+        }));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1999,6 +2118,34 @@ mod tests {
     }
 
     #[test]
+    fn context_worker_promptly_follows_up_when_maintenance_has_more_rows() {
+        let calls = Arc::new(AtomicU64::new(0));
+        let (tx, rx) = sync_channel(1);
+        let (conversation_tx, _conversation_rx) = sync_channel(1);
+        let worker_calls = Arc::clone(&calls);
+        let worker = std::thread::spawn(move || {
+            run_context_worker_with_interval(
+                RemainingMaintenance {
+                    calls: worker_calls,
+                },
+                rx,
+                conversation_tx,
+                Arc::new(QueueMetrics::new("test_submit", 1)),
+                Arc::new(QueueMetrics::new("test_context", 1)),
+                Arc::new(QueueMetrics::new("test_conversation", 1)),
+                std::time::Duration::from_mins(1),
+            );
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.load(Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        drop(tx);
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn context_worker_runs_maintenance_while_submit_queue_stays_nonempty() {
         const QUEUED_COMMANDS: usize = 100_000;
         let calls = Arc::new(Mutex::new(Vec::new()));
@@ -2024,7 +2171,10 @@ mod tests {
             );
         });
 
-        std::thread::sleep(std::time::Duration::from_millis(20));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while calls.lock().unwrap().len() < 2 && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
         assert!(calls.lock().unwrap().len() >= 2);
 
         drop(conversation_rx);
@@ -2180,6 +2330,7 @@ mod tests {
             thread: Some(thread),
             context_thread: None,
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         worker.tx.send(Command::Submit("turn".into(), 1)).unwrap();
 
@@ -2338,9 +2489,64 @@ mod tests {
             thread: None,
             context_thread: Some(context),
             enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         let started = std::time::Instant::now();
         worker.shutdown().unwrap();
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    struct WaitForCancelLlm {
+        started: Arc<AtomicBool>,
+    }
+
+    impl pw_application::conversation::LlmClient for WaitForCancelLlm {
+        fn stream_chat(
+            &mut self,
+            _: &[ChatMessage],
+            cancel: &AtomicBool,
+            _: &mut dyn FnMut(&str),
+        ) -> Result<(), PortError> {
+            self.started.store(true, Ordering::SeqCst);
+            while !cancel.load(Ordering::SeqCst) {
+                std::thread::yield_now();
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn worker_shutdown_cancels_an_in_flight_enrichment_classifier() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let classifier_cancel = Arc::clone(&cancel);
+        let started = Arc::new(AtomicBool::new(false));
+        let classifier_started = Arc::clone(&started);
+        let enrichment_thread = std::thread::spawn(move || {
+            let mut classifier = LlmMemoryClassifier::new_with_cancel(
+                WaitForCancelLlm {
+                    started: classifier_started,
+                },
+                classifier_cancel,
+            );
+            let _ = classifier.classify("私は猫が好き", &[]);
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !started.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        assert!(started.load(Ordering::SeqCst));
+        let (tx, _rx) = sync_channel(1);
+        let worker = Worker {
+            tx,
+            settings_fingerprint: String::new(),
+            thread: None,
+            context_thread: None,
+            enrichment_thread: Some(enrichment_thread),
+            enrichment_cancel: cancel,
+        };
+
+        let shutdown_started = std::time::Instant::now();
+        worker.shutdown().unwrap();
+        assert!(shutdown_started.elapsed() < std::time::Duration::from_secs(1));
     }
 }

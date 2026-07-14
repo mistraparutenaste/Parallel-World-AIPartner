@@ -5,15 +5,31 @@ use pw_application::memory::{
     MemoryCandidate, MemoryEvidence, MemoryRecord, MemoryState, MemoryStore, StoredSummary,
     is_safe_persistent_content, memory_strength, prompt_rank, should_become_dormant,
 };
+use std::collections::HashSet;
+
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+
+const SEARCH_POOL_MULTIPLIER: usize = 4;
+const MAX_SEARCH_POOL: usize = 100;
+const MAX_FTS_PHRASES: usize = 16;
 
 pub struct SqliteMemoryStore {
     database: Database,
+    maintenance_active_after: Option<(i64, i64)>,
+    maintenance_expired_after: Option<(i64, i64)>,
+    maintenance_active_complete: bool,
+    maintenance_expired_complete: bool,
 }
 impl SqliteMemoryStore {
     #[must_use]
     pub const fn new(database: Database) -> Self {
-        Self { database }
+        Self {
+            database,
+            maintenance_active_after: None,
+            maintenance_expired_after: None,
+            maintenance_active_complete: false,
+            maintenance_expired_complete: false,
+        }
     }
 
     fn lifecycle_search(
@@ -26,7 +42,11 @@ impl SqliteMemoryStore {
         if query.trim().is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
-        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let requested_limit = limit;
+        let pool_limit = requested_limit
+            .saturating_mul(SEARCH_POOL_MULTIPLIER)
+            .min(MAX_SEARCH_POOL);
+        let limit = i64::try_from(pool_limit).unwrap_or(i64::MAX);
         let mut rows = if query.trim().chars().count() < 3 {
             let escaped = query
                 .trim()
@@ -41,7 +61,9 @@ impl SqliteMemoryStore {
             };
             query_candidate_rows(self.database.connection(), sql, &pattern, limit)?
         } else {
-            let phrase = format!("\"{}\"", query.trim().replace('"', "\"\""));
+            let Some(phrase) = fts_disjunction(query) else {
+                return Ok(Vec::new());
+            };
             let sql = if active_only {
                 "SELECT m.id,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 AND m.state='active' ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
             } else {
@@ -78,14 +100,68 @@ impl SqliteMemoryStore {
                 strength: memory_strength(&evidence, now),
             });
         }
+        let weakest = candidates
+            .iter()
+            .map(|candidate| candidate.strength)
+            .fold(f64::INFINITY, f64::min);
+        let strongest = candidates
+            .iter()
+            .map(|candidate| candidate.strength)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let has_strength_range = candidates.len() > 1 && (strongest - weakest).abs() > f64::EPSILON;
         candidates.sort_by(|left, right| {
-            prompt_rank(right.lexical_relevance, right.strength)
-                .total_cmp(&prompt_rank(left.lexical_relevance, left.strength))
+            let normalized_strength = |strength: f64| {
+                if has_strength_range {
+                    (strength - weakest) / (strongest - weakest)
+                } else {
+                    1.0
+                }
+            };
+            prompt_rank(right.lexical_relevance, normalized_strength(right.strength))
+                .total_cmp(&prompt_rank(
+                    left.lexical_relevance,
+                    normalized_strength(left.strength),
+                ))
                 .then_with(|| right.last_seen_at.cmp(&left.last_seen_at))
                 .then_with(|| right.id.cmp(&left.id))
         });
+        candidates.truncate(requested_limit);
         Ok(candidates)
     }
+}
+
+fn fts_disjunction(query: &str) -> Option<String> {
+    let chars = query.trim().chars().collect::<Vec<_>>();
+    if chars.len() < 3 {
+        return None;
+    }
+    let mut seen = HashSet::new();
+    let phrases = chars
+        .windows(3)
+        .map(|window| window.iter().collect::<String>())
+        .filter(|phrase| phrase.chars().any(|character| !character.is_whitespace()))
+        .filter(|phrase| seen.insert(phrase.clone()))
+        .collect::<Vec<_>>();
+    if phrases.is_empty() {
+        return None;
+    }
+    let selected = if phrases.len() <= MAX_FTS_PHRASES {
+        phrases
+    } else {
+        (0..MAX_FTS_PHRASES)
+            .map(|index| {
+                let position = index * (phrases.len() - 1) / (MAX_FTS_PHRASES - 1);
+                phrases[position].clone()
+            })
+            .collect()
+    };
+    Some(
+        selected
+            .into_iter()
+            .map(|phrase| format!("\"{}\"", phrase.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR "),
+    )
 }
 
 struct CandidateRow {
@@ -174,6 +250,56 @@ fn load_evidence(
             })
         })
         .collect()
+}
+
+fn load_active_maintenance_rows(
+    transaction: &Transaction<'_>,
+    after: Option<(i64, i64)>,
+    sql_limit: i64,
+) -> Result<Vec<(i64, i64)>, PortError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT id,last_seen_at FROM memories WHERE state='active' AND pinned=0 AND (?1 IS NULL OR last_seen_at>?1 OR (last_seen_at=?1 AND id>?2)) ORDER BY last_seen_at,id LIMIT ?3",
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    statement
+        .query_map(
+            params![
+                after.map(|cursor| cursor.0),
+                after.map(|cursor| cursor.1),
+                sql_limit
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|error| PortError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PortError(error.to_string()))
+}
+
+fn load_expired_maintenance_rows(
+    transaction: &Transaction<'_>,
+    cutoff: i64,
+    after: Option<(i64, i64)>,
+    sql_limit: i64,
+) -> Result<Vec<(i64, i64)>, PortError> {
+    let mut statement = transaction
+        .prepare(
+            "SELECT id,state_changed_at FROM memories WHERE state IN ('dormant','superseded') AND pinned=0 AND state_changed_at<=?1 AND (?2 IS NULL OR state_changed_at>?2 OR (state_changed_at=?2 AND id>?3)) ORDER BY state_changed_at,id LIMIT ?4",
+        )
+        .map_err(|error| PortError(error.to_string()))?;
+    statement
+        .query_map(
+            params![
+                cutoff,
+                after.map(|cursor| cursor.0),
+                after.map(|cursor| cursor.1),
+                sql_limit
+            ],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .map_err(|error| PortError(error.to_string()))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| PortError(error.to_string()))
 }
 
 fn source_turn_id(source: &EvidenceSource) -> Result<i64, PortError> {
@@ -500,26 +626,35 @@ impl MemoryStore for SqliteMemoryStore {
         if limit == 0 {
             return Ok(MaintenanceReport::default());
         }
-        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        if self.maintenance_active_complete && self.maintenance_expired_complete {
+            self.maintenance_active_complete = false;
+            self.maintenance_expired_complete = false;
+            self.maintenance_active_after = None;
+            self.maintenance_expired_after = None;
+        }
+        let sql_limit = i64::try_from(limit.saturating_add(1)).unwrap_or(i64::MAX);
         let transaction = self
             .database
             .connection_mut()
             .transaction()
             .map_err(|error| PortError(error.to_string()))?;
-        let active_ids = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT id FROM memories WHERE state='active' AND pinned=0 ORDER BY last_seen_at,id LIMIT ?1",
-                )
-                .map_err(|error| PortError(error.to_string()))?;
-            statement
-                .query_map([sql_limit], |row| row.get::<_, i64>(0))
-                .map_err(|error| PortError(error.to_string()))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| PortError(error.to_string()))?
+        let mut active_rows = if self.maintenance_active_complete {
+            Vec::new()
+        } else {
+            load_active_maintenance_rows(&transaction, self.maintenance_active_after, sql_limit)?
         };
+        let active_remaining = active_rows.len() > limit;
+        active_rows.truncate(limit);
+        let next_active_after = if active_remaining {
+            active_rows
+                .last()
+                .map(|(id, last_seen_at)| (*last_seen_at, *id))
+        } else {
+            None
+        };
+        let next_active_complete = !active_remaining;
         let mut dormant = 0;
-        for id in active_ids {
+        for (id, _) in active_rows {
             let evidence = load_evidence(&transaction, id)?;
             if should_become_dormant(&evidence, now) {
                 dormant += transaction
@@ -531,20 +666,28 @@ impl MemoryStore for SqliteMemoryStore {
             }
         }
         let cutoff = now.saturating_sub(DORMANT_DELETE_AFTER_SECONDS);
-        let expired_ids = {
-            let mut statement = transaction
-                .prepare(
-                    "SELECT id FROM memories WHERE state IN ('dormant','superseded') AND pinned=0 AND state_changed_at<=?1 ORDER BY state_changed_at,id LIMIT ?2",
-                )
-                .map_err(|error| PortError(error.to_string()))?;
-            statement
-                .query_map(params![cutoff, sql_limit], |row| row.get::<_, i64>(0))
-                .map_err(|error| PortError(error.to_string()))?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| PortError(error.to_string()))?
+        let mut expired_rows = if self.maintenance_expired_complete {
+            Vec::new()
+        } else {
+            load_expired_maintenance_rows(
+                &transaction,
+                cutoff,
+                self.maintenance_expired_after,
+                sql_limit,
+            )?
         };
+        let expired_remaining = expired_rows.len() > limit;
+        expired_rows.truncate(limit);
+        let next_expired_after = if expired_remaining {
+            expired_rows
+                .last()
+                .map(|(id, state_changed_at)| (*state_changed_at, *id))
+        } else {
+            None
+        };
+        let next_expired_complete = !expired_remaining;
         let mut deleted = 0;
-        for id in expired_ids {
+        for (id, _) in expired_rows {
             deleted += transaction
                 .execute("DELETE FROM memories WHERE id=?1", [id])
                 .map_err(|error| PortError(error.to_string()))?;
@@ -552,7 +695,15 @@ impl MemoryStore for SqliteMemoryStore {
         transaction
             .commit()
             .map_err(|error| PortError(error.to_string()))?;
-        Ok(MaintenanceReport { dormant, deleted })
+        self.maintenance_active_after = next_active_after;
+        self.maintenance_expired_after = next_expired_after;
+        self.maintenance_active_complete = next_active_complete;
+        self.maintenance_expired_complete = next_expired_complete;
+        Ok(MaintenanceReport {
+            dormant,
+            deleted,
+            remaining: !(self.maintenance_active_complete && self.maintenance_expired_complete),
+        })
     }
 }
 
@@ -912,6 +1063,141 @@ mod tests {
                 .all(|item| (item.lexical_relevance - 1.0).abs() < f64::EPSILON)
         );
         assert!(tied[0].strength > tied[1].strength);
+    }
+
+    #[test]
+    fn contradiction_statement_discovers_the_previous_memory_safely() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let old = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "私は猫が好き".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                1,
+            )
+            .unwrap()
+            .unwrap();
+
+        let candidates = store
+            .find_consolidation_candidates("私は犬が好き", 5, 2)
+            .unwrap();
+        assert!(candidates.iter().any(|candidate| candidate.id == old));
+
+        for query in ["", "\" OR *", "猫", "🦀🦀🦀"] {
+            assert!(store.find_consolidation_candidates(query, 5, 2).is_ok());
+        }
+    }
+
+    #[test]
+    fn prompt_rerank_oversamples_beyond_the_final_limit() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        for turn in 1..=5 {
+            store
+                .apply_action(
+                    &MemoryAction::Add {
+                        content: format!(
+                            "coffee preference coffee preference coffee preference lexical-{turn}"
+                        ),
+                        pinned: false,
+                    },
+                    &EvidenceSource::new("default", turn),
+                    0,
+                )
+                .unwrap();
+        }
+        let strong = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee preference alongside hiking".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 10),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        for turn in 11..=30 {
+            store
+                .apply_action(
+                    &MemoryAction::Reinforce {
+                        memory_id: strong,
+                        pin: false,
+                    },
+                    &EvidenceSource::new("default", turn),
+                    0,
+                )
+                .unwrap();
+        }
+        store
+            .apply_action(
+                &MemoryAction::Add {
+                    content:
+                        "coffee only with a deliberately unrelated and very long tail of words"
+                            .into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 31),
+                0,
+            )
+            .unwrap();
+
+        let final_five = store
+            .search_active_for_prompt("coffee preference", 5, 120 * 86_400)
+            .unwrap();
+        assert_eq!(final_five.len(), 5);
+        assert!(final_five.iter().any(|candidate| candidate.id == strong));
+    }
+
+    #[test]
+    fn maintenance_cursor_reaches_a_weak_row_after_one_hundred_strong_rows() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        for turn in 1..=100 {
+            let id = store
+                .apply_action(
+                    &MemoryAction::Add {
+                        content: format!("strong memory {turn}"),
+                        pinned: false,
+                    },
+                    &EvidenceSource::new("default", turn),
+                    0,
+                )
+                .unwrap()
+                .unwrap();
+            store
+                .apply_action(
+                    &MemoryAction::Reinforce {
+                        memory_id: id,
+                        pin: false,
+                    },
+                    &EvidenceSource::new("default", turn + 100),
+                    0,
+                )
+                .unwrap();
+        }
+        let weak = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "weak memory after the first page".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1_000),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(store.run_maintenance(31 * 86_400, 100).unwrap().dormant, 0);
+        assert_eq!(store.run_maintenance(31 * 86_400, 100).unwrap().dormant, 1);
+        let state: String = store
+            .database
+            .connection()
+            .query_row("SELECT state FROM memories WHERE id=?1", [weak], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(state, "dormant");
     }
 
     #[test]

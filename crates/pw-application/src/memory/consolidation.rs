@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use serde::Deserialize;
@@ -128,7 +129,7 @@ fn validate(
             .then_some(MemoryAction::Supersede {
                 old_memory_id,
                 content,
-                pin_replacement: false,
+                pin_replacement: has_explicit_pin_intent(statement),
             }),
         ProposedAction::Pin { memory_id, content } if has_explicit_pin_intent(statement) => {
             match (memory_id, content) {
@@ -198,12 +199,21 @@ pub fn has_explicit_pin_intent(statement: &str) -> bool {
 
 pub struct LlmMemoryClassifier<L> {
     llm: L,
+    cancel: Arc<AtomicBool>,
 }
 
 impl<L: LlmClient> LlmMemoryClassifier<L> {
     #[must_use]
     pub fn new(llm: L) -> Self {
-        Self { llm }
+        Self {
+            llm,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[must_use]
+    pub fn new_with_cancel(llm: L, cancel: Arc<AtomicBool>) -> Self {
+        Self { llm, cancel }
     }
 }
 
@@ -243,7 +253,7 @@ impl<L: LlmClient> MemoryClassifier for LlmMemoryClassifier<L> {
         );
         let mut output = String::new();
         self.llm
-            .stream_chat(&[system, user], &AtomicBool::new(false), &mut |delta| {
+            .stream_chat(&[system, user], &self.cancel, &mut |delta| {
                 output.push_str(delta);
             })?;
         let json = strip_optional_json_fence(&output)?;
@@ -390,6 +400,49 @@ mod tests {
                     memory_id: 1,
                     pin: false
                 }
+            );
+        }
+    }
+
+    #[test]
+    fn supersede_pins_replacement_only_with_explicit_intent() {
+        let candidates = vec![candidate(1, "私は猫が好き")];
+        for (statement, expected_pin) in
+            [("私は犬が好き", false), ("私は犬が好き。忘れないで", true)]
+        {
+            let mut consolidator =
+                HybridConsolidator::new(FakeClassifier::returns(ProposedAction::Supersede {
+                    old_memory_id: 1,
+                    content: "私は犬が好き".into(),
+                }));
+            assert_eq!(
+                consolidator.decide(statement, &candidates),
+                MemoryAction::Supersede {
+                    old_memory_id: 1,
+                    content: "私は犬が好き".into(),
+                    pin_replacement: expected_pin,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn supersede_rejects_unknown_ids_and_ungrounded_content() {
+        let candidates = vec![candidate(1, "私は猫が好き")];
+        for proposal in [
+            ProposedAction::Supersede {
+                old_memory_id: 999,
+                content: "私は犬が好き".into(),
+            },
+            ProposedAction::Supersede {
+                old_memory_id: 1,
+                content: "私は鳥が好き".into(),
+            },
+        ] {
+            let mut consolidator = HybridConsolidator::new(FakeClassifier::returns(proposal));
+            assert_eq!(
+                consolidator.decide("私は犬が好き", &candidates),
+                MemoryAction::Ignore
             );
         }
     }

@@ -38,6 +38,7 @@ impl EvidenceSource {
 pub struct MaintenanceReport {
     pub dormant: usize,
     pub deleted: usize,
+    pub remaining: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
