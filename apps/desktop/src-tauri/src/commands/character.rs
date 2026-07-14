@@ -337,7 +337,9 @@ mod tests {
     use std::sync::Mutex;
 
     use super::{load_manifest, to_dto, validate_expression, validate_motion_group};
-    use crate::character::{ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression};
+    use crate::character::{
+        LEGACY_CHARACTER_ID, ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression,
+    };
     use pw_contracts::{
         CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterRendererDto, CharacterSettingsDto,
         MotionGroupDto,
@@ -385,7 +387,7 @@ mod tests {
 
     fn live2d_character() -> ResolvedCharacter {
         ResolvedCharacter {
-            id: "legacy-live2d".into(),
+            id: LEGACY_CHARACTER_ID.into(),
             display_name: "Legacy Live2D".into(),
             profile_root: PathBuf::from("C:/data/characters/eps"),
             renderer: ResolvedRenderer::Live2d {
@@ -568,7 +570,7 @@ mod tests {
         };
         crate::character::save_character_settings(&layout, &original).unwrap();
 
-        assert_eq!(load_manifest(&layout).unwrap().id, "legacy-live2d");
+        assert_eq!(load_manifest(&layout).unwrap().id, LEGACY_CHARACTER_ID);
         assert_eq!(crate::character::load_character_settings(&layout), original);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -22,6 +22,9 @@ const MAX_IMAGE_FILE_BYTES: u64 = 32 * 1024 * 1024;
 pub(crate) const MAX_TOTAL_DECODED_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_DECODER_ALLOC_BYTES: u64 = 128 * 1024 * 1024;
 
+/// Stable identity of the virtual fallback profile; explicit manifests may not use it.
+pub const LEGACY_CHARACTER_ID: &str = "legacy-live2d";
+
 #[derive(Debug, thiserror::Error)]
 pub enum CharacterProfileError {
     #[error("failed to access {path}: {source}")]
@@ -242,6 +245,11 @@ impl CharacterCatalog {
         settings: &CharacterSettingsDto,
     ) -> Result<ResolvedCharacter, CharacterProfileError> {
         if let Some(active_id) = settings.active_character_id.as_deref() {
+            if self.explicit_profile_count == 0 && active_id == LEGACY_CHARACTER_ID {
+                return Err(CharacterProfileError::ActiveCharacterUnavailable(
+                    active_id.to_owned(),
+                ));
+            }
             return self
                 .profiles
                 .iter()
@@ -359,6 +367,12 @@ fn parse_profile(
         });
     }
     validate_name(&disk.id)?;
+    if disk.id == LEGACY_CHARACTER_ID {
+        return Err(CharacterProfileError::InvalidProfile {
+            path: manifest_path,
+            message: format!("character ID is reserved: {LEGACY_CHARACTER_ID}"),
+        });
+    }
     validate_name(&disk.display_name)?;
 
     let renderer = match disk.renderer {
@@ -426,7 +440,7 @@ fn resolve_legacy(
         .map_or_else(|| characters_root.to_path_buf(), Path::to_path_buf);
     let default_expression = resolve_live2d_default(&manifest, None)?;
     Ok(ResolvedCharacter {
-        id: "legacy-live2d".into(),
+        id: LEGACY_CHARACTER_ID.into(),
         display_name: "Legacy Live2D".into(),
         profile_root,
         renderer: live2d_renderer(manifest, default_expression),
@@ -986,6 +1000,62 @@ mod tests {
                 .profile_root
                 .starts_with(profile.canonicalize().unwrap())
         );
+    }
+
+    #[test]
+    fn reserved_virtual_legacy_id_is_rejected_for_an_explicit_profile() {
+        let fixture = Fixture::new("reserved-explicit-id");
+        fixture.add_valid_static_profile("reserved", "legacy-live2d");
+
+        let error = CharacterCatalog::discover(&fixture.layout).unwrap_err();
+
+        assert_eq!(error.stable_code(), "invalid_manifest");
+    }
+
+    #[test]
+    fn reserved_explicit_profile_never_falls_back_to_a_legacy_model() {
+        let fixture = Fixture::new("reserved-explicit-with-legacy");
+        fixture.add_valid_static_profile("reserved", "legacy-live2d");
+        std::fs::write(
+            fixture.layout.characters.join("fallback.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+
+        let error = CharacterCatalog::discover(&fixture.layout).unwrap_err();
+
+        assert_eq!(error.stable_code(), "invalid_manifest");
+    }
+
+    #[test]
+    fn normal_explicit_profile_id_remains_selectable() {
+        let fixture = Fixture::new("normal-explicit-id");
+        fixture.add_valid_static_profile("epsilon", "epsilon-static");
+
+        let resolved = CharacterCatalog::discover(&fixture.layout)
+            .unwrap()
+            .resolve(&default_settings())
+            .unwrap();
+
+        assert_eq!(resolved.id, "epsilon-static");
+    }
+
+    #[test]
+    fn persisted_reserved_id_does_not_select_the_virtual_legacy_profile() {
+        let fixture = Fixture::new("persisted-reserved-legacy");
+        std::fs::write(
+            fixture.layout.characters.join("legacy.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+        let mut settings = default_settings();
+        settings.active_character_id = Some("legacy-live2d".into());
+        let catalog = CharacterCatalog::discover(&fixture.layout).unwrap();
+
+        assert!(matches!(
+            catalog.resolve(&settings),
+            Err(CharacterProfileError::ActiveCharacterUnavailable(id)) if id == "legacy-live2d"
+        ));
     }
 
     #[test]
