@@ -85,4 +85,23 @@ describe('WebAudioSink', () => {
 
     expect(onStarted).not.toHaveBeenCalled();
   });
+
+  it('keeps playback active when the started callback throws', async () => {
+    const h = audioHarness(() => {});
+    const callbackError = new Error('reaction failed');
+    const playbackRequest = request(() => { throw callbackError; });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const sink = new WebAudioSink();
+
+    sink.play(playbackRequest);
+    await settlePlayback();
+
+    expect(h.source.start).toHaveBeenCalledOnce();
+    expect(playbackRequest.onLevel).toHaveBeenCalled();
+    expect(playbackRequest.onEnded).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      'speech playback start callback failed',
+      callbackError,
+    );
+  });
 });

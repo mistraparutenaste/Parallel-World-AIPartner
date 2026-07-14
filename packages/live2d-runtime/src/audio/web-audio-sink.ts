@@ -79,7 +79,11 @@ export class WebAudioSink implements AudioSink {
         }
       };
       source.start();
-      request.onStarted();
+      try {
+        request.onStarted();
+      } catch (error: unknown) {
+        console.error('speech playback start callback failed', error);
+      }
       tick();
     };
 
