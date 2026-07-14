@@ -78,6 +78,44 @@ pub enum CharacterProfileError {
     DecodedImageLimit { bytes: u64 },
 }
 
+impl CharacterProfileError {
+    #[must_use]
+    pub(crate) fn stable_code(&self) -> &'static str {
+        match self {
+            Self::SelectionRequired => "selection_required",
+            Self::ActiveCharacterUnavailable(_) => "active_character_unavailable",
+            Self::NoCharacterAvailable => "missing_asset",
+            Self::Io { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+                "missing_asset"
+            }
+            Self::Io { .. } => "transient_asset_read",
+            Self::InvalidProfile { .. }
+            | Self::DuplicateId(_)
+            | Self::PathEscape(_)
+            | Self::InvalidName(_)
+            | Self::DuplicateExpression(_)
+            | Self::DefaultExpressionUnavailable(_)
+            | Self::TooManyExpressions(_) => "invalid_manifest",
+            Self::ImageFileTooLarge { .. }
+            | Self::InvalidImage(_)
+            | Self::AnimatedWebp(_)
+            | Self::AlphaRequired(_)
+            | Self::ImageDimensions { .. }
+            | Self::DimensionMismatch { .. }
+            | Self::DecodedImageLimit { .. } => "invalid_image",
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn to_ipc_error(&self) -> String {
+        let safe_message = pw_domain::runtime_health::redact_diagnostic(&self.to_string());
+        format!(
+            "character_profile_error:{}:{safe_message}",
+            self.stable_code()
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CharacterCapabilities {
     pub expressions: Vec<String>,
@@ -789,6 +827,117 @@ mod tests {
 
     fn default_settings() -> CharacterSettingsDto {
         CharacterSettingsDto::default()
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Exhaustively lists every public error variant in one table.
+    fn every_profile_error_has_a_stable_ipc_code() {
+        let errors = vec![
+            (
+                CharacterProfileError::Io {
+                    path: PathBuf::from("missing"),
+                    source: std::io::Error::from(std::io::ErrorKind::NotFound),
+                },
+                "missing_asset",
+            ),
+            (
+                CharacterProfileError::Io {
+                    path: PathBuf::from("busy"),
+                    source: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+                },
+                "transient_asset_read",
+            ),
+            (
+                CharacterProfileError::InvalidProfile {
+                    path: PathBuf::new(),
+                    message: String::new(),
+                },
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::DuplicateId(String::new()),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::SelectionRequired,
+                "selection_required",
+            ),
+            (
+                CharacterProfileError::ActiveCharacterUnavailable(String::new()),
+                "active_character_unavailable",
+            ),
+            (CharacterProfileError::NoCharacterAvailable, "missing_asset"),
+            (
+                CharacterProfileError::PathEscape(PathBuf::new()),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::InvalidName(String::new()),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::DuplicateExpression(String::new()),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::DefaultExpressionUnavailable(String::new()),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::TooManyExpressions(33),
+                "invalid_manifest",
+            ),
+            (
+                CharacterProfileError::ImageFileTooLarge {
+                    path: PathBuf::new(),
+                    bytes: 1,
+                },
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::InvalidImage(PathBuf::new()),
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::AnimatedWebp(PathBuf::new()),
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::AlphaRequired(PathBuf::new()),
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::ImageDimensions {
+                    path: PathBuf::new(),
+                    width: 0,
+                    height: 0,
+                },
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::DimensionMismatch {
+                    path: PathBuf::new(),
+                    expected_width: 1,
+                    expected_height: 1,
+                    actual_width: 2,
+                    actual_height: 2,
+                },
+                "invalid_image",
+            ),
+            (
+                CharacterProfileError::DecodedImageLimit { bytes: 1 },
+                "invalid_image",
+            ),
+        ];
+
+        for (error, expected) in errors {
+            assert_eq!(error.stable_code(), expected, "{error}");
+            assert!(
+                error
+                    .to_ipc_error()
+                    .starts_with(&format!("character_profile_error:{expected}:"))
+            );
+        }
     }
 
     #[cfg(windows)]

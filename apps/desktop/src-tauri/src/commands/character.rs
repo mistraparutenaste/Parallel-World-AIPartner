@@ -123,7 +123,7 @@ fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
     let settings = load_character_settings(layout);
     CharacterCatalog::discover(layout)
         .and_then(|catalog| catalog.resolve(&settings))
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_ipc_error())
 }
 
 fn to_dto(manifest: &ResolvedCharacter) -> CharacterManifestDto {
@@ -429,7 +429,7 @@ mod tests {
         layout.create_all().unwrap();
 
         let error = load_manifest(&layout).unwrap_err();
-        assert!(error.contains("no character profile"));
+        assert!(error.starts_with("character_profile_error:missing_asset:"));
 
         std::fs::remove_dir_all(&root).unwrap();
     }

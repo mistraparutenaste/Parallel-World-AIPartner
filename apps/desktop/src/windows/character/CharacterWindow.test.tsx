@@ -65,6 +65,7 @@ function harness(options: {
   let speechOptions: Parameters<CharacterWindowDependencies['createSpeechPlayer']>[0] | undefined;
   let resetDefault: (() => void) | undefined;
   const player = { enqueue: vi.fn(), stop: vi.fn(), dispose: vi.fn() };
+  const failureReport = vi.fn();
   const invokeMock = vi.fn(async (command: string) => {
     if (command === 'get_character_manifest') {
       if (options.manifestError) throw options.manifestError;
@@ -92,7 +93,7 @@ function harness(options: {
       return idle;
     }),
     reportSuccess: vi.fn().mockResolvedValue(undefined),
-    createFailureReporter: vi.fn(() => vi.fn()),
+    createFailureReporter: vi.fn(() => failureReport),
     retry: vi.fn().mockResolvedValue(undefined),
   };
   const publish = (name: string, payload: unknown) => {
@@ -103,6 +104,7 @@ function harness(options: {
     renderer,
     idle,
     player,
+    failureReport,
     invokeMock,
     publish,
     handlers,
@@ -216,6 +218,21 @@ describe('CharacterWindow common renderer lifecycle', () => {
     await waitFor(() => expect(healthFailure.dependencies.reportSuccess).toHaveBeenCalledOnce());
     expect(healthFailure.renderer.dispose).not.toHaveBeenCalled();
     expect(screen.getAllByRole('status').at(-1)).toHaveTextContent(/待機|idle/i);
+  });
+
+  it('keeps static asset transport failures retryable but treats decoded image failures as permanent', async () => {
+    const transport = harness({
+      rendererLoad: Promise.reject(new Error('failed to fetch static expression (503): neutral.png')),
+    });
+    const first = render(<CharacterWindow dependencies={transport.dependencies} />);
+    await waitFor(() => expect(transport.failureReport).toHaveBeenCalledWith('transient_asset_read'));
+    first.unmount();
+
+    const decoded = harness({
+      rendererLoad: Promise.reject(new Error('decoded expression dimensions do not match')),
+    });
+    render(<CharacterWindow dependencies={decoded.dependencies} />);
+    await waitFor(() => expect(decoded.failureReport).toHaveBeenCalledWith('invalid_image'));
   });
 
   it('treats invalid profile selection as permanent, hides only the surface, and does not auto retry', async () => {

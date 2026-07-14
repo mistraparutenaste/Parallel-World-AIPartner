@@ -18,7 +18,7 @@ use pw_contracts::{ProcessOwnershipDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEvent
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, RuntimeHealth};
 use pw_platform::process::{ProcessSpec, ProcessSupervisor};
 use serde::Deserialize;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 trait RuntimeHealthSink: Send + Sync {
     fn publish(&self, event: RuntimeHealthEventDto);
@@ -475,17 +475,17 @@ pub fn rearm_managed_process(
 
 /// Rust-owned health state for frontend runtimes which cannot own policy state.
 pub struct FrontendRuntimeHealth {
-    character_renderer: Mutex<FeatureHealthSupervisor<SystemClock, Jitter>>,
+    character_renderer: Mutex<RendererRetryState<SystemClock, Jitter>>,
 }
 
 impl Default for FrontendRuntimeHealth {
     fn default() -> Self {
         Self {
-            character_renderer: Mutex::new(FeatureHealthSupervisor::new(
+            character_renderer: Mutex::new(RendererRetryState::new(FeatureHealthSupervisor::new(
                 RuntimeFeature::CharacterRenderer,
                 SystemClock,
                 Jitter(SystemClock.now_ms().max(1)),
-            )),
+            ))),
         }
     }
 }
@@ -497,9 +497,110 @@ impl FrontendRuntimeHealth {
             .character_renderer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut event = RuntimeHealthEventDto::from((health.health(), health.attempts()));
-        event.circuit_open = health.circuit_open();
+        let mut event =
+            RuntimeHealthEventDto::from((health.supervisor.health(), health.supervisor.attempts()));
+        event.circuit_open = health.supervisor.circuit_open();
         event
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScheduledRendererRetry {
+    generation: u64,
+    delay: Duration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererHealthOutcome {
+    transition: HealthTransition,
+    circuit_open: bool,
+    scheduled_retry: Option<ScheduledRendererRetry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RendererRetryOutcome {
+    transition: HealthTransition,
+    circuit_open: bool,
+}
+
+struct RendererRetryState<C, R> {
+    supervisor: FeatureHealthSupervisor<C, R>,
+    generation: u64,
+    pending_auto_retry: Option<u64>,
+}
+
+impl<C: Clock, R: RandomSource> RendererRetryState<C, R> {
+    const fn new(supervisor: FeatureHealthSupervisor<C, R>) -> Self {
+        Self {
+            supervisor,
+            generation: 0,
+            pending_auto_retry: None,
+        }
+    }
+
+    fn next_generation(&mut self) -> u64 {
+        self.generation = self.generation.wrapping_add(1);
+        self.pending_auto_retry = None;
+        self.generation
+    }
+
+    fn record_failure(&mut self, failure: RuntimeFailure) -> RendererHealthOutcome {
+        let generation = self.next_generation();
+        let (transition, scheduled_retry) = match self.supervisor.record_failure(failure) {
+            HealthUpdate::Changed {
+                health,
+                attempts,
+                decision,
+            } => {
+                let scheduled_retry = match decision {
+                    BackoffDecision::RetryAfter(delay) => {
+                        self.pending_auto_retry = Some(generation);
+                        Some(ScheduledRendererRetry { generation, delay })
+                    }
+                    BackoffDecision::CircuitOpen => None,
+                };
+                (
+                    HealthTransition::Changed { health, attempts },
+                    scheduled_retry,
+                )
+            }
+            HealthUpdate::Unchanged { .. } => (HealthTransition::Unchanged, None),
+        };
+        RendererHealthOutcome {
+            transition,
+            circuit_open: self.supervisor.circuit_open(),
+            scheduled_retry,
+        }
+    }
+
+    fn record_success(&mut self) -> RendererRetryOutcome {
+        self.next_generation();
+        let transition = self.supervisor.record_success();
+        RendererRetryOutcome {
+            transition,
+            circuit_open: self.supervisor.circuit_open(),
+        }
+    }
+
+    fn retry_now(&mut self) -> Result<RendererRetryOutcome, &'static str> {
+        self.next_generation();
+        let transition = self.supervisor.retry_now()?;
+        Ok(RendererRetryOutcome {
+            transition,
+            circuit_open: self.supervisor.circuit_open(),
+        })
+    }
+
+    fn run_scheduled_retry(&mut self, generation: u64) -> Option<RendererRetryOutcome> {
+        if self.pending_auto_retry != Some(generation) || !self.supervisor.can_attempt() {
+            return None;
+        }
+        self.pending_auto_retry = None;
+        let transition = self.supervisor.retry_now().ok()?;
+        Some(RendererRetryOutcome {
+            transition,
+            circuit_open: self.supervisor.circuit_open(),
+        })
     }
 }
 
@@ -584,20 +685,20 @@ pub fn report_runtime_failure<R: tauri::Runtime>(
     health: tauri::State<'_, FrontendRuntimeHealth>,
 ) -> Result<(), String> {
     require_character_renderer(feature)?;
-    let mut supervisor = health
+    let mut renderer_health = health
         .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let transition = match supervisor.record_failure(code.runtime_failure()) {
-        HealthUpdate::Changed {
-            health, attempts, ..
-        } => HealthTransition::Changed { health, attempts },
-        HealthUpdate::Unchanged { .. } => HealthTransition::Unchanged,
-    };
-    emit_transition(&app, transition, supervisor.circuit_open());
-    drop(supervisor);
-    crate::commands::character::apply_character_renderer_window_mode(&mut &app, false)?;
-    Ok(())
+    let outcome = renderer_health.record_failure(code.runtime_failure());
+    emit_transition(&app, outcome.transition, outcome.circuit_open);
+    let scheduled_retry = outcome.scheduled_retry;
+    drop(renderer_health);
+    let window_result =
+        crate::commands::character::apply_character_renderer_window_mode(&mut &app, false);
+    if let Some(scheduled_retry) = scheduled_retry {
+        spawn_character_renderer_retry(app, scheduled_retry);
+    }
+    window_result
 }
 
 #[tauri::command]
@@ -612,28 +713,54 @@ pub fn report_runtime_success<R: tauri::Runtime>(
     health: tauri::State<'_, FrontendRuntimeHealth>,
 ) -> Result<(), String> {
     require_character_renderer(feature)?;
-    let mut supervisor = health
+    let mut renderer_health = health
         .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let transition = supervisor.record_success();
-    emit_transition(&app, transition, supervisor.circuit_open());
-    drop(supervisor);
+    let outcome = renderer_health.record_success();
+    emit_transition(&app, outcome.transition, outcome.circuit_open);
+    drop(renderer_health);
     crate::commands::character::apply_character_renderer_window_mode(&mut &app, true)?;
     Ok(())
+}
+
+fn spawn_character_renderer_retry<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    scheduled: ScheduledRendererRetry,
+) {
+    std::mem::drop(tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(scheduled.delay).await;
+        let outcome = {
+            let state = app.state::<FrontendRuntimeHealth>();
+            let mut renderer_health = state
+                .character_renderer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            renderer_health.run_scheduled_retry(scheduled.generation)
+        };
+        if let Some(outcome) = outcome {
+            emit_transition(&app, outcome.transition, outcome.circuit_open);
+            let mut windows = &app;
+            if let Err(error) =
+                crate::commands::character::apply_character_renderer_window_mode(&mut windows, true)
+            {
+                tracing::warn!(%error, "failed to show character for scheduled renderer retry");
+            }
+        }
+    }));
 }
 
 fn retry_character_renderer_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     health: &FrontendRuntimeHealth,
 ) -> Result<(), String> {
-    let mut supervisor = health
+    let mut renderer_health = health
         .character_renderer
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let transition = supervisor.retry_now().map_err(str::to_owned)?;
-    emit_transition(app, transition, supervisor.circuit_open());
-    drop(supervisor);
+    let outcome = renderer_health.retry_now().map_err(str::to_owned)?;
+    emit_transition(app, outcome.transition, outcome.circuit_open);
+    drop(renderer_health);
     let mut windows = app;
     crate::commands::character::apply_character_renderer_window_mode(&mut windows, true)
 }
@@ -1255,6 +1382,118 @@ mod tests {
             pw_domain::runtime_health::HealthStatus::Recovering
         );
         assert!(matches!(decision, BackoffDecision::RetryAfter(_)));
+    }
+
+    fn renderer_retry_state(clock: &FakeClock) -> RendererRetryState<&FakeClock, MaxRandom> {
+        RendererRetryState::new(FeatureHealthSupervisor::new(
+            RuntimeFeature::CharacterRenderer,
+            clock,
+            MaxRandom,
+        ))
+    }
+
+    #[test]
+    fn transient_renderer_failure_schedules_one_generation_checked_retry() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut state = renderer_retry_state(&clock);
+        let outcome = state.record_failure(RuntimeFailure::transient(FailureCode::Internal));
+        let scheduled = outcome.scheduled_retry.expect("transient retry schedule");
+        assert!(state.run_scheduled_retry(scheduled.generation).is_none());
+        clock.0.store(
+            u64::try_from(scheduled.delay.as_millis()).unwrap(),
+            Ordering::Relaxed,
+        );
+
+        let retry = state
+            .run_scheduled_retry(scheduled.generation)
+            .expect("matching due generation retries");
+
+        let HealthTransition::Changed { health, attempts } = retry.transition else {
+            panic!("retry emits starting transition")
+        };
+        assert_eq!(
+            health.status(),
+            pw_domain::runtime_health::HealthStatus::Starting
+        );
+        assert_eq!(attempts, 1);
+        assert!(state.run_scheduled_retry(scheduled.generation).is_none());
+    }
+
+    #[test]
+    fn newer_renderer_failure_invalidates_the_older_pending_generation() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut state = renderer_retry_state(&clock);
+        let older = state
+            .record_failure(RuntimeFailure::transient(FailureCode::Internal))
+            .scheduled_retry
+            .unwrap();
+        let newer = state
+            .record_failure(RuntimeFailure::transient(FailureCode::Unavailable))
+            .scheduled_retry
+            .unwrap();
+        let deadline = state.supervisor.next_retry_at_ms().unwrap();
+        clock.0.store(deadline, Ordering::Relaxed);
+
+        assert!(state.run_scheduled_retry(older.generation).is_none());
+        assert!(state.run_scheduled_retry(newer.generation).is_some());
+    }
+
+    #[test]
+    fn success_permanent_failure_and_manual_retry_cancel_stale_auto_retry() {
+        let clock = FakeClock(AtomicU64::new(0));
+
+        let mut after_success = renderer_retry_state(&clock);
+        let scheduled = after_success
+            .record_failure(RuntimeFailure::transient(FailureCode::Internal))
+            .scheduled_retry
+            .unwrap();
+        after_success.record_success();
+        clock.0.store(1_000, Ordering::Relaxed);
+        assert!(
+            after_success
+                .run_scheduled_retry(scheduled.generation)
+                .is_none()
+        );
+
+        let mut permanent = renderer_retry_state(&clock);
+        let outcome =
+            permanent.record_failure(RuntimeFailure::permanent(FailureCode::InvalidConfiguration));
+        assert!(outcome.scheduled_retry.is_none());
+        assert!(outcome.circuit_open);
+
+        let mut manual = renderer_retry_state(&clock);
+        let scheduled = manual
+            .record_failure(RuntimeFailure::transient(FailureCode::Internal))
+            .scheduled_retry
+            .unwrap();
+        manual.retry_now().unwrap();
+        clock.0.store(2_000, Ordering::Relaxed);
+        assert!(manual.run_scheduled_retry(scheduled.generation).is_none());
+    }
+
+    #[test]
+    fn consecutive_transient_renderer_boots_stop_at_eighth_failure() {
+        let clock = FakeClock(AtomicU64::new(0));
+        let mut state = renderer_retry_state(&clock);
+
+        for attempt in 1..8 {
+            let scheduled = state
+                .record_failure(RuntimeFailure::transient(FailureCode::Internal))
+                .scheduled_retry
+                .expect("first seven failures retry");
+            let deadline = state.supervisor.next_retry_at_ms().unwrap();
+            clock.0.store(deadline, Ordering::Relaxed);
+            let retry = state.run_scheduled_retry(scheduled.generation).unwrap();
+            let HealthTransition::Changed { attempts, .. } = retry.transition else {
+                panic!()
+            };
+            assert_eq!(attempts, attempt);
+        }
+
+        let eighth = state.record_failure(RuntimeFailure::transient(FailureCode::Internal));
+        assert!(eighth.scheduled_retry.is_none());
+        assert!(eighth.circuit_open);
+        assert_eq!(state.supervisor.attempts(), 8);
     }
 
     #[test]

@@ -29,6 +29,11 @@ export function isPermanentCharacterRendererFailure(
 
 export function classifyCharacterRendererFailure(error: unknown): CharacterRendererFailureCode {
   const message = String(error).toLowerCase();
+  const stableProfileCode = /character_profile_error:(selection_required|active_character_unavailable|missing_asset|invalid_manifest|invalid_image|transient_asset_read)(?::|$)/
+    .exec(message)?.[1];
+  if (stableProfileCode !== undefined) {
+    return stableProfileCode as CharacterRendererFailureCode;
+  }
   if (
     message.includes('selection_required')
     || message.includes('selection required')
