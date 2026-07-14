@@ -8,15 +8,16 @@ use std::path::Path;
 
 use pw_contracts::{
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
+    CharacterManifestDto, CharacterRendererDto, CharacterSettingsChangedEventDto,
+    CharacterSettingsDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
     ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationMessageDto,
     ConversationStateDto, ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto,
     FailureClassDto, FrontendDiagnosticDto, FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto,
     MotionGroupDto, ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, SttPhaseDto, SttStateEventDto,
-    TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto,
-    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto, UpdateStateDto,
-    UpdateStatusDto, UserDictWordDto,
+    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, StaticExpressionDto,
+    SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto,
+    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto,
+    UpdateStateDto, UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -28,6 +29,11 @@ fn main() {
     AppStatusDto::export_all(&config).expect("export AppStatusDto bindings");
     ConversationStateDto::export_all(&config).expect("export ConversationStateDto bindings");
     CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
+    CharacterRendererDto::export_all(&config).expect("export CharacterRendererDto bindings");
+    StaticExpressionDto::export_all(&config).expect("export StaticExpressionDto bindings");
+    CharacterSettingsDto::export_all(&config).expect("export CharacterSettingsDto bindings");
+    CharacterSettingsChangedEventDto::export_all(&config)
+        .expect("export CharacterSettingsChangedEventDto bindings");
     MotionGroupDto::export_all(&config).expect("export MotionGroupDto bindings");
     CharacterCursorEventDto::export_all(&config).expect("export CharacterCursorEventDto bindings");
     AudioDeviceDto::export_all(&config).expect("export AudioDeviceDto bindings");
