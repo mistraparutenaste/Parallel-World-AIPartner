@@ -140,6 +140,39 @@ describe('createCharacterRenderer', () => {
     expect(state).toBe('disposed');
   });
 
+  it('rejects when disposal runs between the load guard and its outer continuation', async () => {
+    const modelLoaded = deferred();
+    let state: 'idle' | 'ready' | 'disposed' = 'idle';
+    const controller = {
+      get state() { return state; },
+      attach: vi.fn(async () => { state = 'ready'; }),
+      // Return the deferred promise directly. Its first reaction resumes the
+      // adapter guard; the queued disposal below runs before the guard's
+      // resolved promise can resume the outer load continuation.
+      loadModel: vi.fn(() => modelLoaded.promise),
+      setExpression: vi.fn(() => false),
+      startMotion: vi.fn(() => false),
+      setLipSyncValue: vi.fn(() => false),
+      resize: vi.fn(),
+      hitTest: vi.fn(() => false),
+      dispose: vi.fn(() => { state = 'disposed'; }),
+    };
+    const dto: Extract<CharacterRendererDto, { kind: 'live2d' }> = {
+      kind: 'live2d', model_path: 'avatar.model3.json', default_expression: null,
+      expressions: [], motion_groups: [],
+    };
+    const renderer = createCharacterRenderer(dto, {
+      canvas, convertFileSrc: (path) => path, createLive2DController: () => controller,
+    });
+    const loading = renderer.load(dto);
+    await vi.waitFor(() => expect(controller.loadModel).toHaveBeenCalledOnce());
+    modelLoaded.resolve();
+    queueMicrotask(() => renderer.dispose());
+    await expect(loading).rejects.toThrow('disposed');
+    expect(controller.dispose).toHaveBeenCalledOnce();
+    expect(state).toBe('disposed');
+  });
+
   it('fails closed for an unknown renderer kind', () => {
     expect(() => createCharacterRenderer(
       { kind: 'future_renderer' } as unknown as CharacterRendererDto,

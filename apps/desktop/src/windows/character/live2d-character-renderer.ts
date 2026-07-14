@@ -51,6 +51,9 @@ export class Live2DCharacterRenderer implements CharacterRenderer {
         createModelSource(renderer.model_path, this.#convertFileSrc),
       ),
     );
+    // The helper's successful check and this outer continuation are distinct
+    // microtasks. Reject if disposal landed in that final scheduling gap.
+    this.#ensureActive();
   }
 
   setExpression(name: string): boolean {
