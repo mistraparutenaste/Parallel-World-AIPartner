@@ -7,17 +7,24 @@ use std::fs;
 use std::path::Path;
 
 use pw_contracts::{
-    AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, CharacterCursorEventDto,
-    CharacterManifestDto, CharacterRendererDto, CharacterSettingsChangedEventDto,
-    CharacterSettingsDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
-    ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationMessageDto,
-    ConversationStateDto, ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto,
-    FailureClassDto, FrontendDiagnosticDto, FrontendErrorKindDto, HealthStatusDto, LlmSettingsDto,
-    MotionGroupDto, ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
-    RuntimeHealthEventDto, SpeechAudioEventDto, SpeechStopEventDto, StaticExpressionDto,
-    SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto,
-    TranscriptEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto,
-    UpdateStateDto, UpdateStatusDto, UserDictWordDto,
+    ActiveModeChangedEventDto, ActiveModeDto, ActiveModeSourceDto,
+    ActivityCollectionHealthEventDto, ActivityCollectionHealthStatusDto, ActivitySessionDto,
+    ActivitySessionPageDto, AppActivationRuleDto, AppStatusDto, AudioDeviceDto,
+    AudioDiagnosticsDto, AudioLevelEventDto, BehaviorSettingsChangedEventDto, BehaviorSettingsDto,
+    CharacterCursorEventDto, CharacterManifestDto, CharacterRendererDto,
+    CharacterSettingsChangedEventDto, CharacterSettingsDto, ChatMessageEventDto, ChatPlacementDto,
+    ChatRoleDto, CompanionModeDto, ConsentStateDto, ConversationHistoryDeletedEventDto,
+    ConversationLogPageDto, ConversationMessageDto, ConversationStateDto,
+    ConversationStateEventDto, DeviceFallbackEventDto, DiagnosticReportDto, ExclusionRuleDto,
+    FailureClassDto, FrequencyPolicyDto, FrontendDiagnosticDto, FrontendErrorKindDto,
+    FullscreenActivationRuleDto, HealthStatusDto, LlmSettingsDto, ModeActivationRulesDto,
+    ModeProfileDto, ModeProfilesDto, MotionGroupDto, PersonaProfileDto, PersonaSettingsDto,
+    ProcessOwnershipDto, QueueMetricsDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
+    RuntimeHealthEventDto, ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto,
+    SpeechStopEventDto, StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
+    TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto, UpdateStateDto,
+    UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -28,6 +35,35 @@ fn main() {
     let config = Config::new().with_out_dir(out_dir);
     AppStatusDto::export_all(&config).expect("export AppStatusDto bindings");
     ConversationStateDto::export_all(&config).expect("export ConversationStateDto bindings");
+    ActivitySessionDto::export_all(&config).expect("export ActivitySessionDto bindings");
+    ActivitySessionPageDto::export_all(&config).expect("export ActivitySessionPageDto bindings");
+    ConsentStateDto::export_all(&config).expect("export ConsentStateDto bindings");
+    CompanionModeDto::export_all(&config).expect("export CompanionModeDto bindings");
+    ExclusionRuleDto::export_all(&config).expect("export ExclusionRuleDto bindings");
+    FrequencyPolicyDto::export_all(&config).expect("export FrequencyPolicyDto bindings");
+    TriggerPolicyDto::export_all(&config).expect("export TriggerPolicyDto bindings");
+    ShortcutSettingsDto::export_all(&config).expect("export ShortcutSettingsDto bindings");
+    ModeProfileDto::export_all(&config).expect("export ModeProfileDto bindings");
+    ModeProfilesDto::export_all(&config).expect("export ModeProfilesDto bindings");
+    ScheduleActivationRuleDto::export_all(&config)
+        .expect("export ScheduleActivationRuleDto bindings");
+    AppActivationRuleDto::export_all(&config).expect("export AppActivationRuleDto bindings");
+    FullscreenActivationRuleDto::export_all(&config)
+        .expect("export FullscreenActivationRuleDto bindings");
+    ModeActivationRulesDto::export_all(&config).expect("export ModeActivationRulesDto bindings");
+    BehaviorSettingsDto::export_all(&config).expect("export BehaviorSettingsDto bindings");
+    ActiveModeSourceDto::export_all(&config).expect("export ActiveModeSourceDto bindings");
+    ActiveModeDto::export_all(&config).expect("export ActiveModeDto bindings");
+    BehaviorSettingsChangedEventDto::export_all(&config)
+        .expect("export BehaviorSettingsChangedEventDto bindings");
+    ActiveModeChangedEventDto::export_all(&config)
+        .expect("export ActiveModeChangedEventDto bindings");
+    ActivityCollectionHealthStatusDto::export_all(&config)
+        .expect("export ActivityCollectionHealthStatusDto bindings");
+    ActivityCollectionHealthEventDto::export_all(&config)
+        .expect("export ActivityCollectionHealthEventDto bindings");
+    PersonaProfileDto::export_all(&config).expect("export PersonaProfileDto bindings");
+    PersonaSettingsDto::export_all(&config).expect("export PersonaSettingsDto bindings");
     CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
     CharacterRendererDto::export_all(&config).expect("export CharacterRendererDto bindings");
     StaticExpressionDto::export_all(&config).expect("export StaticExpressionDto bindings");

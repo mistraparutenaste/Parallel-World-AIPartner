@@ -1,20 +1,33 @@
 //! IPC data transfer objects.
 
+mod activity;
 mod app_status;
 mod audio;
+mod behavior;
 mod character_cursor;
 mod character_manifest;
 mod chat;
 mod diagnostics;
+mod persona;
 mod runtime_health;
 mod tts;
 mod ui;
 mod update;
 
+pub use activity::{ACTIVITY_SESSION_SCHEMA_VERSION, ActivitySessionDto, ActivitySessionPageDto};
 pub use app_status::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
 pub use audio::{
     AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, DeviceFallbackEventDto, SttPhaseDto,
     SttStateEventDto, TranscriptEventDto,
+};
+pub use behavior::{
+    ACTIVE_MODE_CHANGED_EVENT, ACTIVITY_COLLECTION_HEALTH_EVENT, ActiveModeChangedEventDto,
+    ActiveModeDto, ActiveModeSourceDto, ActivityCollectionHealthEventDto,
+    ActivityCollectionHealthStatusDto, AppActivationRuleDto, BEHAVIOR_SETTINGS_CHANGED_EVENT,
+    BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsChangedEventDto, BehaviorSettingsDto,
+    CompanionModeDto, ConsentStateDto, ExclusionRuleDto, FrequencyPolicyDto,
+    FullscreenActivationRuleDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto,
+    ScheduleActivationRuleDto, ShortcutSettingsDto, TriggerPolicyDto,
 };
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{
@@ -30,6 +43,7 @@ pub use diagnostics::{
     DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto,
 };
+pub use persona::{PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto, PersonaSettingsDto};
 pub use runtime_health::{
     FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
     RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
