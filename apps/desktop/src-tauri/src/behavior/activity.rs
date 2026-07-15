@@ -8,7 +8,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use pw_contracts::{
     ACTIVITY_SESSION_SCHEMA_VERSION, ActivityCollectionHealthEventDto,
     ActivityCollectionHealthStatusDto, BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsDto,
-    ConsentStateDto, ExclusionRuleDto,
+    ConsentStateDto, ExclusionRuleDto, normalize_activity_app_id,
 };
 use pw_platform::activity::{
     DataProtector, DpapiProtector, ForegroundContextSource, ForegroundSnapshot,
@@ -25,7 +25,6 @@ const COLLECTION_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_CONTIGUOUS_GAP_SECONDS: i64 = 10;
 const RETENTION_INTERVAL_SECONDS: i64 = 86_400;
 const SECONDS_PER_DAY: i64 = 86_400;
-const MAX_EXCLUSION_APP_CHARS: usize = 260;
 const MAX_EXCLUSION_TITLE_CHARS: usize = 512;
 const MAX_EXCLUSION_TITLE_PATTERN_CHARS: usize = 128;
 const RETENTION_FAILURE_MESSAGE: &str = "activity retention failed";
@@ -383,14 +382,9 @@ fn collection_gate_open(settings: &BehaviorSettingsDto) -> bool {
 fn is_excluded(snapshot: &ForegroundSnapshot, exclusions: &[ExclusionRuleDto]) -> bool {
     exclusions.iter().any(|rule| {
         let app_matches = rule.app_id.as_ref().is_none_or(|app_id| {
-            bounded_unicode_literal_match(
-                &snapshot.app_id,
-                app_id,
-                MAX_EXCLUSION_APP_CHARS,
-                MAX_EXCLUSION_APP_CHARS,
-                LiteralMatchKind::Equal,
-            )
-            .unwrap_or(true)
+            normalize_activity_app_id(&snapshot.app_id)
+                .zip(normalize_activity_app_id(app_id))
+                .is_none_or(|(value, selector)| value == selector)
         });
         let title_matches = rule.title_pattern.as_ref().is_none_or(|pattern| {
             bounded_unicode_literal_match(
@@ -398,7 +392,6 @@ fn is_excluded(snapshot: &ForegroundSnapshot, exclusions: &[ExclusionRuleDto]) -
                 pattern,
                 MAX_EXCLUSION_TITLE_CHARS,
                 MAX_EXCLUSION_TITLE_PATTERN_CHARS,
-                LiteralMatchKind::Contains,
             )
             .unwrap_or(true)
         });
@@ -406,25 +399,15 @@ fn is_excluded(snapshot: &ForegroundSnapshot, exclusions: &[ExclusionRuleDto]) -
     })
 }
 
-#[derive(Clone, Copy)]
-enum LiteralMatchKind {
-    Equal,
-    Contains,
-}
-
 fn bounded_unicode_literal_match(
     value: &str,
     selector: &str,
     max_value_chars: usize,
     max_selector_chars: usize,
-    kind: LiteralMatchKind,
 ) -> Option<bool> {
     let value = bounded_unicode_lowercase(value, max_value_chars)?;
     let selector = bounded_unicode_lowercase(selector, max_selector_chars)?;
-    Some(match kind {
-        LiteralMatchKind::Equal => value == selector,
-        LiteralMatchKind::Contains => value.contains(&selector),
-    })
+    Some(value.contains(&selector))
 }
 
 fn bounded_unicode_lowercase(value: &str, max_chars: usize) -> Option<String> {

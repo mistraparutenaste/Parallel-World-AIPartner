@@ -2,6 +2,7 @@
 
 mod activity;
 mod atomic_json;
+mod mode;
 mod personas;
 mod settings;
 
@@ -10,6 +11,7 @@ pub use activity::{
     ActivityCollectorStartError, ActivityRepository, ActivityRepositoryError,
     ActivitySettingsSource, ActivitySettingsSourceError,
 };
+pub use mode::{ModeResolutionError, ModeResolutionInput, ResolvedMode, resolve_mode};
 pub use personas::{load_persona, migrate_legacy_character_prompt, save_persona_settings};
 pub use settings::{
     BehaviorSettingsLoadError, load_behavior_settings, load_behavior_settings_checked,

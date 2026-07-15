@@ -1,5 +1,7 @@
 //! Context-aware companion behavior and mode contracts.
 
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -7,6 +9,9 @@ pub const BEHAVIOR_SETTINGS_SCHEMA_VERSION: u16 = 1;
 pub const BEHAVIOR_SETTINGS_CHANGED_EVENT: &str = "behavior-settings-changed";
 pub const ACTIVE_MODE_CHANGED_EVENT: &str = "active-mode-changed";
 pub const ACTIVITY_COLLECTION_HEALTH_EVENT: &str = "activity-collection-health";
+pub const MAX_ACTIVITY_APP_ID_CHARS: usize = 260;
+const MAX_MODE_ACTIVATION_RULES: usize = 32;
+const MAX_APP_IDS_PER_RULE: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -251,8 +256,90 @@ impl BehaviorSettingsDto {
                 return Err(format!("{name} profile volume must be between 0 and 1"));
             }
         }
+        validate_mode_activation_rules(&self.activation)?;
         Ok(())
     }
+}
+
+fn validate_mode_activation_rules(rules: &ModeActivationRulesDto) -> Result<(), String> {
+    if rules.schedules.len() > MAX_MODE_ACTIVATION_RULES {
+        return Err("schedule activation rules must contain at most 32 entries".to_owned());
+    }
+    if rules.apps.len() > MAX_MODE_ACTIVATION_RULES {
+        return Err("app activation rules must contain at most 32 entries".to_owned());
+    }
+
+    for rule in &rules.schedules {
+        if rule.days_of_week.is_empty() {
+            return Err("schedule activation days must not be empty".to_owned());
+        }
+        let mut seen_days = [false; 7];
+        for &day in &rule.days_of_week {
+            let Some(seen) = seen_days.get_mut(usize::from(day)) else {
+                return Err("schedule activation days must be between 0 and 6".to_owned());
+            };
+            if *seen {
+                return Err("schedule activation days must be unique".to_owned());
+            }
+            *seen = true;
+        }
+
+        let start = parse_local_time(&rule.start_local_time)
+            .ok_or_else(|| "schedule activation start time must use HH:MM".to_owned())?;
+        let end = parse_local_time(&rule.end_local_time)
+            .ok_or_else(|| "schedule activation end time must use HH:MM".to_owned())?;
+        if start == end {
+            return Err("schedule activation start and end times must differ".to_owned());
+        }
+    }
+
+    for rule in &rules.apps {
+        if rule.app_ids.is_empty() || rule.app_ids.len() > MAX_APP_IDS_PER_RULE {
+            return Err("app activation rule must contain between 1 and 64 app ids".to_owned());
+        }
+        let mut normalized_ids = HashSet::with_capacity(rule.app_ids.len());
+        for app_id in &rule.app_ids {
+            if app_id.trim().is_empty() || app_id.contains(char::is_control) {
+                return Err("app activation app_id is invalid".to_owned());
+            }
+            let normalized = normalize_activity_app_id(app_id)
+                .ok_or_else(|| "app activation app_id is invalid".to_owned())?;
+            if !normalized_ids.insert(normalized) {
+                return Err("app activation app_ids must be unique".to_owned());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_local_time(value: &str) -> Option<u16> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 5
+        || bytes[2] != b':'
+        || !bytes[0].is_ascii_digit()
+        || !bytes[1].is_ascii_digit()
+        || !bytes[3].is_ascii_digit()
+        || !bytes[4].is_ascii_digit()
+    {
+        return None;
+    }
+    let hours = u16::from(bytes[0] - b'0') * 10 + u16::from(bytes[1] - b'0');
+    let minutes = u16::from(bytes[3] - b'0') * 10 + u16::from(bytes[4] - b'0');
+    (hours < 24 && minutes < 60).then_some(hours * 60 + minutes)
+}
+
+/// Produces the bounded Unicode-lowercase form used to compare foreground app ids.
+#[must_use]
+pub fn normalize_activity_app_id(value: &str) -> Option<String> {
+    let mut chars = value.chars();
+    let mut lowercase = String::with_capacity(MAX_ACTIVITY_APP_ID_CHARS.saturating_mul(4));
+    for _ in 0..MAX_ACTIVITY_APP_ID_CHARS {
+        let Some(character) = chars.next() else {
+            return Some(lowercase);
+        };
+        lowercase.extend(character.to_lowercase());
+    }
+    chars.next().is_none().then_some(lowercase)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

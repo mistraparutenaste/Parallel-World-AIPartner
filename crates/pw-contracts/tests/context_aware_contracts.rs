@@ -1,7 +1,10 @@
+#![allow(clippy::field_reassign_with_default, clippy::float_cmp)]
+
 use pw_contracts::{
     ACTIVITY_SESSION_SCHEMA_VERSION, ActiveModeChangedEventDto, ActiveModeDto, ActiveModeSourceDto,
-    ActivitySessionDto, ActivitySessionPageDto, BEHAVIOR_SETTINGS_SCHEMA_VERSION,
-    BehaviorSettingsDto, CompanionModeDto, ConsentStateDto, ExclusionRuleDto, PersonaProfileDto,
+    ActivitySessionDto, ActivitySessionPageDto, AppActivationRuleDto,
+    BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsDto, CompanionModeDto, ConsentStateDto,
+    ExclusionRuleDto, PersonaProfileDto, ScheduleActivationRuleDto,
 };
 use ts_rs::{Config, TS};
 
@@ -181,4 +184,109 @@ fn behavior_activity_exclusions_are_bounded_and_nonempty() {
         title_pattern: Some("private project".to_owned()),
     });
     assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn behavior_mode_rules_reject_invalid_schedule_structure() {
+    let invalid_rules = [
+        ScheduleActivationRuleDto {
+            enabled: false,
+            mode: CompanionModeDto::Focus,
+            days_of_week: Vec::new(),
+            start_local_time: "09:00".to_owned(),
+            end_local_time: "17:00".to_owned(),
+        },
+        ScheduleActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Focus,
+            days_of_week: vec![1, 1],
+            start_local_time: "09:00".to_owned(),
+            end_local_time: "17:00".to_owned(),
+        },
+        ScheduleActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Focus,
+            days_of_week: vec![7],
+            start_local_time: "09:00".to_owned(),
+            end_local_time: "17:00".to_owned(),
+        },
+    ];
+
+    for rule in invalid_rules {
+        let mut settings = BehaviorSettingsDto::default();
+        settings.activation.schedules.push(rule);
+        assert!(settings.validate().is_err());
+    }
+
+    for (start, end) in [
+        ("9:00", "17:00"),
+        ("09:00", "17:0"),
+        ("24:00", "17:00"),
+        ("09:60", "17:00"),
+        ("17:00", "17:00"),
+    ] {
+        let mut settings = BehaviorSettingsDto::default();
+        settings
+            .activation
+            .schedules
+            .push(ScheduleActivationRuleDto {
+                enabled: false,
+                mode: CompanionModeDto::Night,
+                days_of_week: vec![0],
+                start_local_time: start.to_owned(),
+                end_local_time: end.to_owned(),
+            });
+        assert!(settings.validate().is_err(), "{start}-{end}");
+    }
+
+    let mut settings = BehaviorSettingsDto::default();
+    settings.activation.schedules = (0..33)
+        .map(|_| ScheduleActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Normal,
+            days_of_week: vec![0],
+            start_local_time: "09:00".to_owned(),
+            end_local_time: "17:00".to_owned(),
+        })
+        .collect();
+    assert!(settings.validate().is_err());
+}
+
+#[test]
+fn behavior_mode_rules_reject_invalid_or_duplicate_app_ids() {
+    let invalid_app_ids = [
+        Vec::new(),
+        vec!["   ".to_owned()],
+        vec!["bad\0app.exe".to_owned()],
+        vec!["a".repeat(261)],
+        vec!["ÄPP.exe".to_owned(), "äpp.EXE".to_owned()],
+    ];
+
+    for app_ids in invalid_app_ids {
+        let mut settings = BehaviorSettingsDto::default();
+        settings.activation.apps.push(AppActivationRuleDto {
+            enabled: false,
+            mode: CompanionModeDto::Focus,
+            app_ids,
+        });
+        assert!(settings.validate().is_err());
+    }
+
+    let mut too_many_app_ids = BehaviorSettingsDto::default();
+    too_many_app_ids.activation.apps.push(AppActivationRuleDto {
+        enabled: true,
+        mode: CompanionModeDto::Focus,
+        app_ids: (0..65).map(|index| format!("app-{index}.exe")).collect(),
+    });
+    assert!(too_many_app_ids.validate().is_err());
+
+    let mut too_many_rules = BehaviorSettingsDto::default();
+    too_many_rules.activation.apps = (0..33)
+        .map(|index| AppActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Normal,
+            app_ids: vec![format!("app-{index}.exe")],
+        })
+        .collect();
+    assert!(too_many_rules.validate().is_err());
 }

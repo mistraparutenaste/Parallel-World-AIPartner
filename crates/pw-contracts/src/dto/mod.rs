@@ -26,8 +26,9 @@ pub use behavior::{
     ActivityCollectionHealthStatusDto, AppActivationRuleDto, BEHAVIOR_SETTINGS_CHANGED_EVENT,
     BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsChangedEventDto, BehaviorSettingsDto,
     CompanionModeDto, ConsentStateDto, ExclusionRuleDto, FrequencyPolicyDto,
-    FullscreenActivationRuleDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto,
-    ScheduleActivationRuleDto, ShortcutSettingsDto, TriggerPolicyDto,
+    FullscreenActivationRuleDto, MAX_ACTIVITY_APP_ID_CHARS, ModeActivationRulesDto, ModeProfileDto,
+    ModeProfilesDto, ScheduleActivationRuleDto, ShortcutSettingsDto, TriggerPolicyDto,
+    normalize_activity_app_id,
 };
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{
