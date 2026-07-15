@@ -720,6 +720,19 @@ struct ChatWorkerContext {
     character: Option<CharacterSnapshot>,
 }
 
+impl ChatWorkerContext {
+    fn character_control_context(
+        &self,
+    ) -> Option<crate::commands::character::CharacterControlContext> {
+        self.character.as_ref().map(|character| {
+            crate::commands::character::CharacterControlContext {
+                renderer: character.renderer,
+                capabilities: character.capabilities.clone(),
+            }
+        })
+    }
+}
+
 fn prepare_worker_context(
     persona: crate::behavior::ResolvedPersonaPrompt,
     character: Option<CharacterSnapshot>,
@@ -789,6 +802,13 @@ impl ChatService {
         } else {
             Err("language model is recovering; retry after the backoff period".to_owned())
         }
+    }
+    fn with_user_turn<T>(
+        &self,
+        submit: impl FnOnce(UserTurnLease) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let lease = self.require_healthy(UserTurnLease::new(self.interaction_gate()))?;
+        submit(lease)
     }
     /// Clears the application-owned LLM circuit.
     ///
@@ -885,7 +905,15 @@ impl ChatService {
     ///
     /// Returns an error message when the worker cannot be started.
     pub fn submit<R: Runtime>(&self, app: &AppHandle<R>, text: String) -> Result<(), String> {
-        let lease = self.require_healthy(UserTurnLease::new(self.interaction_gate()))?;
+        self.with_user_turn(|lease| self.submit_with_lease(app, text, lease))
+    }
+
+    fn submit_with_lease<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        text: String,
+        lease: UserTurnLease,
+    ) -> Result<(), String> {
         let _operation = self
             .operation
             .lock()
@@ -977,7 +1005,10 @@ impl ChatService {
         }).unwrap_or(0);
         let events = PersistentConversationEvents::new_with_enrichment(
             TauriConversationEvents {
-                runtime: AppConversationEventRuntime { app },
+                runtime: AppConversationEventRuntime {
+                    app,
+                    character_context: context.character_control_context(),
+                },
                 health: Arc::clone(&self.health),
             },
             history,
@@ -1137,11 +1168,12 @@ trait ConversationEventRuntime: Send {
 
 struct AppConversationEventRuntime<R: Runtime> {
     app: AppHandle<R>,
+    character_context: Option<crate::commands::character::CharacterControlContext>,
 }
 
 impl<R: Runtime> ConversationEventRuntime for AppConversationEventRuntime<R> {
     fn character_context(&self) -> Option<crate::commands::character::CharacterControlContext> {
-        self.app.state::<CharacterState>().control_context()
+        self.character_context.clone()
     }
 
     fn emit_to_webview(
@@ -1485,6 +1517,7 @@ mod tests {
         let layout = AppDataLayout::under(root.clone());
         layout.create_all().unwrap();
         let state = CharacterState::default();
+        state.cache_manifest(live2d_character()).unwrap();
         let mut settings = crate::chat::default_llm_settings();
         settings.character_prompt = "legacy fallback".into();
 
@@ -1493,6 +1526,22 @@ mod tests {
         assert_eq!(context.character_prompt, "legacy fallback");
         assert_eq!(context.character, None);
         assert!(!layout.config.join("personas.json").exists());
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events_with_context(
+            context.character_control_context(),
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        events.on_control(
+            TurnTracker::new().begin_turn(),
+            &ReplyControl {
+                emotion: Some("happy".into()),
+                intensity: None,
+                motion: Some("Tap".into()),
+            },
+        );
+        assert!(attempts.lock().unwrap().is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1504,7 +1553,7 @@ mod tests {
     }
 
     struct RecordingConversationRuntime {
-        state: Arc<CharacterState>,
+        character_context: Option<crate::commands::character::CharacterControlContext>,
         attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
         fail_emit: bool,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
@@ -1512,7 +1561,7 @@ mod tests {
 
     impl ConversationEventRuntime for RecordingConversationRuntime {
         fn character_context(&self) -> Option<crate::commands::character::CharacterControlContext> {
-            self.state.control_context()
+            self.character_context.clone()
         }
 
         fn emit_to_webview(
@@ -1593,14 +1642,23 @@ mod tests {
     }
 
     fn recording_events(
-        state: Arc<CharacterState>,
+        state: &CharacterState,
+        attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
+        fail_emit: bool,
+        speech: Arc<Mutex<Vec<(TurnId, String)>>>,
+    ) -> TauriConversationEvents<RecordingConversationRuntime> {
+        recording_events_with_context(state.control_context(), attempts, fail_emit, speech)
+    }
+
+    fn recording_events_with_context(
+        character_context: Option<crate::commands::character::CharacterControlContext>,
         attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
         fail_emit: bool,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
     ) -> TauriConversationEvents<RecordingConversationRuntime> {
         TauriConversationEvents {
             runtime: RecordingConversationRuntime {
-                state,
+                character_context,
                 attempts,
                 fail_emit,
                 speech,
@@ -1616,7 +1674,7 @@ mod tests {
         let before = state.control_context();
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let events = recording_events(
-            Arc::clone(&state),
+            &state,
             Arc::clone(&attempts),
             false,
             Arc::new(Mutex::new(Vec::new())),
@@ -1643,7 +1701,7 @@ mod tests {
         let before = state.control_context();
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let events = recording_events(
-            Arc::clone(&state),
+            &state,
             Arc::clone(&attempts),
             false,
             Arc::new(Mutex::new(Vec::new())),
@@ -1670,7 +1728,7 @@ mod tests {
         let before = state.control_context();
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let events = recording_events(
-            Arc::clone(&state),
+            &state,
             Arc::clone(&attempts),
             false,
             Arc::new(Mutex::new(Vec::new())),
@@ -1704,6 +1762,34 @@ mod tests {
         assert_eq!(state.control_context(), before);
     }
 
+    #[test]
+    fn worker_control_keeps_character_generation_captured_with_its_prompt() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(live2d_character()).unwrap();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            &state,
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        state.cache_manifest(static_character()).unwrap();
+        let turn = TurnTracker::new().begin_turn();
+
+        events.on_control(
+            turn,
+            &ReplyControl {
+                emotion: Some("happy".into()),
+                intensity: None,
+                motion: Some("Tap".into()),
+            },
+        );
+
+        assert_eq!(attempts.lock().unwrap().len(), 2);
+        assert_eq!(attempts.lock().unwrap()[0].event, EXPRESSION_EVENT);
+        assert_eq!(attempts.lock().unwrap()[1].event, MOTION_EVENT);
+    }
+
     struct ScriptedLlm(&'static str);
 
     impl LlmClient for ScriptedLlm {
@@ -1725,12 +1811,7 @@ mod tests {
         let before = state.control_context();
         let attempts = Arc::new(Mutex::new(Vec::new()));
         let speech = Arc::new(Mutex::new(Vec::new()));
-        let events = recording_events(
-            Arc::clone(&state),
-            Arc::clone(&attempts),
-            true,
-            Arc::clone(&speech),
-        );
+        let events = recording_events(&state, Arc::clone(&attempts), true, Arc::clone(&speech));
         let mut orchestrator = ConversationOrchestrator::new(
             OrchestratorConfig {
                 prompt: PromptBuilder {
@@ -1940,6 +2021,21 @@ mod tests {
             .expect_err("health gate must reject");
 
         assert!(error.contains("recovering"));
+        assert!(gate.is_cancelled(captured));
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_worker_start_failure_advances_epoch_and_releases() {
+        let service = ChatService::default();
+        let gate = service.interaction_gate();
+        let captured = gate.capture_idle_epoch().unwrap();
+
+        let error = service
+            .with_user_turn(|_lease| Err::<(), _>("injected worker start failure".to_owned()))
+            .unwrap_err();
+
+        assert_eq!(error, "injected worker start failure");
         assert!(gate.is_cancelled(captured));
         assert!(gate.capture_idle_epoch().is_some());
     }

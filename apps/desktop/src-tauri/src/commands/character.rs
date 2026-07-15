@@ -127,11 +127,13 @@ impl CharacterState {
 
     /// Returns identity, renderer and capabilities from one cached generation.
     #[must_use]
+    #[allow(dead_code)] // Exposed for state consumers that need one-generation snapshots.
     pub(crate) fn snapshot(&self) -> Option<CharacterSnapshot> {
         let guard = self.manifest.lock().ok()?;
         Some(CharacterSnapshot::from_manifest(guard.as_ref()?))
     }
 
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn control_context(&self) -> Option<CharacterControlContext> {
         let snapshot = self.snapshot()?;
