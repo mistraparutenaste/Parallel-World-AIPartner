@@ -235,6 +235,16 @@ impl CharacterCatalog {
         self.explicit_profile_count == 1
     }
 
+    #[must_use]
+    pub(crate) const fn has_explicit_profiles(&self) -> bool {
+        self.explicit_profile_count != 0
+    }
+
+    #[must_use]
+    pub(crate) fn profile_by_id(&self, id: &str) -> Option<&ResolvedCharacter> {
+        self.profiles.iter().find(|profile| profile.id == id)
+    }
+
     /// Resolves an exact configured ID, or the sole available profile.
     ///
     /// # Errors
@@ -265,6 +275,14 @@ impl CharacterCatalog {
             _ => Err(CharacterProfileError::SelectionRequired),
         }
     }
+}
+
+pub(crate) fn validate_profile_manifest(
+    layout: &AppDataLayout,
+    manifest_path: &Path,
+) -> Result<ResolvedCharacter, CharacterProfileError> {
+    let characters_root = canonicalize(&layout.characters)?;
+    parse_profile(&characters_root, manifest_path)
 }
 
 #[derive(Debug, Deserialize)]

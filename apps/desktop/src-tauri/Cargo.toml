@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 same-file = { workspace = true }
 tauri = { workspace = true }
+tauri-plugin-dialog = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 thiserror = { workspace = true }

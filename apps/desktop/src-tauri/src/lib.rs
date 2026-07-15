@@ -29,6 +29,7 @@ use tauri::Manager;
 #[allow(clippy::too_many_lines)] // Builder wiring is intentionally visible in one lifecycle function.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::character::CharacterState::default())
@@ -40,6 +41,9 @@ pub fn run() {
             commands::app_status::get_app_status,
             commands::character::get_character_manifest,
             commands::character::get_character_settings,
+            commands::character::get_character_setup,
+            commands::character::import_character_asset,
+            commands::character::set_active_character_renderer,
             commands::character::set_expression_idle_timeout,
             commands::character::set_expression,
             commands::character::start_motion,

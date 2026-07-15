@@ -122,6 +122,10 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-read-technical-log",
             "allow-get-character-manifest",
             "allow-get-character-settings",
+            "allow-get-character-setup",
+            "allow-import-character-asset",
+            "allow-set-active-character-renderer",
+            "dialog:allow-open",
             "allow-set-expression-idle-timeout",
             "allow-set-expression",
             "allow-start-motion",
@@ -257,4 +261,31 @@ fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
             && !permission.contains("conversation-log")
             && !permission.contains("technical-log")
     }));
+}
+
+#[test]
+fn character_source_setup_and_dialog_permissions_are_settings_only() {
+    let feature_permissions = [
+        "allow-get-character-setup",
+        "allow-import-character-asset",
+        "allow-set-active-character-renderer",
+        "dialog:allow-open",
+    ];
+    let (_, settings) = capability_permissions("settings");
+    let granted: Vec<_> = settings
+        .iter()
+        .filter(|permission| feature_permissions.contains(&permission.as_str()))
+        .map(String::as_str)
+        .collect();
+    assert_eq!(granted, feature_permissions);
+
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            permissions
+                .iter()
+                .all(|permission| !feature_permissions.contains(&permission.as_str())),
+            "character setup or dialog permission leaked into {capability}"
+        );
+    }
 }
