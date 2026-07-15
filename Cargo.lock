@@ -2850,6 +2850,7 @@ name = "pw-storage"
 version = "0.1.0"
 dependencies = [
  "pw-application",
+ "pw-platform",
  "rusqlite",
  "thiserror 2.0.18",
 ]

@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod activity;
 mod database;
 mod history;
 mod memory;
