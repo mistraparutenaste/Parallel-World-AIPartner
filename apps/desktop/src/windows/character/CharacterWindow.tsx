@@ -137,6 +137,7 @@ export function CharacterWindow({
     let pendingExpression: string | null = null;
     let manifest: CharacterManifestDto | null = null;
     let bootedCharacterId: string | null = null;
+    let requestedCharacterId: string | null | undefined;
     let interactive = true;
     let settingsRevision = 0;
     const unlisteners: Array<() => void> = [];
@@ -204,6 +205,23 @@ export function CharacterWindow({
       },
     ));
 
+    unlisteners.push(dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
+      'character-settings-changed',
+      ({ settings }) => {
+        settingsRevision += 1;
+        idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
+        const lifecycleCharacterId = requestedCharacterId === undefined
+          ? bootedCharacterId
+          : requestedCharacterId;
+        if (settings.active_character_id === lifecycleCharacterId) return;
+        requestedCharacterId = settings.active_character_id;
+        setLoadError(null);
+        setPermanentFailure(false);
+        setState('starting');
+        setRetryGeneration((generation) => generation + 1);
+      },
+    ));
+
     const boot = async () => {
       try {
         manifest = await dependencies.invoke<CharacterManifestDto>('get_character_manifest');
@@ -213,6 +231,7 @@ export function CharacterWindow({
       }
       if (disposed) return;
       bootedCharacterId = manifest.id;
+      requestedCharacterId = manifest.id;
 
       const names = expressionNames(manifest);
       const resetExpression = () => {
@@ -235,19 +254,6 @@ export function CharacterWindow({
           ({ state: conversationState }) => {
             idle?.setConversationState(conversationState);
             if (conversationState === 'interrupting') renderer?.resetSpeechReaction();
-          },
-        ),
-        dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
-          'character-settings-changed',
-          ({ settings }) => {
-            settingsRevision += 1;
-            idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
-            if (settings.active_character_id === bootedCharacterId) return;
-            bootedCharacterId = settings.active_character_id;
-            setLoadError(null);
-            setPermanentFailure(false);
-            setState('starting');
-            setRetryGeneration((generation) => generation + 1);
           },
         ),
         dependencies.subscribeEvent<CharacterCursorEventDto>('character-cursor', (payload) => {

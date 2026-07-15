@@ -174,7 +174,6 @@ export function CharacterPanel() {
     loadGate.current.begin();
     timeoutGate.current.begin();
     const requestGeneration = setupActionGate.current.begin();
-    const wasActive = setup.active_renderer === kind;
     setSetupBusy(true);
     setLoading(false);
     setMessage(null);
@@ -193,9 +192,25 @@ export function CharacterPanel() {
       });
       if (!setupActionGate.current.isCurrent(requestGeneration)) return;
       setSetup(imported);
+      const importedActiveRenderer = imported.active_renderer === kind;
+      if (importedActiveRenderer) {
+        setManifest(null);
+        try {
+          const activeManifest = await invoke<CharacterManifestDto>('get_character_manifest');
+          if (!setupActionGate.current.isCurrent(requestGeneration)) return;
+          setManifest(activeManifest);
+        } catch (error) {
+          if (!setupActionGate.current.isCurrent(requestGeneration)) return;
+          setMessage({
+            kind: 'error',
+            text: `アセットは読み込みましたが、キャラクターモデルを更新できません: ${String(error)}`,
+          });
+          return;
+        }
+      }
       setMessage({
         kind: 'success',
-        text: wasActive
+        text: importedActiveRenderer
           ? '表示中のアセットを更新しました。'
           : 'アセットを読み込みました。トグルで切替できます。',
       });
@@ -218,15 +233,28 @@ export function CharacterPanel() {
     setLoading(false);
     setMessage(null);
     try {
-      const switched = await invoke<CharacterSetupDto>('set_active_character_renderer', { kind });
-      if (!setupActionGate.current.isCurrent(requestGeneration)) return;
-      const activeManifest = await invoke<CharacterManifestDto>('get_character_manifest');
+      let switched: CharacterSetupDto;
+      try {
+        switched = await invoke<CharacterSetupDto>('set_active_character_renderer', { kind });
+      } catch (error) {
+        if (!setupActionGate.current.isCurrent(requestGeneration)) return;
+        setMessage({ kind: 'error', text: `キャラクター形式を切り替えできません: ${String(error)}` });
+        return;
+      }
       if (!setupActionGate.current.isCurrent(requestGeneration)) return;
       setSetup(switched);
-      setManifest(activeManifest);
-    } catch (error) {
-      if (!setupActionGate.current.isCurrent(requestGeneration)) return;
-      setMessage({ kind: 'error', text: `キャラクター形式を切り替えできません: ${String(error)}` });
+      setManifest(null);
+      try {
+        const activeManifest = await invoke<CharacterManifestDto>('get_character_manifest');
+        if (!setupActionGate.current.isCurrent(requestGeneration)) return;
+        setManifest(activeManifest);
+      } catch (error) {
+        if (!setupActionGate.current.isCurrent(requestGeneration)) return;
+        setMessage({
+          kind: 'error',
+          text: `切り替えは完了しましたが、キャラクターモデルを読み込めません: ${String(error)}`,
+        });
+      }
     } finally {
       if (setupActionGate.current.isCurrent(requestGeneration)) setSetupBusy(false);
     }

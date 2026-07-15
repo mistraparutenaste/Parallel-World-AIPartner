@@ -288,6 +288,27 @@ describe('CharacterWindow common renderer lifecycle', () => {
     expect(h.player.stop).toHaveBeenCalledOnce();
   });
 
+  it('recovers from selection_required when settings announce the first active character', async () => {
+    const h = harness({ manifestError: new Error('selection_required') });
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await screen.findByText(/チャットは通常どおり/);
+    expect(h.dependencies.createRenderer).not.toHaveBeenCalled();
+
+    h.invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_character_manifest') return STATIC_MANIFEST;
+      if (command === 'get_character_settings') return SETTINGS;
+      return undefined;
+    });
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: SETTINGS,
+    });
+
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+    expect(h.renderer.load).toHaveBeenCalledOnce();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
+  });
+
   it('cancels an active speech reaction when conversation enters interrupting', async () => {
     const h = harness();
     render(<CharacterWindow dependencies={h.dependencies} />);
