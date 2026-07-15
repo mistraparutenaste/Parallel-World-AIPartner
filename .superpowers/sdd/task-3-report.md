@@ -99,3 +99,36 @@ Exit code: `0`. Output contained only Git's existing LF-to-CRLF working-copy war
 
 - The installed Rust toolchain has only `x86_64-pc-windows-msvc`, so the non-Windows fallback is guarded and implemented but was not cross-compiled in this environment.
 - Tests use deterministic helpers/fakes and DPAPI round trips; they intentionally do not sample the user's real foreground window or require an elevated process. Real desktop startup integration is deferred because IPC/UI/start wiring is outside Task 3.
+
+## Review fix addendum
+
+The Task 3 review found two important gaps. Both were fixed in a follow-up TDD cycle without rewriting the original implementation.
+
+### RED evidence
+
+The expanded collector suite initially ran 17 tests with 5 expected failures:
+
+- collection-disabled settings did not run retention;
+- `Ok(None)` and excluded foreground results returned before retention;
+- retention degradation was erased by the following healthy `None`/excluded path;
+- near-epoch retention produced a negative cutoff;
+- Unicode app identifiers such as `ÄPP.EXE` / `äpp.exe` were not matched before protection.
+
+A further focused RED test proved that a simultaneous source failure replaced the still-active retention failure cause in health.
+
+### Fixes
+
+- App-id and title exclusions now share a bounded Unicode-lowercase literal matcher. Inputs are scalar-count bounded before lowercase expansion, ASCII behavior is preserved, and an over-bound comparison fails closed.
+- Retention now runs after valid settings and clock checks, before collection consent/source/exclusion decisions. Pending, declined, stale-consent, and collection-disabled states therefore still perform privacy deletion without sampling the foreground source.
+- Retention retries on `None`, excluded contexts, and source failures. Successful cleanup establishes the daily cadence; failures remain due until a successful retry.
+- A retention degradation flag prevents healthy/disabled paths from erasing the failure. Concurrent source/persistence/protection failures use stable composed messages until retention recovers.
+- Retention cutoff arithmetic now saturates at Unix epoch `0`; the repository's strict `< cutoff` behavior continues to retain rows exactly on the cutoff.
+
+### Final follow-up verification
+
+- `cargo test -p pw-platform activity`: PASS; foreground helpers 4/4 and DPAPI tests 2/2.
+- `cargo test -p pw-storage activity`: PASS; 19/19.
+- `cargo test -p parallel-world-desktop activity`: PASS; 18/18 collector tests.
+- `cargo fmt --all --check`: PASS; no output.
+- `cargo clippy -p pw-platform -p pw-storage -p parallel-world-desktop --all-targets -- -D warnings`: PASS.
+- `git diff --check`: PASS; only existing LF-to-CRLF working-copy warnings were emitted.

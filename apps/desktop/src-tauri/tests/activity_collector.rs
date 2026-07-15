@@ -31,12 +31,17 @@ impl ActivitySettingsSource for FakeSettings {
 struct FakeSource {
     calls: Arc<AtomicUsize>,
     snapshot: ForegroundSnapshot,
+    return_none: bool,
+    fail: bool,
 }
 
 impl ForegroundContextSource for FakeSource {
     fn snapshot(&mut self) -> Result<Option<ForegroundSnapshot>, ForegroundContextError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(Some(self.snapshot.clone()))
+        if self.fail {
+            return Err(ForegroundContextError::WindowChanged);
+        }
+        Ok((!self.return_none).then(|| self.snapshot.clone()))
     }
 }
 
@@ -152,6 +157,8 @@ fn collector(
         FakeSource {
             calls: source_calls,
             snapshot: foreground,
+            return_none: false,
+            fail: false,
         },
         FakeProtector {
             calls: protector_calls,
@@ -178,11 +185,12 @@ fn activity_source_is_never_called_when_consent_or_collection_gate_is_off() {
         },
     ] {
         let source_calls = Arc::new(AtomicUsize::new(0));
+        let repo = Arc::new(Mutex::new(RepoState::default()));
         let mut collector = collector(
             Arc::new(Mutex::new(Ok(settings))),
             Arc::clone(&source_calls),
             Arc::new(AtomicUsize::new(0)),
-            Arc::new(Mutex::new(RepoState::default())),
+            Arc::clone(&repo),
             Arc::new(Mutex::new(1_000_000)),
             snapshot("code.exe", "workspace"),
             false,
@@ -190,6 +198,7 @@ fn activity_source_is_never_called_when_consent_or_collection_gate_is_off() {
 
         collector.collect_once().expect("gate is a safe no-op");
         assert_eq!(source_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(repo.lock().unwrap().cutoffs, vec![0]);
     }
 }
 
@@ -234,6 +243,46 @@ fn activity_exclusion_is_case_insensitive_and_precedes_protection_and_storage() 
         .expect("excluded context is skipped");
     assert_eq!(protector_calls.load(Ordering::SeqCst), 0);
     assert!(repo.lock().unwrap().inserted.is_empty());
+}
+
+#[test]
+fn activity_unicode_app_and_title_exclusions_precede_protection_and_storage() {
+    for (foreground, exclusion) in [
+        (
+            snapshot("äpp.exe", "workspace"),
+            ExclusionRuleDto {
+                app_id: Some("ÄPP.EXE".to_owned()),
+                title_pattern: None,
+            },
+        ),
+        (
+            snapshot("code.exe", "極秘の設計メモ"),
+            ExclusionRuleDto {
+                app_id: None,
+                title_pattern: Some("設計".to_owned()),
+            },
+        ),
+    ] {
+        let mut settings = enabled_settings();
+        settings.exclusions.push(exclusion);
+        let protector_calls = Arc::new(AtomicUsize::new(0));
+        let repo = Arc::new(Mutex::new(RepoState::default()));
+        let mut collector = collector(
+            Arc::new(Mutex::new(Ok(settings))),
+            Arc::new(AtomicUsize::new(0)),
+            Arc::clone(&protector_calls),
+            Arc::clone(&repo),
+            Arc::new(Mutex::new(3_000_000)),
+            foreground,
+            false,
+        );
+
+        collector
+            .collect_once()
+            .expect("Unicode literal exclusion is skipped");
+        assert_eq!(protector_calls.load(Ordering::SeqCst), 0);
+        assert!(repo.lock().unwrap().inserted.is_empty());
+    }
 }
 
 #[test]
@@ -305,6 +354,8 @@ fn activity_title_protection_failure_after_app_success_still_writes_zero_rows() 
         FakeSource {
             calls: Arc::new(AtomicUsize::new(0)),
             snapshot: snapshot("private-app.exe", "private-title"),
+            return_none: false,
+            fail: false,
         },
         FakeProtector {
             calls: Arc::clone(&calls),
@@ -455,6 +506,149 @@ fn activity_retention_uses_a_strict_before_cutoff_boundary() {
 
     collector.collect_once().unwrap();
     assert_eq!(repo.lock().unwrap().cutoffs, vec![3_000_000 - 30 * 86_400]);
+}
+
+#[test]
+fn activity_retention_runs_on_none_and_excluded_contexts_at_daily_cadence() {
+    let settings = Arc::new(Mutex::new(Ok(enabled_settings())));
+    let repo = Arc::new(Mutex::new(RepoState::default()));
+    let now = Arc::new(Mutex::new(3_000_000));
+    let mut collector = collector(
+        Arc::clone(&settings),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&repo),
+        Arc::clone(&now),
+        snapshot("code.exe", "workspace"),
+        false,
+    );
+    collector.source_mut().return_none = true;
+
+    collector.collect_once().expect("none still runs retention");
+    *now.lock().unwrap() += 86_399;
+    collector.collect_once().expect("retention is not due yet");
+    *now.lock().unwrap() += 1;
+    collector.collect_once().expect("daily retention is due");
+    assert_eq!(repo.lock().unwrap().cutoffs.len(), 2);
+
+    settings.lock().unwrap().as_mut().unwrap().exclusions = vec![ExclusionRuleDto {
+        app_id: Some("code.exe".to_owned()),
+        title_pattern: None,
+    }];
+    collector.source_mut().return_none = false;
+    *now.lock().unwrap() += 86_400;
+    collector
+        .collect_once()
+        .expect("excluded context still runs retention");
+    let state = repo.lock().unwrap();
+    assert_eq!(state.cutoffs.len(), 3);
+    assert!(state.inserted.is_empty());
+}
+
+#[test]
+fn activity_retention_failure_survives_none_and_exclusion_until_cleanup_recovers() {
+    let settings = Arc::new(Mutex::new(Ok(enabled_settings())));
+    let repo = Arc::new(Mutex::new(RepoState {
+        fail_retention: true,
+        ..RepoState::default()
+    }));
+    let now = Arc::new(Mutex::new(3_000_000));
+    let mut collector = collector(
+        Arc::clone(&settings),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&repo),
+        Arc::clone(&now),
+        snapshot("code.exe", "workspace"),
+        false,
+    );
+    collector.source_mut().return_none = true;
+
+    collector
+        .collect_once()
+        .expect("retention failure is degraded");
+    assert_eq!(
+        collector.health().message.as_deref(),
+        Some("activity retention failed")
+    );
+    repo.lock().unwrap().fail_retention = false;
+    collector.collect_once().expect("retention retry recovers");
+    assert_eq!(
+        collector.health().status,
+        ActivityCollectionHealthStatusDto::Healthy
+    );
+
+    settings.lock().unwrap().as_mut().unwrap().exclusions = vec![ExclusionRuleDto {
+        app_id: Some("code.exe".to_owned()),
+        title_pattern: None,
+    }];
+    collector.source_mut().return_none = false;
+    *now.lock().unwrap() += 86_400;
+    repo.lock().unwrap().fail_retention = true;
+    collector
+        .collect_once()
+        .expect("excluded context preserves retention degradation");
+    assert_eq!(
+        collector.health().message.as_deref(),
+        Some("activity retention failed")
+    );
+    repo.lock().unwrap().fail_retention = false;
+    collector.collect_once().expect("excluded retry recovers");
+    assert_eq!(
+        collector.health().status,
+        ActivityCollectionHealthStatusDto::Healthy
+    );
+}
+
+#[test]
+fn activity_retention_retries_even_while_foreground_sampling_fails() {
+    let repo = Arc::new(Mutex::new(RepoState {
+        fail_retention: true,
+        ..RepoState::default()
+    }));
+    let mut collector = collector(
+        Arc::new(Mutex::new(Ok(enabled_settings()))),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&repo),
+        Arc::new(Mutex::new(3_000_000)),
+        snapshot("code.exe", "workspace"),
+        false,
+    );
+    collector.source_mut().fail = true;
+
+    assert!(collector.collect_once().is_err());
+    assert_eq!(repo.lock().unwrap().cutoffs.len(), 1);
+    assert_eq!(
+        collector.health().message.as_deref(),
+        Some("activity retention failed; activity foreground sampling failed")
+    );
+    repo.lock().unwrap().fail_retention = false;
+    assert!(collector.collect_once().is_err());
+    assert_eq!(repo.lock().unwrap().cutoffs.len(), 2);
+    assert_eq!(
+        collector.health().message.as_deref(),
+        Some("activity foreground sampling failed")
+    );
+}
+
+#[test]
+fn activity_retention_cutoff_saturates_at_the_unix_epoch() {
+    let repo = Arc::new(Mutex::new(RepoState::default()));
+    let mut collector = collector(
+        Arc::new(Mutex::new(Ok(enabled_settings()))),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::clone(&repo),
+        Arc::new(Mutex::new(10)),
+        snapshot("code.exe", "workspace"),
+        false,
+    );
+
+    collector
+        .collect_once()
+        .expect("near-epoch cleanup is valid");
+    assert_eq!(repo.lock().unwrap().cutoffs, vec![0]);
 }
 
 #[test]

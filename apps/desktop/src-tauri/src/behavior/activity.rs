@@ -25,6 +25,10 @@ const COLLECTION_INTERVAL: Duration = Duration::from_secs(5);
 const MAX_CONTIGUOUS_GAP_SECONDS: i64 = 10;
 const RETENTION_INTERVAL_SECONDS: i64 = 86_400;
 const SECONDS_PER_DAY: i64 = 86_400;
+const MAX_EXCLUSION_APP_CHARS: usize = 260;
+const MAX_EXCLUSION_TITLE_CHARS: usize = 512;
+const MAX_EXCLUSION_TITLE_PATTERN_CHARS: usize = 128;
+const RETENTION_FAILURE_MESSAGE: &str = "activity retention failed";
 
 pub trait ActivitySettingsSource {
     /// Loads the latest validated behavior settings.
@@ -117,6 +121,7 @@ pub struct ActivityCollector<S, F, P, R, C> {
     last_session: Option<LastSession>,
     last_retention_at: Option<i64>,
     last_retention_days: Option<u16>,
+    retention_degraded: bool,
     health: Arc<Mutex<ActivityCollectionHealthEventDto>>,
 }
 
@@ -139,6 +144,7 @@ where
             last_session: None,
             last_retention_at: None,
             last_retention_days: None,
+            retention_degraded: false,
             health: Arc::new(Mutex::new(disabled_health())),
         }
     }
@@ -167,16 +173,16 @@ where
             self.forget_and_degrade("activity settings are invalid");
             return Err(ActivityCollectorError::SettingsUnavailable);
         }
-        if !collection_gate_open(&settings) {
-            self.last_session = None;
-            self.set_health(disabled_health());
-            return Ok(());
-        }
-
         let now = self.clock.now_unix_seconds();
         if now < 0 {
             self.forget_and_degrade("activity clock is invalid");
             return Err(ActivityCollectorError::InvalidClock);
+        }
+        self.run_retention_if_due(now, settings.retention_days);
+        if !collection_gate_open(&settings) {
+            self.last_session = None;
+            self.set_disabled();
+            return Ok(());
         }
         self.forget_discontinuous(now);
 
@@ -201,7 +207,6 @@ where
 
         let category = classify_app(&snapshot.app_id).to_owned();
         if self.extend_if_contiguous(&snapshot, &category, now)? {
-            self.run_retention_if_due(now, settings.retention_days);
             return Ok(());
         }
 
@@ -229,7 +234,6 @@ where
             category,
         });
         self.set_healthy(Some(now));
-        self.run_retention_if_due(now, settings.retention_days);
         Ok(())
     }
 
@@ -306,17 +310,16 @@ where
         if !due {
             return;
         }
-        let retention_seconds = i64::from(retention_days).checked_mul(SECONDS_PER_DAY);
-        let Some(cutoff) = retention_seconds.and_then(|seconds| now.checked_sub(seconds)) else {
-            self.set_degraded("activity retention failed");
-            return;
-        };
+        let retention_seconds = i64::from(retention_days).saturating_mul(SECONDS_PER_DAY);
+        let cutoff = now.saturating_sub(retention_seconds).max(0);
         if self.repository.delete_sessions_before(cutoff).is_err() {
-            self.set_degraded("activity retention failed");
+            self.retention_degraded = true;
+            self.set_degraded(RETENTION_FAILURE_MESSAGE);
             return;
         }
         self.last_retention_at = Some(now);
         self.last_retention_days = Some(retention_days);
+        self.retention_degraded = false;
     }
 
     fn forget_and_degrade(&mut self, message: &'static str) {
@@ -325,6 +328,16 @@ where
     }
 
     fn set_healthy(&self, last_activity_at: Option<i64>) {
+        if self.retention_degraded {
+            let previous_activity_at = lock_unpoisoned(&self.health).last_activity_at;
+            self.set_health(ActivityCollectionHealthEventDto {
+                schema_version: BEHAVIOR_SETTINGS_SCHEMA_VERSION,
+                status: ActivityCollectionHealthStatusDto::Degraded,
+                last_activity_at: last_activity_at.or(previous_activity_at),
+                message: Some(RETENTION_FAILURE_MESSAGE.to_owned()),
+            });
+            return;
+        }
         self.set_health(ActivityCollectionHealthEventDto {
             schema_version: BEHAVIOR_SETTINGS_SCHEMA_VERSION,
             status: ActivityCollectionHealthStatusDto::Healthy,
@@ -333,13 +346,26 @@ where
         });
     }
 
+    fn set_disabled(&self) {
+        if self.retention_degraded {
+            self.set_degraded(RETENTION_FAILURE_MESSAGE);
+        } else {
+            self.set_health(disabled_health());
+        }
+    }
+
     fn set_degraded(&self, message: &'static str) {
         let last_activity_at = lock_unpoisoned(&self.health).last_activity_at;
+        let message = if self.retention_degraded && message != RETENTION_FAILURE_MESSAGE {
+            format!("{RETENTION_FAILURE_MESSAGE}; {message}")
+        } else {
+            message.to_owned()
+        };
         self.set_health(ActivityCollectionHealthEventDto {
             schema_version: BEHAVIOR_SETTINGS_SCHEMA_VERSION,
             status: ActivityCollectionHealthStatusDto::Degraded,
             last_activity_at,
-            message: Some(message.to_owned()),
+            message: Some(message),
         });
     }
 
@@ -356,18 +382,61 @@ fn collection_gate_open(settings: &BehaviorSettingsDto) -> bool {
 
 fn is_excluded(snapshot: &ForegroundSnapshot, exclusions: &[ExclusionRuleDto]) -> bool {
     exclusions.iter().any(|rule| {
-        let app_matches = rule
-            .app_id
-            .as_ref()
-            .is_none_or(|app_id| snapshot.app_id.eq_ignore_ascii_case(app_id));
+        let app_matches = rule.app_id.as_ref().is_none_or(|app_id| {
+            bounded_unicode_literal_match(
+                &snapshot.app_id,
+                app_id,
+                MAX_EXCLUSION_APP_CHARS,
+                MAX_EXCLUSION_APP_CHARS,
+                LiteralMatchKind::Equal,
+            )
+            .unwrap_or(true)
+        });
         let title_matches = rule.title_pattern.as_ref().is_none_or(|pattern| {
-            snapshot
-                .title
-                .to_lowercase()
-                .contains(&pattern.to_lowercase())
+            bounded_unicode_literal_match(
+                &snapshot.title,
+                pattern,
+                MAX_EXCLUSION_TITLE_CHARS,
+                MAX_EXCLUSION_TITLE_PATTERN_CHARS,
+                LiteralMatchKind::Contains,
+            )
+            .unwrap_or(true)
         });
         app_matches && title_matches
     })
+}
+
+#[derive(Clone, Copy)]
+enum LiteralMatchKind {
+    Equal,
+    Contains,
+}
+
+fn bounded_unicode_literal_match(
+    value: &str,
+    selector: &str,
+    max_value_chars: usize,
+    max_selector_chars: usize,
+    kind: LiteralMatchKind,
+) -> Option<bool> {
+    let value = bounded_unicode_lowercase(value, max_value_chars)?;
+    let selector = bounded_unicode_lowercase(selector, max_selector_chars)?;
+    Some(match kind {
+        LiteralMatchKind::Equal => value == selector,
+        LiteralMatchKind::Contains => value.contains(&selector),
+    })
+}
+
+fn bounded_unicode_lowercase(value: &str, max_chars: usize) -> Option<String> {
+    let mut chars = value.chars();
+    let mut lowercase = String::with_capacity(max_chars.saturating_mul(4));
+    for _ in 0..max_chars {
+        let Some(character) = chars.next() else {
+            return Some(lowercase);
+        };
+        lowercase.extend(character.to_lowercase());
+    }
+    chars.next().is_none().then_some(lowercase)
 }
 
 fn classify_app(app_id: &str) -> &'static str {
