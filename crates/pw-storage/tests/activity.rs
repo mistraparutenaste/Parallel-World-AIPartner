@@ -1,8 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use pw_application::behavior::proactive::{
+    FrequencyHistory, FrequencyPolicy, HistoryQuery, eligible_to_evaluate,
+};
 use pw_storage::activity::{
-    ActivityDatabase, ActivityStorageError, NewActivitySession, ProactiveDecision,
+    ActivityDatabase, ActivityStorageError, FinalSpeakDecisionOutcome, FinalSpeakDecisionRequest,
+    NewActivitySession, ProactiveDecision,
 };
 
 fn unique_database_path(label: &str) -> PathBuf {
@@ -149,6 +153,10 @@ fn new_session(started_at: i64, context: &[u8]) -> NewActivitySession {
         payload_version: 1,
         protected_context: context.to_vec(),
     }
+}
+
+fn topic_hash(seed: u8) -> [u8; 32] {
+    [seed; 32]
 }
 
 #[test]
@@ -408,25 +416,29 @@ fn activity_retention_deletes_only_sessions_started_before_the_cutoff() {
 #[test]
 fn activity_proactive_decision_queries_deduplicate_topics_and_rate_limit_only_speech() {
     let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let first = topic_hash(1);
+    let second = topic_hash(2);
+    let third = topic_hash(3);
+    let unknown = topic_hash(4);
     database
-        .insert_proactive_decision(100, "return", ProactiveDecision::Speak, b"hash-1")
+        .insert_proactive_decision(100, "return", ProactiveDecision::Speak, &first)
         .unwrap();
     database
-        .insert_proactive_decision(200, "long_session", ProactiveDecision::Skip, b"hash-2")
+        .insert_proactive_decision(200, "long_session", ProactiveDecision::Skip, &second)
         .unwrap();
     database
-        .insert_proactive_decision(300, "category", ProactiveDecision::Speak, b"hash-3")
+        .insert_proactive_decision(300, "category_change", ProactiveDecision::Speak, &third)
         .unwrap();
 
-    assert!(database.has_topic_hash(b"hash-1").unwrap());
-    assert!(!database.has_topic_hash(b"unknown").unwrap());
+    assert!(database.has_topic_hash(&first).unwrap());
+    assert!(!database.has_topic_hash(&unknown).unwrap());
     assert_eq!(database.count_decisions_since(100).unwrap(), 2);
     assert_eq!(database.count_decisions_since(101).unwrap(), 1);
     assert_eq!(database.count_decisions_since(301).unwrap(), 0);
     assert_eq!(database.latest_spoken_decision_at().unwrap(), Some(300));
     assert!(
         database
-            .insert_proactive_decision(400, "return", ProactiveDecision::Skip, b"hash-1")
+            .insert_proactive_decision(400, "return", ProactiveDecision::Skip, &first)
             .is_err()
     );
 
@@ -475,6 +487,334 @@ fn activity_repository_rejects_invalid_times_durations_and_empty_sensitive_blobs
         database.has_topic_hash(b""),
         Err(ActivityStorageError::EmptyTopicHash)
     ));
+}
+
+#[test]
+fn activity_frequency_snapshot_is_single_consistent_speak_only_view_with_inclusive_cutoffs() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let queried = topic_hash(9);
+    database
+        .insert_proactive_decision(0, "return", ProactiveDecision::Speak, &topic_hash(1))
+        .unwrap();
+    database
+        .insert_proactive_decision(100, "long_session", ProactiveDecision::Skip, &topic_hash(2))
+        .unwrap();
+    database
+        .insert_proactive_decision(200, "category_change", ProactiveDecision::Speak, &queried)
+        .unwrap();
+    database
+        .insert_proactive_decision(300, "return", ProactiveDecision::Speak, &topic_hash(3))
+        .unwrap();
+
+    let snapshot = database.frequency_snapshot(&queried, 300, 200).unwrap();
+    assert!(snapshot.topic_exists);
+    assert_eq!(snapshot.latest_spoken_at, Some(300));
+    assert_eq!(snapshot.spoken_last_hour, 1);
+    assert_eq!(snapshot.spoken_last_day, 2);
+
+    let epoch = database.frequency_snapshot(&topic_hash(8), 0, 0).unwrap();
+    assert_eq!(epoch.spoken_last_hour, 3);
+    assert_eq!(epoch.spoken_last_day, 3);
+}
+
+#[test]
+fn activity_frequency_boundaries_validate_before_writes_and_never_echo_input() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let sentinel = "SENSITIVE-WINDOW-TITLE";
+    for invalid in [Vec::new(), vec![1; 31], vec![1; 33]] {
+        let error = database.frequency_snapshot(&invalid, 0, 0).unwrap_err();
+        assert!(!format!("{error:?}{error}").contains(sentinel));
+    }
+    assert!(database.frequency_snapshot(&topic_hash(1), 1, 2).is_err());
+
+    for candidate in ["Return", "category", sentinel] {
+        let error = database
+            .insert_proactive_decision(1, candidate, ProactiveDecision::Skip, &topic_hash(7))
+            .unwrap_err();
+        assert!(!format!("{error:?}{error}").contains(sentinel));
+    }
+    let count: i64 = database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM proactive_decisions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+fn speak_request<'a>(
+    created_at: i64,
+    candidate_kind: &'a str,
+    topic_hash: &'a [u8],
+) -> FinalSpeakDecisionRequest<'a> {
+    FinalSpeakDecisionRequest {
+        created_at,
+        candidate_kind,
+        topic_hash,
+        minimum_interval_seconds: 900,
+        hour_since: created_at.checked_sub(3_600).unwrap_or(0).max(0),
+        day_since: created_at.checked_sub(86_400).unwrap_or(0).max(0),
+        max_per_hour: 3,
+        max_per_day: 16,
+    }
+}
+
+#[test]
+fn final_speak_recheck_honors_interval_future_and_count_boundaries() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    database
+        .insert_proactive_decision(100, "return", ProactiveDecision::Speak, &topic_hash(1))
+        .unwrap();
+
+    assert_eq!(
+        database
+            .record_final_speak(speak_request(999, "long_session", &topic_hash(2)))
+            .unwrap(),
+        FinalSpeakDecisionOutcome::RateLimited
+    );
+    assert!(matches!(
+        database
+            .record_final_speak(speak_request(1_000, "long_session", &topic_hash(2)))
+            .unwrap(),
+        FinalSpeakDecisionOutcome::Inserted { .. }
+    ));
+
+    let mut future = ActivityDatabase::open_in_memory().unwrap();
+    future
+        .insert_proactive_decision(2_000, "return", ProactiveDecision::Speak, &topic_hash(3))
+        .unwrap();
+    assert_eq!(
+        future
+            .record_final_speak(speak_request(1_000, "return", &topic_hash(4)))
+            .unwrap(),
+        FinalSpeakDecisionOutcome::RateLimited
+    );
+
+    let mut counts = ActivityDatabase::open_in_memory().unwrap();
+    for (at, seed) in [(100, 10), (200, 11), (300, 12)] {
+        counts
+            .insert_proactive_decision(at, "return", ProactiveDecision::Speak, &topic_hash(seed))
+            .unwrap();
+    }
+    let thirteenth = topic_hash(13);
+    let mut request = speak_request(1_200, "category_change", &thirteenth);
+    request.minimum_interval_seconds = 1;
+    request.hour_since = 100;
+    request.day_since = 0;
+    assert_eq!(
+        counts.record_final_speak(request).unwrap(),
+        FinalSpeakDecisionOutcome::RateLimited
+    );
+    let mut request = speak_request(1_200, "category_change", &thirteenth);
+    request.minimum_interval_seconds = 1;
+    request.hour_since = 101;
+    request.day_since = 0;
+    assert!(matches!(
+        counts.record_final_speak(request).unwrap(),
+        FinalSpeakDecisionOutcome::Inserted { .. }
+    ));
+
+    let mut daily = ActivityDatabase::open_in_memory().unwrap();
+    for (at, seed) in [(0, 20), (50, 21), (100, 22)] {
+        daily
+            .insert_proactive_decision(at, "return", ProactiveDecision::Speak, &topic_hash(seed))
+            .unwrap();
+    }
+    let daily_hash = topic_hash(23);
+    let mut request = speak_request(1_000, "long_session", &daily_hash);
+    request.hour_since = 500;
+    request.day_since = 0;
+    request.max_per_day = 3;
+    assert_eq!(
+        daily.record_final_speak(request).unwrap(),
+        FinalSpeakDecisionOutcome::RateLimited
+    );
+    request.max_per_day = 4;
+    assert!(matches!(
+        daily.record_final_speak(request).unwrap(),
+        FinalSpeakDecisionOutcome::Inserted { .. }
+    ));
+}
+
+#[test]
+fn final_speak_duplicate_precedes_rate_limit_and_does_not_insert_twice() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let duplicate = topic_hash(1);
+    database
+        .insert_proactive_decision(100, "return", ProactiveDecision::Speak, &duplicate)
+        .unwrap();
+    let mut request = speak_request(101, "return", &duplicate);
+    request.max_per_hour = 1;
+    request.max_per_day = 1;
+    assert_eq!(
+        database.record_final_speak(request).unwrap(),
+        FinalSpeakDecisionOutcome::DuplicateTopic
+    );
+    let count: i64 = database
+        .connection()
+        .query_row("SELECT COUNT(*) FROM proactive_decisions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[test]
+fn final_speak_rejects_invalid_inputs_before_transaction() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let first = topic_hash(1);
+    for candidate in ["Return", "category", "SENSITIVE-WINDOW-TITLE"] {
+        assert!(
+            database
+                .record_final_speak(speak_request(1_000, candidate, &topic_hash(1)))
+                .is_err()
+        );
+    }
+    for hash in [vec![], vec![0; 31], vec![0; 33]] {
+        assert!(
+            database
+                .record_final_speak(speak_request(1_000, "return", &hash))
+                .is_err()
+        );
+    }
+    let mut invalid = speak_request(1_000, "return", &first);
+    invalid.day_since = 10;
+    invalid.hour_since = 9;
+    assert!(database.record_final_speak(invalid).is_err());
+    let mut invalid = speak_request(1_000, "return", &first);
+    invalid.hour_since = 1_001;
+    assert!(database.record_final_speak(invalid).is_err());
+    let mut invalid = speak_request(1_000, "return", &first);
+    invalid.minimum_interval_seconds = 0;
+    assert!(database.record_final_speak(invalid).is_err());
+    let mut invalid = speak_request(1_000, "return", &first);
+    invalid.max_per_hour = 0;
+    assert!(database.record_final_speak(invalid).is_err());
+    let mut invalid = speak_request(1_000, "return", &first);
+    invalid.max_per_day = i64::MAX.cast_unsigned() + 1;
+    assert!(database.record_final_speak(invalid).is_err());
+    assert!(database.frequency_snapshot(&first, -1, -1).is_err());
+    assert_eq!(
+        database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM proactive_decisions", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn two_connections_atomically_enforce_one_speak_limit() {
+    use std::sync::{Arc, Barrier};
+
+    let path = unique_database_path("atomic-speak-race");
+    let first = ActivityDatabase::open(&path).unwrap();
+    let second = ActivityDatabase::open(&path).unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let run = |mut database: ActivityDatabase, seed: u8, barrier: Arc<Barrier>| {
+        std::thread::spawn(move || {
+            let hash = topic_hash(seed);
+            let mut request = speak_request(1_000, "return", &hash);
+            request.minimum_interval_seconds = 1;
+            request.hour_since = 0;
+            request.day_since = 0;
+            request.max_per_hour = 1;
+            request.max_per_day = 1;
+            barrier.wait();
+            database.record_final_speak(request)
+        })
+    };
+    let left = run(first, 1, Arc::clone(&barrier));
+    let right = run(second, 2, barrier);
+    let outcomes = [
+        left.join().unwrap().unwrap(),
+        right.join().unwrap().unwrap(),
+    ];
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| matches!(outcome, FinalSpeakDecisionOutcome::Inserted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|outcome| **outcome == FinalSpeakDecisionOutcome::RateLimited)
+            .count(),
+        1
+    );
+    let reopened = ActivityDatabase::open(&path).unwrap();
+    assert_eq!(reopened.count_decisions_since(0).unwrap(), 1);
+    drop(reopened);
+    remove_database_files(&path);
+}
+
+#[test]
+fn frequency_history_adapter_returns_snapshot_and_has_opaque_errors() {
+    let mut database = ActivityDatabase::open_in_memory().unwrap();
+    let hash = topic_hash(1);
+    database
+        .insert_proactive_decision(10, "return", ProactiveDecision::Speak, &hash)
+        .unwrap();
+    let snapshot = FrequencyHistory::snapshot(
+        &database,
+        HistoryQuery {
+            topic_hash: hash,
+            hour_since: 0,
+            day_since: 0,
+        },
+    )
+    .unwrap();
+    assert!(snapshot.topic_exists);
+    assert_eq!(snapshot.latest_spoken_at, Some(10));
+    database
+        .connection()
+        .execute("DROP TABLE proactive_decisions", [])
+        .unwrap();
+    let error = FrequencyHistory::snapshot(
+        &database,
+        HistoryQuery {
+            topic_hash: hash,
+            hour_since: 0,
+            day_since: 0,
+        },
+    )
+    .unwrap_err();
+    assert_eq!(format!("{error}"), "activity frequency history unavailable");
+    assert_eq!(format!("{error:?}"), "ActivityFrequencyHistoryError");
+    assert!(std::error::Error::source(&error).is_none());
+    assert!(!eligible_to_evaluate(
+        &database,
+        hash,
+        10,
+        FrequencyPolicy::default()
+    ));
+}
+
+#[test]
+fn pre_task5_v1_activity_database_reopens_without_schema_changes() {
+    let path = unique_database_path("pre-task5-v1");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch(include_str!("../activity-migrations/0001_initial.sql"))
+        .unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    drop(connection);
+    let database = ActivityDatabase::open(&path).unwrap();
+    let schema: String = database
+        .connection()
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='proactive_decisions'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(schema.contains("length(topic_hash) > 0"));
+    assert!(!schema.contains("length(topic_hash) = 32"));
+    drop(database);
+    remove_database_files(&path);
 }
 
 #[cfg(windows)]

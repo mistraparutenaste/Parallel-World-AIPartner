@@ -3,7 +3,8 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use pw_application::behavior::proactive::{FrequencyHistory, FrequencySnapshot, HistoryQuery};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use thiserror::Error;
 
 const INITIAL_MIGRATION: &str = include_str!("../activity-migrations/0001_initial.sql");
@@ -104,6 +105,14 @@ pub enum ActivityStorageError {
     EmptyProtectedContext,
     #[error("proactive topic hash must not be empty")]
     EmptyTopicHash,
+    #[error("proactive topic hash is invalid")]
+    InvalidTopicHash,
+    #[error("proactive candidate kind is invalid")]
+    InvalidCandidateKind,
+    #[error("proactive frequency window is invalid")]
+    InvalidFrequencyWindow,
+    #[error("proactive frequency limit is invalid")]
+    InvalidFrequencyLimit,
     #[error("activity page size must be greater than zero")]
     InvalidPageSize,
 }
@@ -140,6 +149,50 @@ pub enum ProactiveDecision {
     Speak,
     Skip,
 }
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ActivityFrequencySnapshot {
+    pub topic_exists: bool,
+    pub latest_spoken_at: Option<i64>,
+    pub spoken_last_hour: u64,
+    pub spoken_last_day: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FinalSpeakDecisionRequest<'a> {
+    pub created_at: i64,
+    pub candidate_kind: &'a str,
+    pub topic_hash: &'a [u8],
+    pub minimum_interval_seconds: i64,
+    pub hour_since: i64,
+    pub day_since: i64,
+    pub max_per_hour: u64,
+    pub max_per_day: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinalSpeakDecisionOutcome {
+    Inserted { decision_id: i64 },
+    DuplicateTopic,
+    RateLimited,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ActivityFrequencyHistoryError;
+
+impl std::fmt::Debug for ActivityFrequencyHistoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ActivityFrequencyHistoryError")
+    }
+}
+
+impl std::fmt::Display for ActivityFrequencyHistoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("activity frequency history unavailable")
+    }
+}
+
+impl std::error::Error for ActivityFrequencyHistoryError {}
 
 impl ProactiveDecision {
     const fn as_str(self) -> &'static str {
@@ -408,12 +461,88 @@ impl ActivityDatabase {
     ) -> Result<i64, ActivityStorageError> {
         validate_timestamp(created_at)?;
         validate_topic_hash(topic_hash)?;
+        let candidate_kind = validate_candidate_kind(candidate_kind)?;
         self.connection.execute(
             "INSERT INTO proactive_decisions(created_at,candidate_kind,decision,topic_hash) \
              VALUES (?1,?2,?3,?4)",
             params![created_at, candidate_kind, decision.as_str(), topic_hash],
         )?;
         Ok(self.connection.last_insert_rowid())
+    }
+
+    /// Loads all proactive rate-limit facts from one SQL statement.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid digest/window or failed `SQLite` query.
+    pub fn frequency_snapshot(
+        &self,
+        topic_hash: &[u8],
+        hour_since: i64,
+        day_since: i64,
+    ) -> Result<ActivityFrequencySnapshot, ActivityStorageError> {
+        validate_topic_hash(topic_hash)?;
+        validate_frequency_cutoffs(day_since, hour_since, None)?;
+        query_frequency_snapshot(&self.connection, topic_hash, hour_since, day_since)
+    }
+
+    /// Atomically rechecks eligibility and records one final speak decision.
+    ///
+    /// # Errors
+    /// Returns an error for invalid input or a failed `SQLite` transaction.
+    pub fn record_final_speak(
+        &mut self,
+        request: FinalSpeakDecisionRequest<'_>,
+    ) -> Result<FinalSpeakDecisionOutcome, ActivityStorageError> {
+        validate_timestamp(request.created_at)?;
+        validate_topic_hash(request.topic_hash)?;
+        let candidate_kind = validate_candidate_kind(request.candidate_kind)?;
+        validate_frequency_cutoffs(
+            request.day_since,
+            request.hour_since,
+            Some(request.created_at),
+        )?;
+        if request.minimum_interval_seconds <= 0
+            || request.max_per_hour == 0
+            || request.max_per_day == 0
+            || request.max_per_hour > i64::MAX.cast_unsigned()
+            || request.max_per_day > i64::MAX.cast_unsigned()
+        {
+            return Err(ActivityStorageError::InvalidFrequencyLimit);
+        }
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let snapshot = query_frequency_snapshot(
+            &transaction,
+            request.topic_hash,
+            request.hour_since,
+            request.day_since,
+        )?;
+        if snapshot.topic_exists {
+            return Ok(FinalSpeakDecisionOutcome::DuplicateTopic);
+        }
+        let interval_denied = snapshot.latest_spoken_at.is_some_and(|latest| {
+            latest > request.created_at
+                || request
+                    .created_at
+                    .checked_sub(latest)
+                    .is_none_or(|elapsed| elapsed < request.minimum_interval_seconds)
+        });
+        if interval_denied
+            || snapshot.spoken_last_hour >= request.max_per_hour
+            || snapshot.spoken_last_day >= request.max_per_day
+        {
+            return Ok(FinalSpeakDecisionOutcome::RateLimited);
+        }
+        transaction.execute(
+            "INSERT INTO proactive_decisions(created_at,candidate_kind,decision,topic_hash) \
+             VALUES (?1,?2,'speak',?3)",
+            params![request.created_at, candidate_kind, request.topic_hash],
+        )?;
+        let decision_id = transaction.last_insert_rowid();
+        transaction.commit()?;
+        Ok(FinalSpeakDecisionOutcome::Inserted { decision_id })
     }
 
     /// Checks whether a topic hash was already considered.
@@ -455,6 +584,52 @@ impl ActivityDatabase {
             |row| row.get(0),
         )?)
     }
+}
+
+impl FrequencyHistory for ActivityDatabase {
+    type Error = ActivityFrequencyHistoryError;
+
+    fn snapshot(&self, query: HistoryQuery) -> Result<FrequencySnapshot, Self::Error> {
+        self.frequency_snapshot(&query.topic_hash, query.hour_since, query.day_since)
+            .map(|snapshot| FrequencySnapshot {
+                topic_exists: snapshot.topic_exists,
+                latest_spoken_at: snapshot.latest_spoken_at,
+                spoken_last_hour: snapshot.spoken_last_hour,
+                spoken_last_day: snapshot.spoken_last_day,
+            })
+            .map_err(|_| ActivityFrequencyHistoryError)
+    }
+}
+
+fn query_frequency_snapshot(
+    connection: &Connection,
+    topic_hash: &[u8],
+    hour_since: i64,
+    day_since: i64,
+) -> Result<ActivityFrequencySnapshot, ActivityStorageError> {
+    let (topic_exists, latest_spoken_at, spoken_last_hour, spoken_last_day): (
+        bool,
+        Option<i64>,
+        i64,
+        i64,
+    ) = connection.query_row(
+        "SELECT \
+         EXISTS(SELECT 1 FROM proactive_decisions WHERE topic_hash=?1), \
+         MAX(CASE WHEN decision='speak' THEN created_at END), \
+         COALESCE(SUM(CASE WHEN decision='speak' AND created_at>=?2 THEN 1 ELSE 0 END),0), \
+         COALESCE(SUM(CASE WHEN decision='speak' AND created_at>=?3 THEN 1 ELSE 0 END),0) \
+         FROM proactive_decisions",
+        params![topic_hash, hour_since, day_since],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    Ok(ActivityFrequencySnapshot {
+        topic_exists,
+        latest_spoken_at,
+        spoken_last_hour: u64::try_from(spoken_last_hour)
+            .map_err(|_| ActivityStorageError::InvalidSchema)?,
+        spoken_last_day: u64::try_from(spoken_last_day)
+            .map_err(|_| ActivityStorageError::InvalidSchema)?,
+    })
 }
 
 fn table_columns_match(
@@ -640,6 +815,32 @@ fn validate_duration(duration: i64) -> Result<(), ActivityStorageError> {
 fn validate_topic_hash(topic_hash: &[u8]) -> Result<(), ActivityStorageError> {
     if topic_hash.is_empty() {
         return Err(ActivityStorageError::EmptyTopicHash);
+    }
+    if topic_hash.len() != 32 {
+        return Err(ActivityStorageError::InvalidTopicHash);
+    }
+    Ok(())
+}
+
+fn validate_candidate_kind(candidate_kind: &str) -> Result<&'static str, ActivityStorageError> {
+    match candidate_kind {
+        "return" => Ok("return"),
+        "long_session" => Ok("long_session"),
+        "category_change" => Ok("category_change"),
+        _ => Err(ActivityStorageError::InvalidCandidateKind),
+    }
+}
+
+fn validate_frequency_cutoffs(
+    day_since: i64,
+    hour_since: i64,
+    created_at: Option<i64>,
+) -> Result<(), ActivityStorageError> {
+    if day_since < 0
+        || day_since > hour_since
+        || created_at.is_some_and(|created_at| hour_since > created_at)
+    {
+        return Err(ActivityStorageError::InvalidFrequencyWindow);
     }
     Ok(())
 }

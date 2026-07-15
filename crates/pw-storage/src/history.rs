@@ -1,10 +1,16 @@
 use pw_application::{
     PortError,
-    history::{ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn},
+    history::{
+        ConversationHistory, MessageRole, PersistedProactiveAssistantMessage,
+        ProactiveAssistantHistory, ProactiveAssistantHistoryError, ProactiveAssistantMessage,
+        StoredConversation, StoredMessage, StoredTurn,
+    },
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, Transaction, params};
 
 use crate::Database;
+
+const MAX_PROACTIVE_ASSISTANT_CONTENT_BYTES: usize = 65_536;
 
 pub struct SqliteConversationHistory {
     database: Database,
@@ -104,18 +110,8 @@ impl ConversationHistory for SqliteConversationHistory {
             "INSERT INTO conversations (id, created_at, updated_at, next_turn_id) VALUES (?1, ?2, ?2, 1)
              ON CONFLICT(id) DO NOTHING", params![conversation_id, created_at],
         ).map_err(adapter_error)?;
-        transaction.execute(
-            "INSERT INTO conversation_turn_sequences (conversation_id, next_turn_id) VALUES (?1, 1)
-             ON CONFLICT(conversation_id) DO NOTHING", [conversation_id],
-        ).map_err(adapter_error)?;
-        let reserved: i64 = transaction
-            .query_row(
-                "UPDATE conversation_turn_sequences SET next_turn_id = next_turn_id + 1
-             WHERE conversation_id = ?1 RETURNING next_turn_id - 1",
-                [conversation_id],
-                |row| row.get(0),
-            )
-            .map_err(adapter_error)?;
+        let reserved = reserve_detached_turn(&transaction, conversation_id)
+            .map_err(|_| adapter_error("turn sequence allocation failed"))?;
         transaction.commit().map_err(adapter_error)?;
         u64::try_from(reserved).map_err(adapter_error)
     }
@@ -267,6 +263,103 @@ impl ConversationHistory for SqliteConversationHistory {
         transaction.commit().map_err(adapter_error)?;
         Ok(existed)
     }
+}
+
+impl ProactiveAssistantHistory for SqliteConversationHistory {
+    fn append_proactive_assistant(
+        &mut self,
+        message: &ProactiveAssistantMessage,
+    ) -> Result<PersistedProactiveAssistantMessage, ProactiveAssistantHistoryError> {
+        if message.conversation_id.is_empty()
+            || message.content.is_empty()
+            || message.content.len() > MAX_PROACTIVE_ASSISTANT_CONTENT_BYTES
+            || message.created_at < 0
+        {
+            return Err(ProactiveAssistantHistoryError);
+        }
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        transaction
+            .execute(
+                "INSERT INTO conversations (id,created_at,updated_at,next_turn_id) \
+                 VALUES (?1,?2,?2,1) ON CONFLICT(id) DO NOTHING",
+                params![message.conversation_id, message.created_at],
+            )
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        let reserved = reserve_detached_turn(&transaction, &message.conversation_id)
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        transaction
+            .execute(
+                "INSERT INTO messages (conversation_id,turn_id,role,content,created_at) \
+                 VALUES (?1,?2,'assistant',?3,?4)",
+                params![
+                    message.conversation_id,
+                    reserved,
+                    message.content,
+                    message.created_at
+                ],
+            )
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        let message_id = transaction.last_insert_rowid();
+        let updated = transaction
+            .execute(
+                "UPDATE conversations SET updated_at=MAX(updated_at,?2) WHERE id=?1",
+                params![message.conversation_id, message.created_at],
+            )
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        if updated != 1 {
+            return Err(ProactiveAssistantHistoryError);
+        }
+        transaction
+            .commit()
+            .map_err(|_| ProactiveAssistantHistoryError)?;
+        Ok(PersistedProactiveAssistantMessage {
+            turn_id: u64::try_from(reserved).map_err(|_| ProactiveAssistantHistoryError)?,
+            message_id,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TurnSequenceAllocationError;
+
+fn reserve_detached_turn(
+    transaction: &Transaction<'_>,
+    conversation_id: &str,
+) -> Result<i64, TurnSequenceAllocationError> {
+    transaction
+        .execute(
+            "INSERT INTO conversation_turn_sequences (conversation_id,next_turn_id) \
+             VALUES (?1,1) ON CONFLICT(conversation_id) DO NOTHING",
+            [conversation_id],
+        )
+        .map_err(|_| TurnSequenceAllocationError)?;
+    let (storage_class, reserved): (String, i64) = transaction
+        .query_row(
+            "SELECT typeof(next_turn_id),next_turn_id FROM conversation_turn_sequences \
+             WHERE conversation_id=?1",
+            [conversation_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|_| TurnSequenceAllocationError)?;
+    if storage_class != "integer" || reserved <= 0 {
+        return Err(TurnSequenceAllocationError);
+    }
+    let next = reserved.checked_add(1).ok_or(TurnSequenceAllocationError)?;
+    let updated = transaction
+        .execute(
+            "UPDATE conversation_turn_sequences SET next_turn_id=?2 \
+             WHERE conversation_id=?1 AND typeof(next_turn_id)='integer' AND next_turn_id=?3",
+            params![conversation_id, next, reserved],
+        )
+        .map_err(|_| TurnSequenceAllocationError)?;
+    if updated != 1 {
+        return Err(TurnSequenceAllocationError);
+    }
+    Ok(reserved)
 }
 
 #[cfg(test)]
