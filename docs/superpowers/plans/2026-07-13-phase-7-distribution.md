@@ -18,7 +18,7 @@
 - VAD/STT/LLM/TTSの各モデルは、バージョン、配布形態、SPDX式、許諾根拠URL、本文hashを登録する。アプリが再配布しない外部LLM/TTSは`external_not_redistributed`と明記し、再配布対象へ暗黙に格上げしない。
 - 外部ゲート未提供時もunsigned local bundle、mock updater検証、設定検証、ライセンス生成、CI定義まで完成させる。
 - 全GitHub Actionsの`uses:`は40文字commit SHAに固定し、major tagやbranch名をrelease/CI workflowに残さない。
-- 製品bundleは現在のplaceholder iconを使わず、`assets/branding/app-icon.svg`からTauri CLIで再生成したicon setだけを使う。
+- 製品bundleは現在のplaceholder iconを使わず、`assets/branding/app-icon.png`からTauri CLIで再生成したicon setだけを使う。
 - 全TaskをRED→GREEN→REFACTOR、独立レビュー、個別コミットで進める。
 - commit前は各Taskの**Files**に列挙したexact pathだけを`git add -- <path...>`でstageし、directory単位の`git add`を禁止する。`git diff --cached --name-only`をTask固有allowlistとbyte-for-byte比較し、余分・不足があればcommitしない。
 
@@ -41,7 +41,7 @@
 
 **Files:**
 - Modify: `apps/desktop/src-tauri/tauri.conf.json`
-- Create: `assets/branding/app-icon.svg`
+- Create: `assets/branding/app-icon.png`
 - Create: `apps/desktop/src-tauri/tauri.windows.local.json`
 - Create: `apps/desktop/src-tauri/tauri.macos.local.json`
 - Create: `tools/scripts/verify-distribution-config.mjs`
@@ -128,7 +128,7 @@ CLIは`node tools/scripts/verify-distribution-config.mjs --base apps/desktop/src
 
 - [ ] **Step 4: Add deterministic local overlays**
 
-Windows overlayは`bundle.active=true`、`targets=["nsis"]`、`createUpdaterArtifacts=false`、NSIS `installMode="currentUser"`、Japanese/English、WebView2 `downloadBootstrapper`とする。macOS overlayは`targets=["app"]`、`createUpdaterArtifacts=false`、`bundle.macOS.signingIdentity="-"`のad-hoc signとする。model/character pathはresourcesへ追加しない。`assets/branding/app-icon.svg`は独自のPW orbit markとし、`corepack pnpm --filter @parallel-world/desktop tauri icon ../../assets/branding/app-icon.svg`で全iconを再生成する。生成前後のpath集合を`generated-icon-files.txt`のexact allowlistと比較し、追加・欠落・allowlist外変更を拒否する。verifierはplaceholder時の既知hashも拒否する。
+Windows overlayは`bundle.active=true`、`targets=["nsis"]`、`createUpdaterArtifacts=false`、NSIS `installMode="currentUser"`、Japanese/English、WebView2 `downloadBootstrapper`とする。macOS overlayは`targets=["app"]`、`createUpdaterArtifacts=false`、`bundle.macOS.signingIdentity="-"`のad-hoc signとする。model/character pathはresourcesへ追加しない。`assets/branding/app-icon.png`はユーザー提供のParallel World icon PNGとし、`corepack pnpm --filter @parallel-world/desktop tauri icon ../../assets/branding/app-icon.png`で全iconを再生成する。生成前後のpath集合を`generated-icon-files.txt`のexact allowlistと比較し、追加・欠落・allowlist外変更を拒否する。verifierはplaceholder時の既知hashも拒否する。
 
 - [ ] **Step 5: Add scripts and verify GREEN**
 
