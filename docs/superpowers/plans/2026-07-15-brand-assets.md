@@ -222,7 +222,7 @@ Expected: 全テスト PASS。
 
 ```powershell
 git diff --check
-rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' 'app-icon\.svg|PW orbit mark' apps assets tools docs/superpowers/plans README.md
+rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' 'app-icon\.svg|PW orbit mark' apps assets docs/superpowers/plans README.md
 ```
 
 Expected: `git diff --check` は無出力で成功し、実装対象のコード・配布計画に旧正本参照がないこと。`tools/scripts/verify-distribution-config.test.mjs` の旧パスは不存在確認のため許容する。
