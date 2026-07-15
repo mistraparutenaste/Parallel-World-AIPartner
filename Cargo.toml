@@ -33,8 +33,10 @@ pw-platform = { path = "crates/pw-platform" }
 pw-stt-sherpa = { path = "crates/pw-stt-sherpa" }
 pw-storage = { path = "crates/pw-storage" }
 pw-tts = { path = "crates/pw-tts" }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json"] }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls-native-roots"] }
+rcgen = "0.14.8"
 rusqlite = { version = "0.40.1", features = ["backup", "bundled", "modern_sqlite"] }
+rustls = { version = "0.23.41", default-features = false, features = ["ring", "std", "tls12"] }
 rtrb = "0.3.4"
 # 4.0はaudioadapter前提のAPI刷新直後のため、実績のある0.16系を使用
 rubato = "0.16"

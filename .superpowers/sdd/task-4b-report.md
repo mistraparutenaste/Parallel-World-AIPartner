@@ -111,3 +111,66 @@ PASS: all automated package unit/integration/doc tests (22 passed, 1 real-server
   re-run the same eligibility function immediately before decision commit.
 - The interaction gate is implemented and tested but is not connected to ChatService
   in this task, as required by scope.
+
+## Review-fix addendum (2026-07-15)
+
+### Additional dependency research
+
+- reqwest 0.12.28 documents that its default client may retry safe low-level
+  protocol NACKs. `reqwest::retry::never()` is the documented policy that disables
+  this default behavior. The evaluator builder now fixes this policy explicitly;
+  it remains one request with no retry. Sources:
+  https://docs.rs/reqwest/0.12.28/reqwest/retry/fn.never.html and the locally
+  resolved `reqwest-0.12.28/src/retry.rs`.
+- The locally resolved reqwest 0.12.28 manifest defines
+  `rustls-tls-native-roots` as the Rustls/ring backend plus native root certificate
+  loading. The workspace reqwest feature list now includes that exact feature.
+  `cargo tree -p pw-llm -e features` confirms `hyper-rustls`,
+  `rustls-native-certs 0.8.4`, Rustls `ring`, `std`, and `tls12` in the effective
+  graph. Source: https://docs.rs/crate/reqwest/0.12.28/features
+- TLS test support uses `rcgen 0.14.8` and `rustls 0.23.41` as dev dependencies.
+  The test creates a localhost SAN certificate, runs a bounded Rustls server, and
+  supplies that certificate only through a private `cfg(test)` root-injection
+  constructor. Production does not call any invalid-certificate or invalid-hostname
+  bypass. Sources: https://docs.rs/rcgen/0.14.8/rcgen/ and
+  https://docs.rs/rustls/0.23.41/rustls/struct.ConfigBuilder.html
+
+### Additional RED/GREEN evidence
+
+1. RED: `cargo test -p pw-application proactive_session_ids`
+   - The old engine treated session id 2 -> 1 as a new session and emitted Return.
+   - GREEN: decreasing/reused ids now reset continuity; only strictly greater
+     SQLite row ids establish a new session.
+2. RED: `cargo test -p pw-llm evaluator_https_uses_certificate_validation`
+   - Failed to compile because `EVALUATOR_MAX_RETRIES` and the private test-root
+     constructor did not exist (`E0432`, `E0599`).
+   - GREEN: a real localhost TLS handshake and strict Speak response pass with the
+     injected trusted root while normal certificate validation remains active.
+3. `evaluator_failed_response_is_sent_exactly_once` verifies one 503 response is
+   received exactly once. The production builder also fixes
+   `.retry(reqwest::retry::never())`, preventing default protocol-NACK retries.
+
+### Review-fix acceptance
+
+```text
+cargo test -p pw-application proactive
+PASS: 1 unit + 10 integration proactive tests
+
+cargo test -p pw-llm evaluator
+PASS: 5 unit + 13 integration evaluator tests
+
+cargo fmt --all --check
+PASS
+
+cargo clippy -p pw-application -p pw-llm --all-targets -- -D warnings
+PASS
+
+git diff --check
+PASS (Windows LF-to-CRLF warnings only)
+
+cargo test -p pw-application
+PASS: 73 tests across package targets
+
+cargo test -p pw-llm
+PASS: 24 automated tests; 1 real-server test ignored
+```

@@ -66,6 +66,8 @@ pub struct Observation {
 
 impl Observation {
     /// Creates one validated activity observation.
+    /// Session ids are expected to be monotonically increasing `SQLite` row ids
+    /// supplied by the activity repository; reuse or decrease resets the engine.
     ///
     /// # Errors
     /// Returns [`InvalidInput`] for a zero session id, negative start, or an
@@ -189,6 +191,7 @@ impl CandidateEngine {
             return None;
         };
         if observation.last_seen_at < previous.last_seen_at
+            || observation.session_id < previous.session_id
             || (observation.session_id == previous.session_id
                 && (observation.started_at != previous.started_at
                     || observation.category != previous.category))
@@ -197,7 +200,7 @@ impl CandidateEngine {
             return None;
         }
 
-        let new_session = observation.session_id != previous.session_id;
+        let new_session = observation.session_id > previous.session_id;
         let return_due = new_session
             && observation
                 .started_at

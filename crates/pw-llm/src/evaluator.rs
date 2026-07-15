@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 pub const EVALUATOR_TIMEOUT: Duration = Duration::from_secs(8);
+const EVALUATOR_MAX_RETRIES: usize = 0;
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024;
 const MAX_DURATION_SECONDS: u64 = 7 * 24 * 60 * 60;
 const MAX_MODEL_CHARS: usize = 128;
@@ -77,10 +78,22 @@ impl OpenAiCompatEvaluator {
 
     fn new_with_timeout(config: &EvaluatorConfig, timeout: Duration) -> Self {
         let selected = select_config(config);
+        let http = selected
+            .as_ref()
+            .and_then(|_| evaluator_client_builder(timeout).build().ok());
+        Self { selected, http }
+    }
+
+    #[cfg(test)]
+    fn new_with_test_root(
+        config: &EvaluatorConfig,
+        timeout: Duration,
+        root: reqwest::Certificate,
+    ) -> Self {
+        let selected = select_config(config);
         let http = selected.as_ref().and_then(|_| {
-            reqwest::blocking::Client::builder()
-                .timeout(timeout)
-                .redirect(reqwest::redirect::Policy::none())
+            evaluator_client_builder(timeout)
+                .add_root_certificate(root)
                 .build()
                 .ok()
         });
@@ -121,6 +134,14 @@ impl OpenAiCompatEvaluator {
         }
         parse_response(&bytes)
     }
+}
+
+fn evaluator_client_builder(timeout: Duration) -> reqwest::blocking::ClientBuilder {
+    debug_assert_eq!(EVALUATOR_MAX_RETRIES, 0);
+    reqwest::blocking::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
 }
 
 fn select_config(config: &EvaluatorConfig) -> Option<SelectedConfig> {
@@ -284,13 +305,14 @@ mod tests {
     use pw_application::behavior::proactive::{CandidateKind, CategoryId};
 
     use super::{
-        EVALUATOR_TIMEOUT, EvaluationDecision, EvaluatorConfig, EvaluatorContext,
-        OpenAiCompatEvaluator, select_config,
+        EVALUATOR_MAX_RETRIES, EVALUATOR_TIMEOUT, EvaluationDecision, EvaluatorConfig,
+        EvaluatorContext, OpenAiCompatEvaluator, select_config,
     };
 
     #[test]
     fn evaluator_production_timeout_is_eight_seconds() {
         assert_eq!(EVALUATOR_TIMEOUT, Duration::from_secs(8));
+        assert_eq!(EVALUATOR_MAX_RETRIES, 0);
     }
 
     #[test]
@@ -362,5 +384,87 @@ mod tests {
         assert!(select_config(&config).is_none());
         config.allow_remote = true;
         assert!(select_config(&config).is_some());
+    }
+
+    #[test]
+    fn evaluator_https_uses_certificate_validation_with_an_injected_test_root() {
+        use std::sync::Arc;
+        use std::time::Instant;
+
+        use rcgen::{CertifiedKey, generate_simple_self_signed};
+        use rustls::pki_types::PrivatePkcs8KeyDer;
+
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let cert_der = cert.der().clone();
+        let private_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into();
+        let tls_config = rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert_der.clone()], private_key)
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            let socket = loop {
+                match listener.accept() {
+                    Ok((socket, _)) => break Ok(socket),
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if Instant::now() >= deadline {
+                            break Err("TLS accept timeout".to_owned());
+                        }
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => break Err(error.to_string()),
+                }
+            }?;
+            socket
+                .set_nonblocking(false)
+                .map_err(|error| error.to_string())?;
+            socket
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .map_err(|error| error.to_string())?;
+            socket
+                .set_write_timeout(Some(Duration::from_secs(1)))
+                .map_err(|error| error.to_string())?;
+            let connection = rustls::ServerConnection::new(Arc::new(tls_config))
+                .map_err(|error| error.to_string())?;
+            let mut stream = rustls::StreamOwned::new(connection, socket);
+            let mut request = [0; 4096];
+            stream
+                .read(&mut request)
+                .map_err(|error| error.to_string())?;
+            let body = r#"{"choices":[{"finish_reason":"stop","message":{"content":"{\"decision\":\"speak\"}","refusal":null}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .map_err(|error| error.to_string())?;
+            Ok::<(), String>(())
+        });
+        let root = reqwest::Certificate::from_der(cert_der.as_ref()).unwrap();
+        let config = EvaluatorConfig {
+            normal_base_url: format!("https://localhost:{port}/v1"),
+            normal_model: "test".into(),
+            evaluator_base_url: None,
+            evaluator_model: None,
+            allow_remote: false,
+        };
+        let evaluator =
+            OpenAiCompatEvaluator::new_with_test_root(&config, Duration::from_secs(2), root);
+        let context =
+            EvaluatorContext::new(CandidateKind::Return, CategoryId::new("work").unwrap(), 10)
+                .unwrap();
+        let decision = evaluator.evaluate(&context);
+        let server_result = server.join().unwrap();
+        assert_eq!(
+            server_result,
+            Ok(()),
+            "TLS server did not complete one response"
+        );
+        assert_eq!(decision, EvaluationDecision::Speak);
     }
 }

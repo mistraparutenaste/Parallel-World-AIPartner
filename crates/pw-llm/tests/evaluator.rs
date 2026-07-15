@@ -228,6 +228,26 @@ fn evaluator_transport_failure_is_skip() {
 }
 
 #[test]
+fn evaluator_failed_response_is_sent_exactly_once() {
+    let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+    let port = server.server_addr().to_ip().unwrap().port();
+    let received = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let received_in = Arc::clone(&received);
+    let handle = std::thread::spawn(move || {
+        while let Ok(Some(request)) = server.recv_timeout(Duration::from_millis(200)) {
+            received_in.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let _ = request.respond(
+                tiny_http::Response::from_string("retryable failure").with_status_code(503),
+            );
+        }
+    });
+    let evaluator = OpenAiCompatEvaluator::new(&config(port));
+    assert_eq!(evaluator.evaluate(&context()), EvaluationDecision::Skip);
+    handle.join().unwrap();
+    assert_eq!(received.load(std::sync::atomic::Ordering::Relaxed), 1);
+}
+
+#[test]
 fn evaluator_does_not_follow_redirects() {
     use std::io::{Read, Write};
 

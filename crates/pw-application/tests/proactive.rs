@@ -178,6 +178,24 @@ fn proactive_invalid_or_nonmonotonic_observation_resets_continuity() {
     );
 }
 
+#[test]
+fn proactive_session_ids_must_increase_and_cannot_return_to_an_older_id() {
+    let mut decreasing = engine();
+    decreasing.observe(observation(2, 0, 100, "work"));
+    assert_eq!(decreasing.observe(observation(1, 700, 700, "work")), None);
+    assert_eq!(
+        decreasing.observe(observation(3, 1_300, 1_300, "work")),
+        None,
+        "decreasing id resets continuity, so the next observation is a baseline"
+    );
+
+    let mut reused = engine();
+    reused.observe(observation(1, 0, 100, "work"));
+    reused.observe(observation(2, 101, 101, "work"));
+    assert_eq!(reused.observe(observation(1, 701, 701, "work")), None);
+    assert_eq!(reused.observe(observation(3, 1_301, 1_301, "work")), None);
+}
+
 struct History {
     calls: AtomicUsize,
     result: Result<FrequencySnapshot, ()>,
