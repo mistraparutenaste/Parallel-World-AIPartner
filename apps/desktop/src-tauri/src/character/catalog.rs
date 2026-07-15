@@ -12,7 +12,10 @@ use pw_contracts::{CharacterSettingsDto, MotionGroupDto};
 use pw_platform::paths::AppDataLayout;
 use serde::Deserialize;
 
-use super::{CharacterManifest, find_first_model3, parse_model3_json};
+use super::{
+    CharacterManifest, find_first_model3, load_character_settings, parse_model3_json,
+    setup::is_unreferenced_managed_profile,
+};
 
 const PROFILE_SCHEMA_VERSION: u16 = 1;
 const MAX_NAME_SCALARS: usize = 128;
@@ -203,7 +206,9 @@ impl CharacterCatalog {
     /// Fails closed when discovery, parsing, path validation, or asset validation fails.
     pub fn discover(layout: &AppDataLayout) -> Result<Self, CharacterProfileError> {
         let characters_root = canonicalize(&layout.characters)?;
-        let explicit = discover_profile_files(&layout.characters)?;
+        let settings = load_character_settings(layout);
+        let mut explicit = discover_profile_files(&layout.characters)?;
+        explicit.retain(|path| !is_unreferenced_managed_profile(path, &settings));
         if explicit.is_empty() {
             let model_path = find_first_model3(&layout.characters)
                 .ok_or(CharacterProfileError::NoCharacterAvailable)?;

@@ -2,6 +2,7 @@
 //! shared network endpoint policy.
 
 pub mod diagnostics;
+pub mod file_security;
 pub mod net;
 pub mod paths;
 pub mod process;

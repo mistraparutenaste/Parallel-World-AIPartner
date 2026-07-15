@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
+    io::{Read, Write},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -19,7 +20,41 @@ use super::{
 
 const MANAGED_STATIC_PREFIX: &str = "managed-static-";
 const MANAGED_LIVE2D_PREFIX: &str = "managed-live2d-";
+pub(crate) const MANAGED_MARKER_FILE: &str = ".parallel-world-managed.json";
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ManagedKind {
+    StaticImage,
+    Live2d,
+}
+
+impl ManagedKind {
+    const fn prefix(self) -> &'static str {
+        match self {
+            Self::StaticImage => MANAGED_STATIC_PREFIX,
+            Self::Live2d => MANAGED_LIVE2D_PREFIX,
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ManagedMarker {
+    schema_version: u16,
+    id: String,
+    kind: ManagedKind,
+    generation: String,
+}
+
+struct PreparedGeneration {
+    id: String,
+    kind: ManagedKind,
+    generation: String,
+    staging: PathBuf,
+    final_dir: PathBuf,
+}
 
 #[derive(Clone, Copy)]
 struct Live2dCopyLimits {
@@ -232,20 +267,100 @@ fn import_character_source_with_saver(
     live2d_import_enabled: bool,
     save: impl Fn(&AppDataLayout, &pw_contracts::CharacterSettingsDto) -> Result<(), String>,
 ) -> Result<CharacterSetupDto, String> {
-    match kind {
-        CharacterRendererKindDto::StaticImage => {
-            import_static_source(layout, source_path, live2d_import_enabled, save)
-        }
-        CharacterRendererKindDto::Live2d => {
-            if !live2d_import_enabled {
-                return Err(setup_error(
-                    "live2d_import_disabled",
-                    "arbitrary Live2D import is disabled in release builds",
-                ));
-            }
-            import_live2d_source(layout, source_path, live2d_import_enabled, save)
+    if kind == CharacterRendererKindDto::Live2d && !live2d_import_enabled {
+        return Err(setup_error(
+            "live2d_import_disabled",
+            "arbitrary Live2D import is disabled in release builds",
+        ));
+    }
+    let before_setup = discover_setup(layout, live2d_import_enabled)?;
+    let original = load_character_settings(layout);
+    let mut prepared = Vec::with_capacity(2);
+
+    if kind == CharacterRendererKindDto::StaticImage
+        && before_setup.active_renderer == Some(CharacterRendererKindDto::Live2d)
+        && original.active_character_id.is_none()
+        && original.live2d_character_id.is_none()
+    {
+        let catalog = CharacterCatalog::discover(layout).map_err(map_profile_error)?;
+        let legacy = catalog
+            .profile_by_id(LEGACY_CHARACTER_ID)
+            .and_then(ResolvedCharacter::live2d_model_path)
+            .ok_or_else(|| setup_error("missing_asset", "legacy Live2D model is unavailable"))?;
+        prepared.push(prepare_live2d_generation(layout, legacy)?);
+    }
+
+    let requested = match kind {
+        CharacterRendererKindDto::StaticImage => prepare_static_generation(layout, source_path),
+        CharacterRendererKindDto::Live2d => prepare_live2d_generation(layout, source_path),
+    };
+    match requested {
+        Ok(generation) => prepared.push(generation),
+        Err(error) => {
+            cleanup_prepared(&prepared);
+            return Err(error);
         }
     }
+
+    commit_prepared(&prepared)?;
+
+    let previous_live2d = original.live2d_character_id.clone().or_else(|| {
+        (before_setup.active_renderer == Some(CharacterRendererKindDto::Live2d))
+            .then(|| original.active_character_id.clone())
+            .flatten()
+    });
+    let previous_static = original.static_image_character_id.clone().or_else(|| {
+        (before_setup.active_renderer == Some(CharacterRendererKindDto::StaticImage))
+            .then(|| original.active_character_id.clone())
+            .flatten()
+    });
+    let mut updated = original.clone();
+    for generation in &prepared {
+        match generation.kind {
+            ManagedKind::Live2d => updated.live2d_character_id = Some(generation.id.clone()),
+            ManagedKind::StaticImage => {
+                updated.static_image_character_id = Some(generation.id.clone());
+            }
+        }
+    }
+    if before_setup.active_renderer.is_none()
+        || before_setup.active_renderer == Some(kind)
+        || (kind == CharacterRendererKindDto::StaticImage
+            && original.active_character_id.is_none()
+            && prepared.len() == 2)
+    {
+        let active_kind = if prepared.len() == 2 {
+            ManagedKind::Live2d
+        } else {
+            prepared.last().expect("one prepared generation").kind
+        };
+        updated.active_character_id = prepared
+            .iter()
+            .find(|generation| generation.kind == active_kind)
+            .map(|generation| generation.id.clone());
+    }
+    if let Err(error) = save(layout, &updated) {
+        if let Some(rollback_error) = rollback_committed(&prepared) {
+            return Err(rollback_error);
+        }
+        return Err(setup_error("settings_save", error));
+    }
+
+    if prepared
+        .iter()
+        .any(|generation| generation.kind == ManagedKind::Live2d)
+        && let Some(id) = previous_live2d
+    {
+        cleanup_managed_generation(layout, &id, ManagedKind::Live2d, &prepared);
+    }
+    if prepared
+        .iter()
+        .any(|generation| generation.kind == ManagedKind::StaticImage)
+        && let Some(id) = previous_static
+    {
+        cleanup_managed_generation(layout, &id, ManagedKind::StaticImage, &prepared);
+    }
+    discover_setup(layout, live2d_import_enabled)
 }
 
 fn generation() -> String {
@@ -304,44 +419,42 @@ fn source_display_name(path: &Path, fallback: &str) -> String {
         .to_owned()
 }
 
-fn import_static_source(
+fn write_managed_marker(generation: &PreparedGeneration) -> Result<(), String> {
+    let marker = ManagedMarker {
+        schema_version: 1,
+        id: generation.id.clone(),
+        kind: generation.kind,
+        generation: generation.generation.clone(),
+    };
+    fs::write(
+        generation.staging.join(MANAGED_MARKER_FILE),
+        serde_json::to_vec_pretty(&marker).map_err(|error| setup_error("marker_write", error))?,
+    )
+    .map_err(|error| setup_error("marker_write", error))
+}
+
+fn prepare_static_generation(
     layout: &AppDataLayout,
     source_path: &Path,
-    live2d_import_enabled: bool,
-    save: impl Fn(&AppDataLayout, &pw_contracts::CharacterSettingsDto) -> Result<(), String>,
-) -> Result<CharacterSetupDto, String> {
+) -> Result<PreparedGeneration, String> {
     ensure_regular_source(source_path)?;
     let extension = static_extension(source_path)?;
-    let initial_setup = discover_setup(layout, live2d_import_enabled)?;
-    let initial_settings = load_character_settings(layout);
-    if initial_setup.active_renderer == Some(CharacterRendererKindDto::Live2d)
-        && initial_settings.active_character_id.is_none()
-        && initial_settings.live2d_character_id.is_none()
-    {
-        let catalog = CharacterCatalog::discover(layout).map_err(map_profile_error)?;
-        let legacy = catalog
-            .profile_by_id(LEGACY_CHARACTER_ID)
-            .and_then(ResolvedCharacter::live2d_model_path)
-            .ok_or_else(|| setup_error("missing_asset", "legacy Live2D model is unavailable"))?
-            .to_path_buf();
-        import_live2d_source(
-            layout,
-            &legacy,
-            live2d_import_enabled,
-            save_character_settings,
-        )?;
-    }
-    let before_setup = discover_setup(layout, live2d_import_enabled)?;
-    let original = load_character_settings(layout);
     let generation = generation();
     let id = format!("{MANAGED_STATIC_PREFIX}{generation}");
     let staging = layout.characters.join(".staging").join(&generation);
     let final_dir = layout.characters.join(&id);
     let image_name = format!("neutral.{extension}");
+    let prepared = PreparedGeneration {
+        id: id.clone(),
+        kind: ManagedKind::StaticImage,
+        generation,
+        staging,
+        final_dir,
+    };
 
     let staged_result = (|| -> Result<ResolvedCharacter, String> {
-        fs::create_dir_all(&staging).map_err(|error| setup_error("asset_write", error))?;
-        fs::copy(source_path, staging.join(&image_name))
+        fs::create_dir_all(&prepared.staging).map_err(|error| setup_error("asset_write", error))?;
+        fs::copy(source_path, prepared.staging.join(&image_name))
             .map_err(|error| setup_error("asset_write", error))?;
         let manifest = serde_json::json!({
             "schema_version": 1,
@@ -354,54 +467,27 @@ fn import_static_source(
             }
         });
         fs::write(
-            staging.join("character.json"),
+            prepared.staging.join("character.json"),
             serde_json::to_vec_pretty(&manifest)
                 .map_err(|error| setup_error("manifest_write", error))?,
         )
         .map_err(|error| setup_error("manifest_write", error))?;
-        validate_profile_manifest(layout, &staging.join("character.json"))
+        write_managed_marker(&prepared)?;
+        validate_profile_manifest(layout, &prepared.staging.join("character.json"))
             .map_err(map_profile_error)
     })();
     let validated = match staged_result {
         Ok(profile) => profile,
         Err(error) => {
-            let _ = fs::remove_dir_all(&staging);
+            let _ = fs::remove_dir_all(&prepared.staging);
             return Err(error);
         }
     };
     if renderer_kind(&validated) != CharacterRendererKindDto::StaticImage {
-        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir_all(&prepared.staging);
         return Err(setup_error("invalid_manifest", "renderer kind mismatch"));
     }
-    if let Err(error) = fs::rename(&staging, &final_dir) {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(setup_error("asset_commit", error));
-    }
-
-    let previous_id = original.static_image_character_id.clone().or_else(|| {
-        (before_setup.active_renderer == Some(CharacterRendererKindDto::StaticImage))
-            .then(|| original.active_character_id.clone())
-            .flatten()
-    });
-    let mut updated = original.clone();
-    updated.static_image_character_id = Some(id.clone());
-    if before_setup.active_renderer.is_none()
-        || before_setup.active_renderer == Some(CharacterRendererKindDto::StaticImage)
-    {
-        updated.active_character_id = Some(id.clone());
-    }
-    if let Err(error) = save(layout, &updated) {
-        let _ = fs::remove_dir_all(&final_dir);
-        return Err(setup_error("settings_save", error));
-    }
-
-    if let Some(previous_id) = previous_id
-        && previous_id.starts_with(MANAGED_STATIC_PREFIX)
-        && previous_id != id
-    {
-        let _ = fs::remove_dir_all(layout.characters.join(previous_id));
-    }
-    discover_setup(layout, live2d_import_enabled)
+    Ok(prepared)
 }
 
 fn copy_live2d_references(
@@ -427,10 +513,22 @@ fn copy_live2d_references(
     let canonical_root = source_root
         .canonicalize()
         .map_err(|error| setup_error("invalid_source", error))?;
-    let raw =
-        fs::read_to_string(model_path).map_err(|error| setup_error("invalid_model", error))?;
-    let json: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|error| setup_error("invalid_model", error))?;
+    let mut model_file =
+        pw_platform::file_security::open_contained_read(&canonical_root, model_path)
+            .map_err(|error| setup_error("invalid_model", error))?;
+    let mut model_bytes = Vec::new();
+    Read::by_ref(&mut model_file)
+        .take(limits.file_bytes.saturating_add(1))
+        .read_to_end(&mut model_bytes)
+        .map_err(|error| setup_error("invalid_model", error))?;
+    if u64::try_from(model_bytes.len()).unwrap_or(u64::MAX) > limits.file_bytes {
+        return Err(setup_error(
+            "file_too_large",
+            "Live2D model exceeds the per-file limit",
+        ));
+    }
+    let json: serde_json::Value = serde_json::from_slice(&model_bytes)
+        .map_err(|error| setup_error("invalid_model", error))?;
     let references = collect_live2d_references(&json, file_name)?;
     if references.len() > limits.files {
         return Err(setup_error(
@@ -444,33 +542,25 @@ fn copy_live2d_references(
         validate_live2d_relative_path(&relative)?;
         let source = source_root.join(&relative);
         ensure_no_reparse_components(&source)?;
-        let metadata =
-            fs::symlink_metadata(&source).map_err(|error| setup_error("missing_asset", error))?;
-        if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-            return Err(setup_error(
-                "unsafe_reference",
-                "Live2D reference is not a regular non-symlink file",
-            ));
+        let target = destination.join(&relative);
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|error| setup_error("asset_write", error))?;
         }
-        #[cfg(windows)]
-        ensure_not_reparse(&metadata)?;
-        let canonical = source
-            .canonicalize()
-            .map_err(|error| setup_error("missing_asset", error))?;
-        if !canonical.starts_with(&canonical_root) {
-            return Err(setup_error(
-                "unsafe_reference",
-                "Live2D reference escapes the selected model directory",
-            ));
-        }
-        if metadata.len() > limits.file_bytes {
-            return Err(setup_error(
-                "file_too_large",
-                format!("Live2D reference is {} bytes", metadata.len()),
-            ));
-        }
+        let copied = if relative == Path::new(file_name) {
+            let mut target_file =
+                fs::File::create(&target).map_err(|error| setup_error("asset_write", error))?;
+            target_file
+                .write_all(&model_bytes)
+                .map_err(|error| setup_error("asset_write", error))?;
+            u64::try_from(model_bytes.len()).unwrap_or(u64::MAX)
+        } else {
+            let source_file =
+                pw_platform::file_security::open_contained_read(&canonical_root, &source)
+                    .map_err(|error| setup_error("missing_asset", error))?;
+            copy_bounded(source_file, &target, limits.file_bytes)?
+        };
         total = total
-            .checked_add(metadata.len())
+            .checked_add(copied)
             .ok_or_else(|| setup_error("total_limit", "Live2D total size overflow"))?;
         if total > limits.total_bytes {
             return Err(setup_error(
@@ -478,13 +568,27 @@ fn copy_live2d_references(
                 format!("Live2D import totals {total} bytes"),
             ));
         }
-        let target = destination.join(&relative);
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(|error| setup_error("asset_write", error))?;
-        }
-        fs::copy(&canonical, &target).map_err(|error| setup_error("asset_write", error))?;
     }
     Ok(())
+}
+
+fn copy_bounded(mut source: impl Read, target: &Path, limit: u64) -> Result<u64, String> {
+    let mut target_file =
+        fs::File::create(target).map_err(|error| setup_error("asset_write", error))?;
+    let copied = std::io::copy(
+        &mut source.by_ref().take(limit.saturating_add(1)),
+        &mut target_file,
+    )
+    .map_err(|error| setup_error("asset_write", error))?;
+    drop(target_file);
+    if copied > limit {
+        let _ = fs::remove_file(target);
+        return Err(setup_error(
+            "file_too_large",
+            format!("Live2D reference exceeds {limit} bytes"),
+        ));
+    }
+    Ok(copied)
 }
 
 fn collect_live2d_references(
@@ -601,18 +705,21 @@ fn ensure_not_reparse(metadata: &fs::Metadata) -> Result<(), String> {
     }
 }
 
-fn import_live2d_source(
+fn prepare_live2d_generation(
     layout: &AppDataLayout,
     source_path: &Path,
-    live2d_import_enabled: bool,
-    save: impl Fn(&AppDataLayout, &pw_contracts::CharacterSettingsDto) -> Result<(), String>,
-) -> Result<CharacterSetupDto, String> {
-    let before_setup = discover_setup(layout, live2d_import_enabled)?;
-    let original = load_character_settings(layout);
+) -> Result<PreparedGeneration, String> {
     let generation = generation();
     let id = format!("{MANAGED_LIVE2D_PREFIX}{generation}");
     let staging = layout.characters.join(".staging").join(&generation);
     let final_dir = layout.characters.join(&id);
+    let prepared = PreparedGeneration {
+        id: id.clone(),
+        kind: ManagedKind::Live2d,
+        generation,
+        staging,
+        final_dir,
+    };
     let model_name = source_path
         .file_name()
         .and_then(|value| value.to_str())
@@ -627,8 +734,8 @@ fn import_live2d_source(
         .to_owned();
 
     let staged_result = (|| -> Result<ResolvedCharacter, String> {
-        fs::create_dir_all(&staging).map_err(|error| setup_error("asset_write", error))?;
-        copy_live2d_references(source_path, &staging, Live2dCopyLimits::default())?;
+        fs::create_dir_all(&prepared.staging).map_err(|error| setup_error("asset_write", error))?;
+        copy_live2d_references(source_path, &prepared.staging, Live2dCopyLimits::default())?;
         let manifest = serde_json::json!({
             "schema_version": 1,
             "id": id,
@@ -636,53 +743,178 @@ fn import_live2d_source(
             "renderer": {"kind": "live2d", "model": model_name, "default_expression": null}
         });
         fs::write(
-            staging.join("character.json"),
+            prepared.staging.join("character.json"),
             serde_json::to_vec_pretty(&manifest)
                 .map_err(|error| setup_error("manifest_write", error))?,
         )
         .map_err(|error| setup_error("manifest_write", error))?;
-        validate_profile_manifest(layout, &staging.join("character.json"))
+        write_managed_marker(&prepared)?;
+        validate_profile_manifest(layout, &prepared.staging.join("character.json"))
             .map_err(map_profile_error)
     })();
     let validated = match staged_result {
         Ok(profile) => profile,
         Err(error) => {
-            let _ = fs::remove_dir_all(&staging);
+            let _ = fs::remove_dir_all(&prepared.staging);
             return Err(error);
         }
     };
     if renderer_kind(&validated) != CharacterRendererKindDto::Live2d {
-        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir_all(&prepared.staging);
         return Err(setup_error("invalid_manifest", "renderer kind mismatch"));
     }
-    if let Err(error) = fs::rename(&staging, &final_dir) {
-        let _ = fs::remove_dir_all(&staging);
-        return Err(setup_error("asset_commit", error));
-    }
+    Ok(prepared)
+}
 
-    let previous_id = original.live2d_character_id.clone().or_else(|| {
-        (before_setup.active_renderer == Some(CharacterRendererKindDto::Live2d))
-            .then(|| original.active_character_id.clone())
-            .flatten()
-    });
-    let mut updated = original.clone();
-    updated.live2d_character_id = Some(id.clone());
-    if before_setup.active_renderer.is_none()
-        || before_setup.active_renderer == Some(CharacterRendererKindDto::Live2d)
+fn cleanup_prepared(prepared: &[PreparedGeneration]) {
+    for generation in prepared {
+        let _ = fs::remove_dir_all(&generation.staging);
+    }
+}
+
+fn commit_prepared(prepared: &[PreparedGeneration]) -> Result<(), String> {
+    commit_prepared_with(prepared, |from, to| fs::rename(from, to))
+}
+
+fn commit_prepared_with(
+    prepared: &[PreparedGeneration],
+    rename: impl Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    for (committed, generation) in prepared.iter().enumerate() {
+        if let Err(error) = rename(&generation.staging, &generation.final_dir) {
+            let rollback = rollback_committed(&prepared[..committed]);
+            cleanup_prepared(&prepared[committed..]);
+            return Err(rollback.unwrap_or_else(|| setup_error("asset_commit", error)));
+        }
+    }
+    Ok(())
+}
+
+fn rollback_committed(prepared: &[PreparedGeneration]) -> Option<String> {
+    let mut failures = Vec::new();
+    for generation in prepared.iter().rev() {
+        match fs::rename(&generation.final_dir, &generation.staging) {
+            Ok(()) => {
+                if let Err(error) = fs::remove_dir_all(&generation.staging) {
+                    failures.push(error.to_string());
+                }
+            }
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    (!failures.is_empty()).then(|| {
+        setup_error(
+            "rollback_failed",
+            format!(
+                "managed generation quarantine failed: {}",
+                failures.join("; ")
+            ),
+        )
+    })
+}
+
+fn managed_identity(id: &str, kind: ManagedKind) -> Option<&str> {
+    let generation = id.strip_prefix(kind.prefix())?;
+    let mut parts = generation.split('-');
+    if parts.clone().count() != 3
+        || parts.any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_digit()))
+        || !matches!(
+            Path::new(id).components().collect::<Vec<_>>().as_slice(),
+            [Component::Normal(_)]
+        )
     {
-        updated.active_character_id = Some(id.clone());
+        return None;
     }
-    if let Err(error) = save(layout, &updated) {
-        let _ = fs::remove_dir_all(&final_dir);
-        return Err(setup_error("settings_save", error));
+    Some(generation)
+}
+
+pub(crate) fn is_unreferenced_managed_profile(
+    manifest_path: &Path,
+    settings: &pw_contracts::CharacterSettingsDto,
+) -> bool {
+    let Some(directory) = manifest_path.parent() else {
+        return false;
+    };
+    let marker_path = directory.join(MANAGED_MARKER_FILE);
+    let metadata = match fs::symlink_metadata(&marker_path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            metadata
+        }
+        _ => return false,
+    };
+    #[cfg(windows)]
+    if ensure_not_reparse(&metadata).is_err() {
+        return false;
     }
-    if let Some(previous_id) = previous_id
-        && previous_id.starts_with(MANAGED_LIVE2D_PREFIX)
-        && previous_id != id
+    #[cfg(not(windows))]
+    let _ = metadata;
+    let marker: ManagedMarker = match fs::read(&marker_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
     {
-        let _ = fs::remove_dir_all(layout.characters.join(previous_id));
+        Some(marker) => marker,
+        None => return false,
+    };
+    let directory_id = directory.file_name().and_then(|name| name.to_str());
+    let valid = marker.schema_version == 1
+        && directory_id == Some(marker.id.as_str())
+        && managed_identity(&marker.id, marker.kind) == Some(marker.generation.as_str());
+    valid
+        && ![
+            settings.active_character_id.as_deref(),
+            settings.live2d_character_id.as_deref(),
+            settings.static_image_character_id.as_deref(),
+        ]
+        .contains(&Some(marker.id.as_str()))
+}
+
+fn cleanup_managed_generation(
+    layout: &AppDataLayout,
+    id: &str,
+    kind: ManagedKind,
+    prepared: &[PreparedGeneration],
+) {
+    if prepared.iter().any(|generation| generation.id == id) {
+        return;
     }
-    discover_setup(layout, live2d_import_enabled)
+    let Some(generation) = managed_identity(id, kind) else {
+        return;
+    };
+    let Ok(root) = layout.characters.canonicalize() else {
+        return;
+    };
+    let candidate = layout.characters.join(id);
+    let Ok(candidate) = candidate.canonicalize() else {
+        return;
+    };
+    if candidate.parent() != Some(root.as_path()) {
+        return;
+    }
+    let marker_path = candidate.join(MANAGED_MARKER_FILE);
+    let marker_metadata = match fs::symlink_metadata(&marker_path) {
+        Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
+            metadata
+        }
+        _ => return,
+    };
+    #[cfg(windows)]
+    if ensure_not_reparse(&marker_metadata).is_err() {
+        return;
+    }
+    let marker: ManagedMarker = match fs::read(&marker_path)
+        .ok()
+        .and_then(|raw| serde_json::from_slice(&raw).ok())
+    {
+        Some(marker) => marker,
+        None => return,
+    };
+    if marker.schema_version == 1
+        && marker.id == id
+        && marker.kind == kind
+        && marker.generation == generation
+    {
+        let _ = fs::remove_dir_all(candidate);
+    }
 }
 
 #[cfg(test)]
@@ -701,8 +933,9 @@ mod tests {
     use pw_platform::paths::AppDataLayout;
 
     use super::{
-        Live2dCopyLimits, copy_live2d_references, discover_setup, has_reparse_attribute,
-        import_character_source, import_character_source_with_saver, select_active_renderer,
+        Live2dCopyLimits, ManagedKind, PreparedGeneration, commit_prepared_with, copy_bounded,
+        copy_live2d_references, discover_setup, has_reparse_attribute, import_character_source,
+        import_character_source_with_saver, select_active_renderer,
     };
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -995,6 +1228,83 @@ mod tests {
         assert_eq!(managed, [original_id]);
     }
 
+    #[test]
+    fn unreferenced_marked_generation_is_hidden_from_catalog() {
+        let fixture = Fixture::new("unreferenced-marked-hidden");
+        let source = fixture.root.join("source.png");
+        write_png(&source, 2, 2, true);
+        import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &source,
+            true,
+        )
+        .unwrap();
+        fixture.save(&CharacterSettingsDto::default());
+
+        let error = crate::character::CharacterCatalog::discover(&fixture.layout).unwrap_err();
+
+        assert!(matches!(
+            error,
+            crate::character::CharacterProfileError::NoCharacterAvailable
+        ));
+    }
+
+    #[test]
+    fn static_reimport_never_deletes_markerless_managed_looking_profile() {
+        let fixture = Fixture::new("markerless-managed-looking");
+        let manual_id = "managed-static-1-2-3";
+        fixture.add_static(manual_id);
+        fixture.save(&CharacterSettingsDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            active_character_id: Some(manual_id.into()),
+            static_image_character_id: Some(manual_id.into()),
+            ..CharacterSettingsDto::default()
+        });
+        let source = fixture.root.join("replacement.png");
+        write_png(&source, 2, 2, true);
+
+        import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &source,
+            true,
+        )
+        .unwrap();
+
+        assert!(fixture.layout.characters.join(manual_id).is_dir());
+    }
+
+    #[test]
+    fn static_import_never_cleans_a_traversal_shaped_previous_id() {
+        let fixture = Fixture::new("cleanup-traversal");
+        fixture.add_live2d("active-live");
+        let anchor = fixture.layout.characters.join("managed-static-1-2-3");
+        std::fs::create_dir_all(&anchor).unwrap();
+        let victim = anchor.join("..").join("..").join("..").join("victim");
+        std::fs::create_dir_all(&victim).unwrap();
+        std::fs::write(victim.join("keep.txt"), b"keep").unwrap();
+        fixture.save(&CharacterSettingsDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            active_character_id: Some("active-live".into()),
+            live2d_character_id: Some("active-live".into()),
+            static_image_character_id: Some("managed-static-1-2-3/../../../victim".into()),
+            ..CharacterSettingsDto::default()
+        });
+        let source = fixture.root.join("replacement.png");
+        write_png(&source, 2, 2, true);
+
+        import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &source,
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(std::fs::read(victim.join("keep.txt")).unwrap(), b"keep");
+    }
+
     fn write_live2d_source(root: &Path) -> PathBuf {
         std::fs::create_dir_all(root.join("textures")).unwrap();
         std::fs::create_dir_all(root.join("expressions")).unwrap();
@@ -1164,6 +1474,17 @@ mod tests {
     }
 
     #[test]
+    fn bounded_copy_rejects_limit_plus_one_and_removes_partial_target() {
+        let fixture = Fixture::new("bounded-copy-growth");
+        let target = fixture.root.join("partial.bin");
+
+        let error = copy_bounded(std::io::Cursor::new(b"12345"), &target, 4).unwrap_err();
+
+        assert!(error.starts_with("character_setup_error:file_too_large:"));
+        assert!(!target.exists());
+    }
+
+    #[test]
     fn live2d_import_policy_rejects_arbitrary_import_when_disabled() {
         let fixture = Fixture::new("live2d-policy");
         let model = write_live2d_source(&fixture.root.join("source"));
@@ -1278,6 +1599,118 @@ mod tests {
         assert_eq!(
             live_setup.active_renderer,
             Some(CharacterRendererKindDto::Live2d)
+        );
+    }
+
+    #[test]
+    fn legacy_plus_static_save_failure_leaves_settings_and_generations_unchanged() {
+        let fixture = Fixture::new("legacy-static-atomic-save");
+        std::fs::write(
+            fixture.layout.characters.join("Legacy.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+        let source = fixture.root.join("static.png");
+        write_png(&source, 2, 2, true);
+        let original = crate::character::load_character_settings(&fixture.layout);
+        let managed_before: Vec<_> = std::fs::read_dir(&fixture.layout.characters)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with("managed-"))
+            .collect();
+
+        let error = import_character_source_with_saver(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &source,
+            true,
+            |_layout, _settings| Err("injected save failure".into()),
+        )
+        .unwrap_err();
+
+        assert!(error.starts_with("character_setup_error:settings_save:"));
+        assert_eq!(
+            crate::character::load_character_settings(&fixture.layout),
+            original
+        );
+        let managed_after: Vec<_> = std::fs::read_dir(&fixture.layout.characters)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name())
+            .filter(|name| name.to_string_lossy().starts_with("managed-"))
+            .collect();
+        assert_eq!(managed_after, managed_before);
+    }
+
+    #[test]
+    fn invalid_static_after_legacy_prepare_leaves_no_managed_generation() {
+        let fixture = Fixture::new("legacy-static-invalid-atomic");
+        std::fs::write(
+            fixture.layout.characters.join("Legacy.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+        let source = fixture.root.join("invalid.jpg");
+        std::fs::write(&source, b"not an image").unwrap();
+        let original = crate::character::load_character_settings(&fixture.layout);
+
+        let error = import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &source,
+            true,
+        )
+        .unwrap_err();
+
+        assert!(error.starts_with("character_setup_error:invalid_source:"));
+        assert_eq!(
+            crate::character::load_character_settings(&fixture.layout),
+            original
+        );
+        assert!(
+            std::fs::read_dir(&fixture.layout.characters)
+                .unwrap()
+                .filter_map(Result::ok)
+                .all(|entry| !entry.file_name().to_string_lossy().starts_with("managed-"))
+        );
+    }
+
+    #[test]
+    fn second_generation_rename_failure_quarantines_the_first_generation() {
+        let fixture = Fixture::new("second-rename-rollback");
+        let mut prepared = Vec::new();
+        for (kind, name) in [
+            (ManagedKind::Live2d, "1-2-3"),
+            (ManagedKind::StaticImage, "4-5-6"),
+        ] {
+            let staging = fixture.layout.characters.join(".staging").join(name);
+            std::fs::create_dir_all(&staging).unwrap();
+            std::fs::write(staging.join("asset"), b"asset").unwrap();
+            prepared.push(PreparedGeneration {
+                id: format!("managed-{name}"),
+                kind,
+                generation: name.into(),
+                staging,
+                final_dir: fixture.layout.characters.join(format!("final-{name}")),
+            });
+        }
+        let calls = AtomicU64::new(0);
+
+        let error = commit_prepared_with(&prepared, |from, to| {
+            if calls.fetch_add(1, Ordering::Relaxed) == 0 {
+                std::fs::rename(from, to)
+            } else {
+                Err(std::io::Error::other("injected second rename failure"))
+            }
+        })
+        .unwrap_err();
+
+        assert!(error.starts_with("character_setup_error:asset_commit:"));
+        assert!(
+            prepared.iter().all(|generation| {
+                !generation.staging.exists() && !generation.final_dir.exists()
+            })
         );
     }
 

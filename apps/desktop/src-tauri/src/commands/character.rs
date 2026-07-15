@@ -11,6 +11,7 @@ use pw_contracts::{
 };
 use pw_platform::paths::AppDataLayout;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::character::{
     CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer, discover_setup,
@@ -27,6 +28,7 @@ pub const MOTION_EVENT: &str = "character-motion";
 #[derive(Default)]
 pub struct CharacterState {
     manifest: Mutex<Option<ResolvedCharacter>>,
+    operation: AsyncMutex<()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -773,6 +775,7 @@ mod tests {
         let character = static_character();
         let state = super::CharacterState {
             manifest: Mutex::new(Some(character.clone())),
+            operation: tokio::sync::Mutex::new(()),
         };
         let before = state.manifest_summary().unwrap();
 
@@ -798,6 +801,18 @@ mod tests {
         assert_eq!(live2d.capabilities.motions, ["Idle", "Tap"]);
         assert_eq!(static_image.renderer, "static_image");
         assert!(static_image.capabilities.motions.is_empty());
+    }
+
+    #[test]
+    fn character_operation_mutex_serializes_mutations() {
+        let state = super::CharacterState::default();
+
+        tauri::async_runtime::block_on(async {
+            let first = state.operation.lock().await;
+            assert!(state.operation.try_lock().is_err());
+            drop(first);
+            assert!(state.operation.try_lock().is_ok());
+        });
     }
 
     #[derive(Default)]
@@ -875,12 +890,13 @@ pub fn get_character_setup(layout: State<'_, AppDataLayout>) -> Result<Character
 /// Returns a redacted setup, persistence, cache, or event error.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn set_active_character_renderer<R: Runtime>(
+pub async fn set_active_character_renderer<R: Runtime>(
     app: AppHandle<R>,
     layout: State<'_, AppDataLayout>,
     state: State<'_, CharacterState>,
     kind: CharacterRendererKindDto,
 ) -> Result<CharacterSetupDto, String> {
+    let _operation = state.operation.lock().await;
     let before = load_character_settings(&layout).active_character_id;
     let setup = select_active_renderer(&layout, kind)?;
     let settings = load_character_settings(&layout);
@@ -911,6 +927,7 @@ pub async fn import_character_asset<R: Runtime>(
     kind: CharacterRendererKindDto,
     source_path: String,
 ) -> Result<CharacterSetupDto, String> {
+    let _operation = state.operation.lock().await;
     let layout = layout.inner().clone();
     let before = load_character_settings(&layout).active_character_id;
     let setup = tauri::async_runtime::spawn_blocking(move || {
