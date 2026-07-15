@@ -1,7 +1,7 @@
 //! Character model commands: manifest discovery and expression /
 //! motion control routed to the character window.
 
-use std::{path::PathBuf, sync::Mutex};
+use std::{future::Future, path::PathBuf, sync::Mutex};
 
 use pw_contracts::{
     CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
@@ -254,6 +254,23 @@ fn to_dto(manifest: &ResolvedCharacter) -> CharacterManifestDto {
     }
 }
 
+async fn load_and_cache_manifest<Load, AfterLoad>(
+    state: &CharacterState,
+    load: Load,
+    after_load: AfterLoad,
+) -> Result<CharacterManifestDto, String>
+where
+    Load: FnOnce() -> Result<ResolvedCharacter, String>,
+    AfterLoad: Future<Output = ()>,
+{
+    let _operation = state.operation.lock().await;
+    let manifest = load()?;
+    after_load.await;
+    let dto = to_dto(&manifest);
+    state.cache_manifest(manifest)?;
+    Ok(dto)
+}
+
 fn validate_expression(manifest: &ResolvedCharacter, name: &str) -> Result<(), String> {
     if manifest
         .capabilities()
@@ -289,14 +306,11 @@ fn validate_motion_group(manifest: &ResolvedCharacter, group: &str) -> Result<()
 /// Returns an error message when no model exists or it cannot be read.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn get_character_manifest(
+pub async fn get_character_manifest(
     layout: State<'_, AppDataLayout>,
     state: State<'_, CharacterState>,
 ) -> Result<CharacterManifestDto, String> {
-    let manifest = load_manifest(&layout)?;
-    let dto = to_dto(&manifest);
-    state.cache_manifest(manifest)?;
-    Ok(dto)
+    load_and_cache_manifest(&state, || load_manifest(&layout), std::future::ready(())).await
 }
 
 /// Validates and forwards an expression change to the character window.
@@ -413,10 +427,11 @@ pub fn set_expression_idle_timeout<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::{
-        apply_character_change, load_manifest, to_dto, validate_expression, validate_motion_group,
+        apply_character_change, load_and_cache_manifest, load_manifest, to_dto,
+        validate_expression, validate_motion_group,
     };
     use crate::character::{
         LEGACY_CHARACTER_ID, ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression,
@@ -812,6 +827,61 @@ mod tests {
             assert!(state.operation.try_lock().is_err());
             drop(first);
             assert!(state.operation.try_lock().is_ok());
+        });
+    }
+
+    #[test]
+    fn manifest_load_holds_operation_lock_until_cache_is_committed() {
+        let state = Arc::new(super::CharacterState::default());
+
+        tauri::async_runtime::block_on(async {
+            let (loaded_tx, loaded_rx) = tokio::sync::oneshot::channel();
+            let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+            let request_state = Arc::clone(&state);
+            let request = tauri::async_runtime::spawn(async move {
+                load_and_cache_manifest(
+                    request_state.as_ref(),
+                    || Ok(live2d_character()),
+                    async move {
+                        loaded_tx.send(()).unwrap();
+                        resume_rx.await.unwrap();
+                    },
+                )
+                .await
+                .unwrap();
+            });
+
+            loaded_rx.await.unwrap();
+            assert!(
+                state.operation.try_lock().is_err(),
+                "manifest load must retain the operation lock before caching"
+            );
+
+            let (mutation_waiting_tx, mutation_waiting_rx) = tokio::sync::oneshot::channel();
+            let (mutation_acquired_tx, mut mutation_acquired_rx) = tokio::sync::oneshot::channel();
+            let mutation_state = Arc::clone(&state);
+            let mutation = tauri::async_runtime::spawn(async move {
+                assert!(mutation_state.operation.try_lock().is_err());
+                mutation_waiting_tx.send(()).unwrap();
+                let _operation = mutation_state.operation.lock().await;
+                mutation_acquired_tx.send(()).unwrap();
+                mutation_state.cache_manifest(static_character()).unwrap();
+            });
+
+            mutation_waiting_rx.await.unwrap();
+            assert!(
+                matches!(
+                    mutation_acquired_rx.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "a character mutation must wait for manifest caching"
+            );
+
+            resume_tx.send(()).unwrap();
+            request.await.unwrap();
+            mutation.await.unwrap();
+
+            assert_eq!(state.control_context().unwrap().renderer, "static_image");
         });
     }
 
