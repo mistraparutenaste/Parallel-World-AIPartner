@@ -85,3 +85,38 @@ The Tauri build generated unrelated schema/permission line-ending changes, and t
 
 - No unresolved Task 1 concern.
 - Activity encryption/DPAPI, runtime mode precedence, Tauri event emission, and UI wiring remain intentionally deferred to later plan phases.
+
+## Review fixes
+
+Review-fix commit: `3e4c1b3` (`fix: preserve invalid persona stores during migration`)
+
+### Fix RED evidence
+
+1. `cargo test -p parallel-world-desktop --test behavior_stores behavior_legacy_migration_rejects_invalid_existing_store_without_overwrite`
+   - Failed on the corrupt-file case because migration returned success after treating invalid `personas.json` as an empty store.
+   - The table test covers corrupt JSON, wrong schema, key/id mismatch, and an invalid slider, and records the original bytes for an unchanged-file assertion.
+2. `cargo test -p pw-contracts --test context_aware_contracts behavior_settings_defaults_are_private_and_rate_limited`
+   - Failed to compile because the approved `push_to_talk`, `toggle_mute`, `open_control_center`, and `toggle_character` fields did not exist on `ShortcutSettingsDto`.
+
+### Fix GREEN evidence
+
+- The focused migration test passed all four invalid-store cases and confirmed byte-for-byte preservation.
+- The focused shortcut-default test passed with:
+  - `push_to_talk = Ctrl+Alt+Space`
+  - `toggle_mute = Ctrl+Alt+M`
+  - `open_control_center = Ctrl+Alt+P`
+  - `toggle_character = Ctrl+Alt+C`
+  - `cycle_mode = Ctrl+Alt+F`
+- `cargo test -p pw-contracts`: 26 tests passed, 0 failed.
+- `cargo test -p parallel-world-desktop behavior`: 9 behavior-store tests passed, 0 failed.
+- `cargo run -p pw-contracts --bin export-bindings`: succeeded; `ShortcutSettingsDto.ts` contains the approved field names.
+- `corepack pnpm typecheck`: contracts, live2d-runtime, and desktop typechecks succeeded.
+- `cargo fmt --all --check`: succeeded.
+- `git diff --check`: succeeded.
+
+### Fix self-review
+
+- Persona reading now distinguishes missing files (`Ok(None)`) from unreadable, malformed, wrong-schema, duplicate, mismatched, or invalid-profile stores (`Err`). Safe lookup still returns no persona for invalid data, while migration propagates the error before any write.
+- The generated TypeScript shortcut DTO was regenerated from Rust. `packages/contracts/src/index.ts` already exports the unchanged `ShortcutSettingsDto` type name, so no index text change was necessary.
+- Tauri schemas/permissions and unrelated generated TypeScript line-ending changes were restored after final verification.
+- No unresolved review-fix concern.
