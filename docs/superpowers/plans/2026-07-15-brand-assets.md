@@ -139,10 +139,10 @@ assets/branding/app-icon.png
 Run:
 
 ```powershell
-rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!tools/scripts/verify-distribution-config.test.mjs' 'app-icon\.svg|PW orbit mark' assets tools docs/superpowers/plans README.md
+rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!tools/scripts/verify-distribution-config.test.mjs' --glob '!docs/superpowers/plans/2026-07-15-brand-assets.md' 'app-icon\.svg|PW orbit mark' assets tools docs/superpowers/plans README.md
 ```
 
-Expected: 仕様書の履歴説明を除き、実装・配布計画に旧 SVG 正本や旧 orbit mark の参照が残らない。`tools/scripts/verify-distribution-config.test.mjs` の旧パスは、旧ファイルの不存在を検証するため意図的に保持する。
+Expected: 実装計画そのものは履歴・例示参照を含むため除外し、Phase 7 計画は引き続きスキャン対象に残る。実装対象のコードと配布計画に旧 SVG 正本や旧 orbit mark の参照が残らないこと。`tools/scripts/verify-distribution-config.test.mjs` の旧パスは、旧ファイルの不存在を検証するため意図的に保持する。
 
 ### Task 3: Tauri アイコンセットを再生成する
 
@@ -222,10 +222,10 @@ Expected: 全テスト PASS。
 
 ```powershell
 git diff --check
-rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!tools/scripts/verify-distribution-config.test.mjs' 'app-icon\.svg|PW orbit mark' apps assets tools docs/superpowers/plans README.md
+rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' --glob '!tools/scripts/verify-distribution-config.test.mjs' --glob '!docs/superpowers/plans/2026-07-15-brand-assets.md' 'app-icon\.svg|PW orbit mark' apps assets tools docs/superpowers/plans README.md
 ```
 
-Expected: `git diff --check` は無出力で成功し、実装対象のコード・配布計画に旧正本参照がないこと。`tools/scripts/verify-distribution-config.test.mjs` の旧パスは不存在確認のため許容する。
+Expected: `git diff --check` は無出力で成功し、実装計画そのものは履歴・例示参照を含むため除外し、Phase 7 計画は引き続きスキャン対象に残る。実装対象のコードと配布計画に旧正本参照がないこと。`tools/scripts/verify-distribution-config.test.mjs` の旧パスは不存在確認のため許容する。
 
 - [ ] **Step 3: 画像を目視確認する**
 
