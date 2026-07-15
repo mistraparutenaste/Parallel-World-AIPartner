@@ -1,4 +1,6 @@
 use pw_platform::activity::{DataProtector, DpapiProtector};
+#[cfg(not(windows))]
+use pw_platform::activity::{ForegroundContextSource, SystemForegroundContextSource};
 
 #[cfg(windows)]
 #[test]
@@ -43,4 +45,11 @@ fn activity_dpapi_is_explicitly_unsupported_off_windows() {
     let protector = DpapiProtector;
     assert!(protector.protect(b"private").is_err());
     assert!(protector.unprotect(b"protected").is_err());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn activity_foreground_source_has_a_compiling_fail_closed_non_windows_boundary() {
+    let mut source = SystemForegroundContextSource::default();
+    assert!(source.snapshot().is_err());
 }

@@ -60,6 +60,7 @@ pub struct ShortcutSettingsDto {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[allow(clippy::struct_excessive_bools)]
 #[ts(export_to = "ModeProfileDto.ts")]
 pub struct ModeProfileDto {
     pub proactive_enabled: bool,
@@ -209,6 +210,21 @@ impl BehaviorSettingsDto {
         }
         if self.retention_days == 0 {
             return Err("retention_days must be greater than zero".to_owned());
+        }
+        for exclusion in &self.exclusions {
+            if exclusion.app_id.is_none() && exclusion.title_pattern.is_none() {
+                return Err("activity exclusion must select an app or title".to_owned());
+            }
+            if exclusion.app_id.as_ref().is_some_and(|value| {
+                value.is_empty() || value.len() > 260 || value.contains(char::is_control)
+            }) {
+                return Err("activity exclusion app_id is invalid".to_owned());
+            }
+            if exclusion.title_pattern.as_ref().is_some_and(|value| {
+                value.is_empty() || value.chars().count() > 128 || value.contains(char::is_control)
+            }) {
+                return Err("activity exclusion title_pattern is invalid".to_owned());
+            }
         }
         if self.frequency.minimum_interval_minutes == 0
             || self.frequency.max_per_hour == 0

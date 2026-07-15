@@ -1,7 +1,7 @@
 use pw_contracts::{
     ACTIVITY_SESSION_SCHEMA_VERSION, ActiveModeChangedEventDto, ActiveModeDto, ActiveModeSourceDto,
     ActivitySessionDto, ActivitySessionPageDto, BEHAVIOR_SETTINGS_SCHEMA_VERSION,
-    BehaviorSettingsDto, CompanionModeDto, ConsentStateDto, PersonaProfileDto,
+    BehaviorSettingsDto, CompanionModeDto, ConsentStateDto, ExclusionRuleDto, PersonaProfileDto,
 };
 use ts_rs::{Config, TS};
 
@@ -144,4 +144,41 @@ fn behavior_settings_reject_invalid_transport_values() {
         settings.profiles.normal.volume = invalid_volume;
         assert!(settings.validate().is_err(), "{invalid_volume}");
     }
+}
+
+#[test]
+fn behavior_activity_exclusions_are_bounded_and_nonempty() {
+    for exclusion in [
+        ExclusionRuleDto {
+            app_id: None,
+            title_pattern: None,
+        },
+        ExclusionRuleDto {
+            app_id: Some(String::new()),
+            title_pattern: None,
+        },
+        ExclusionRuleDto {
+            app_id: None,
+            title_pattern: Some(String::new()),
+        },
+        ExclusionRuleDto {
+            app_id: Some("a".repeat(261)),
+            title_pattern: None,
+        },
+        ExclusionRuleDto {
+            app_id: None,
+            title_pattern: Some("t".repeat(129)),
+        },
+    ] {
+        let mut settings = BehaviorSettingsDto::default();
+        settings.exclusions.push(exclusion);
+        assert!(settings.validate().is_err());
+    }
+
+    let mut settings = BehaviorSettingsDto::default();
+    settings.exclusions.push(ExclusionRuleDto {
+        app_id: Some("Code.exe".to_owned()),
+        title_pattern: Some("private project".to_owned()),
+    });
+    assert!(settings.validate().is_ok());
 }

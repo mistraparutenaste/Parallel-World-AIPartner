@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parallel_world_desktop::behavior::{
-    load_behavior_settings, load_persona, migrate_legacy_character_prompt, save_behavior_settings,
-    save_persona_settings,
+    load_behavior_settings, load_behavior_settings_checked, load_persona,
+    migrate_legacy_character_prompt, save_behavior_settings, save_persona_settings,
 };
 use parallel_world_desktop::chat::default_llm_settings;
 use pw_contracts::{BehaviorSettingsDto, PersonaProfileDto, PersonaSettingsDto};
@@ -128,8 +128,10 @@ fn behavior_persona_store_rejects_key_mismatch_and_round_trips_atomically() {
 #[test]
 fn behavior_settings_round_trip_atomically_without_temp_artifacts() {
     let test = TestLayout::new("behavior-atomic");
-    let mut expected = BehaviorSettingsDto::default();
-    expected.retention_days = 45;
+    let expected = BehaviorSettingsDto {
+        retention_days: 45,
+        ..BehaviorSettingsDto::default()
+    };
 
     save_behavior_settings(&test.layout, &expected).expect("save behavior settings");
     assert_eq!(load_behavior_settings(&test.layout), expected);
@@ -189,14 +191,37 @@ fn corrupt_or_wrong_schema_behavior_files_return_collection_off_defaults() {
 }
 
 #[test]
+fn behavior_checked_loader_distinguishes_missing_from_invalid_without_leaking_content() {
+    const SECRET: &str = "private-invalid-settings-sentinel";
+    let missing = TestLayout::new("checked-missing");
+    assert_eq!(
+        load_behavior_settings_checked(&missing.layout).expect("missing means safe defaults"),
+        BehaviorSettingsDto::default()
+    );
+
+    let corrupt = TestLayout::new("checked-corrupt");
+    std::fs::write(
+        corrupt.layout.config.join("behavior.json"),
+        format!("{{not-json-{SECRET}"),
+    )
+    .unwrap();
+    let error = load_behavior_settings_checked(&corrupt.layout).expect_err("invalid is explicit");
+    assert!(!error.to_string().contains(SECRET));
+}
+
+#[test]
 fn behavior_saves_reject_wrong_schema_and_invalid_ranges() {
     let test = TestLayout::new("invalid-save");
-    let mut behavior = BehaviorSettingsDto::default();
-    behavior.schema_version = 99;
-    assert!(save_behavior_settings(&test.layout, &behavior).is_err());
-    behavior.schema_version = pw_contracts::BEHAVIOR_SETTINGS_SCHEMA_VERSION;
-    behavior.retention_days = 0;
-    assert!(save_behavior_settings(&test.layout, &behavior).is_err());
+    let wrong_schema = BehaviorSettingsDto {
+        schema_version: 99,
+        ..BehaviorSettingsDto::default()
+    };
+    assert!(save_behavior_settings(&test.layout, &wrong_schema).is_err());
+    let invalid_retention = BehaviorSettingsDto {
+        retention_days: 0,
+        ..BehaviorSettingsDto::default()
+    };
+    assert!(save_behavior_settings(&test.layout, &invalid_retention).is_err());
 
     let mut persona = PersonaProfileDto::for_character("epsilon");
     persona.initiative = 101;
