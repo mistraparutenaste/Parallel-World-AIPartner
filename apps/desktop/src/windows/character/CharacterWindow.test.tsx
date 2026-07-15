@@ -2,7 +2,7 @@ import type {
   CharacterManifestDto,
   CharacterSettingsDto,
 } from '@parallel-world/contracts';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CharacterRenderer } from './character-renderer';
@@ -32,9 +32,9 @@ const SETTINGS: CharacterSettingsDto = {
   expression_idle_timeout_seconds: 20,
 };
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((yes) => { resolve = yes; });
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => { resolve = yes; });
   return { promise, resolve };
 }
 
@@ -227,6 +227,50 @@ describe('CharacterWindow common renderer lifecycle', () => {
     expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
       manifestLoadsBeforeEvents + 1,
     );
+  });
+
+  it('does not restart again for the same requested id while the replacement manifest is pending', async () => {
+    const h = harness();
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+
+    const replacementManifest = deferred<CharacterManifestDto>();
+    h.invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_character_manifest') return replacementManifest.promise;
+      if (command === 'get_character_settings') return SETTINGS;
+      return undefined;
+    });
+    const replacementSettings = {
+      ...SETTINGS,
+      active_character_id: 'epsilon-replacement',
+    };
+
+    await act(async () => {
+      h.publish('character-settings-changed', {
+        schema_version: 2,
+        settings: replacementSettings,
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(
+      h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest'),
+    ).toHaveLength(2));
+
+    await act(async () => {
+      h.publish('character-settings-changed', {
+        schema_version: 2,
+        settings: replacementSettings,
+      });
+      await Promise.resolve();
+    });
+
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
+    expect(h.dependencies.createRenderer).toHaveBeenCalledOnce();
+
+    replacementManifest.resolve({ ...STATIC_MANIFEST, id: 'epsilon-replacement' });
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledTimes(2));
+    expect(h.renderer.load).toHaveBeenCalledTimes(2);
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
   });
 
   it('re-arms the idle deadline when a slow renderer becomes ready', async () => {

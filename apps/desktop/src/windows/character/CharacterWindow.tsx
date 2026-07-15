@@ -124,6 +124,7 @@ export function CharacterWindow({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [permanentFailure, setPermanentFailure] = useState(false);
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const lifecycleCharacterIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -136,8 +137,6 @@ export function CharacterWindow({
     let idle: IdleResetLike | null = null;
     let pendingExpression: string | null = null;
     let manifest: CharacterManifestDto | null = null;
-    let bootedCharacterId: string | null = null;
-    let requestedCharacterId: string | null | undefined;
     let interactive = true;
     let settingsRevision = 0;
     const unlisteners: Array<() => void> = [];
@@ -210,11 +209,8 @@ export function CharacterWindow({
       ({ settings }) => {
         settingsRevision += 1;
         idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
-        const lifecycleCharacterId = requestedCharacterId === undefined
-          ? bootedCharacterId
-          : requestedCharacterId;
-        if (settings.active_character_id === lifecycleCharacterId) return;
-        requestedCharacterId = settings.active_character_id;
+        if (settings.active_character_id === lifecycleCharacterIdRef.current) return;
+        lifecycleCharacterIdRef.current = settings.active_character_id;
         setLoadError(null);
         setPermanentFailure(false);
         setState('starting');
@@ -226,12 +222,14 @@ export function CharacterWindow({
       try {
         manifest = await dependencies.invoke<CharacterManifestDto>('get_character_manifest');
       } catch (error) {
+        if (!disposed && String(error).includes('selection_required')) {
+          lifecycleCharacterIdRef.current = null;
+        }
         recordFailure(error);
         return;
       }
       if (disposed) return;
-      bootedCharacterId = manifest.id;
-      requestedCharacterId = manifest.id;
+      lifecycleCharacterIdRef.current = manifest.id;
 
       const names = expressionNames(manifest);
       const resetExpression = () => {
