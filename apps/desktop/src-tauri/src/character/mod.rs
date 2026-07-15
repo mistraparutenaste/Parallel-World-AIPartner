@@ -3,7 +3,9 @@
 mod catalog;
 mod manifest;
 mod settings;
+mod setup;
 
+pub(crate) use catalog::validate_profile_manifest;
 pub use catalog::{
     CharacterCapabilities, CharacterCatalog, CharacterProfileError, LEGACY_CHARACTER_ID,
     ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression,
@@ -13,3 +15,4 @@ pub use settings::{
     load_character_settings, save_character_settings, validate_idle_timeout,
     with_expression_idle_timeout,
 };
+pub(crate) use setup::{discover_setup, import_character_source, select_active_renderer};

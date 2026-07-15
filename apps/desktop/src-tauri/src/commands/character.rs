@@ -1,19 +1,22 @@
 //! Character model commands: manifest discovery and expression /
 //! motion control routed to the character window.
 
-use std::sync::Mutex;
+use std::{future::Future, path::PathBuf, sync::Mutex};
 
 use pw_contracts::{
     CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
     CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
-    CharacterSettingsChangedEventDto, CharacterSettingsDto, StaticExpressionDto,
+    CharacterRendererKindDto, CharacterSettingsChangedEventDto, CharacterSettingsDto,
+    CharacterSetupDto, StaticExpressionDto,
 };
 use pw_platform::paths::AppDataLayout;
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime, State};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::character::{
-    CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer,
-    load_character_settings, save_character_settings, with_expression_idle_timeout,
+    CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer, discover_setup,
+    import_character_source, load_character_settings, save_character_settings,
+    select_active_renderer, with_expression_idle_timeout,
 };
 
 /// Event delivered to the character window when an expression is set.
@@ -25,6 +28,7 @@ pub const MOTION_EVENT: &str = "character-motion";
 #[derive(Default)]
 pub struct CharacterState {
     manifest: Mutex<Option<ResolvedCharacter>>,
+    operation: AsyncMutex<()>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,6 +41,68 @@ pub(crate) trait CharacterWindows {
     fn show_chat(&mut self) -> Result<(), String>;
     fn hide_character(&mut self) -> Result<(), String>;
     fn show_character(&mut self) -> Result<(), String>;
+}
+
+pub(crate) trait CharacterChangeEffects {
+    fn cache_manifest(&mut self, manifest: ResolvedCharacter) -> Result<(), String>;
+    fn emit_settings(
+        &mut self,
+        target: &'static str,
+        event: &'static str,
+        settings: CharacterSettingsDto,
+    ) -> Result<(), String>;
+}
+
+fn apply_character_change(
+    effects: &mut impl CharacterChangeEffects,
+    active_changed: bool,
+    manifest: Option<ResolvedCharacter>,
+    settings: CharacterSettingsDto,
+) -> Result<(), String> {
+    if !active_changed {
+        return Ok(());
+    }
+    let manifest = manifest.ok_or_else(|| {
+        "character_setup_error:active_manifest:active manifest is unavailable".to_owned()
+    })?;
+    effects.cache_manifest(manifest)?;
+    effects.emit_settings("character", CHARACTER_SETTINGS_CHANGED_EVENT, settings)
+}
+
+struct TauriCharacterChangeEffects<'a, R: Runtime> {
+    app: &'a AppHandle<R>,
+    state: &'a CharacterState,
+}
+
+impl<R: Runtime> CharacterChangeEffects for TauriCharacterChangeEffects<'_, R> {
+    fn cache_manifest(&mut self, manifest: ResolvedCharacter) -> Result<(), String> {
+        self.state
+            .cache_manifest(manifest)
+            .map_err(|error| character_setup_command_error("state_cache", error))
+    }
+
+    fn emit_settings(
+        &mut self,
+        target: &'static str,
+        event: &'static str,
+        settings: CharacterSettingsDto,
+    ) -> Result<(), String> {
+        self.app
+            .emit_to(
+                EventTarget::webview_window(target),
+                event,
+                CharacterSettingsChangedEventDto {
+                    schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+                    settings,
+                },
+            )
+            .map_err(|error| character_setup_command_error("event_emit", error))
+    }
+}
+
+fn character_setup_command_error(code: &str, message: impl std::fmt::Display) -> String {
+    let safe = pw_domain::runtime_health::redact_diagnostic(&message.to_string());
+    format!("character_setup_error:{code}:{safe}")
 }
 
 impl<R: Runtime> CharacterWindows for &AppHandle<R> {
@@ -122,11 +188,24 @@ impl CharacterState {
 fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
     let mut settings = load_character_settings(layout);
     let catalog = CharacterCatalog::discover(layout).map_err(|error| error.to_ipc_error())?;
+    if settings.active_character_id.is_none()
+        && (settings.live2d_character_id.is_some() || settings.static_image_character_id.is_some())
+    {
+        return Err(crate::character::CharacterProfileError::SelectionRequired.to_ipc_error());
+    }
     let manifest = catalog
         .resolve(&settings)
         .map_err(|error| error.to_ipc_error())?;
     if settings.active_character_id.is_none() && catalog.has_single_explicit_profile() {
         settings.active_character_id = Some(manifest.id.clone());
+        match &manifest.renderer {
+            ResolvedRenderer::Live2d { .. } => {
+                settings.live2d_character_id = Some(manifest.id.clone());
+            }
+            ResolvedRenderer::StaticImage { .. } => {
+                settings.static_image_character_id = Some(manifest.id.clone());
+            }
+        }
         save_character_settings(layout, &settings).map_err(|error| {
             format!(
                 "failed to persist automatic character selection: {}",
@@ -175,6 +254,23 @@ fn to_dto(manifest: &ResolvedCharacter) -> CharacterManifestDto {
     }
 }
 
+async fn load_and_cache_manifest<Load, AfterLoad>(
+    state: &CharacterState,
+    load: Load,
+    after_load: AfterLoad,
+) -> Result<CharacterManifestDto, String>
+where
+    Load: FnOnce() -> Result<ResolvedCharacter, String>,
+    AfterLoad: Future<Output = ()>,
+{
+    let _operation = state.operation.lock().await;
+    let manifest = load()?;
+    after_load.await;
+    let dto = to_dto(&manifest);
+    state.cache_manifest(manifest)?;
+    Ok(dto)
+}
+
 fn validate_expression(manifest: &ResolvedCharacter, name: &str) -> Result<(), String> {
     if manifest
         .capabilities()
@@ -210,14 +306,11 @@ fn validate_motion_group(manifest: &ResolvedCharacter, group: &str) -> Result<()
 /// Returns an error message when no model exists or it cannot be read.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn get_character_manifest(
+pub async fn get_character_manifest(
     layout: State<'_, AppDataLayout>,
     state: State<'_, CharacterState>,
 ) -> Result<CharacterManifestDto, String> {
-    let manifest = load_manifest(&layout)?;
-    let dto = to_dto(&manifest);
-    state.cache_manifest(manifest)?;
-    Ok(dto)
+    load_and_cache_manifest(&state, || load_manifest(&layout), std::future::ready(())).await
 }
 
 /// Validates and forwards an expression change to the character window.
@@ -334,15 +427,18 @@ pub fn set_expression_idle_timeout<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
-    use super::{load_manifest, to_dto, validate_expression, validate_motion_group};
+    use super::{
+        apply_character_change, load_and_cache_manifest, load_manifest, to_dto,
+        validate_expression, validate_motion_group,
+    };
     use crate::character::{
         LEGACY_CHARACTER_ID, ResolvedCharacter, ResolvedRenderer, ResolvedStaticExpression,
     };
     use pw_contracts::{
-        CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterRendererDto, CharacterSettingsDto,
-        MotionGroupDto,
+        CHARACTER_SETTINGS_CHANGED_EVENT, CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterRendererDto,
+        CharacterSettingsDto, MotionGroupDto,
     };
     use pw_platform::paths::AppDataLayout;
 
@@ -486,6 +582,7 @@ mod tests {
                 schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
                 active_character_id: Some("beta".into()),
                 expression_idle_timeout_seconds: Some(20),
+                ..CharacterSettingsDto::default()
             },
         )
         .unwrap();
@@ -536,6 +633,7 @@ mod tests {
                     schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
                     active_character_id: None,
                     expression_idle_timeout_seconds: timeout,
+                    ..CharacterSettingsDto::default()
                 },
             )
             .unwrap();
@@ -543,12 +641,40 @@ mod tests {
             assert_eq!(load_manifest(&layout).unwrap().id, "alpha");
             let persisted = crate::character::load_character_settings(&layout);
             assert_eq!(persisted.active_character_id.as_deref(), Some("alpha"));
+            assert_eq!(persisted.live2d_character_id.as_deref(), Some("alpha"));
+            assert_eq!(persisted.static_image_character_id, None);
             assert_eq!(persisted.expression_idle_timeout_seconds, timeout);
 
             write_explicit_live2d_profile(&layout, "beta");
             assert_eq!(load_manifest(&layout).unwrap().id, "alpha");
             std::fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn remembered_source_prevents_sole_profile_auto_activation() {
+        let root = std::env::temp_dir().join(format!(
+            "pw-cmd-remembered-no-auto-select-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        write_explicit_live2d_profile(&layout, "alpha");
+        let original = CharacterSettingsDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            active_character_id: None,
+            live2d_character_id: Some("alpha".into()),
+            static_image_character_id: None,
+            expression_idle_timeout_seconds: Some(20),
+        };
+        crate::character::save_character_settings(&layout, &original).unwrap();
+
+        let error = load_manifest(&layout).unwrap_err();
+
+        assert!(error.starts_with("character_profile_error:selection_required:"));
+        assert_eq!(crate::character::load_character_settings(&layout), original);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -567,6 +693,7 @@ mod tests {
             schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
             active_character_id: None,
             expression_idle_timeout_seconds: None,
+            ..CharacterSettingsDto::default()
         };
         crate::character::save_character_settings(&layout, &original).unwrap();
 
@@ -663,6 +790,7 @@ mod tests {
         let character = static_character();
         let state = super::CharacterState {
             manifest: Mutex::new(Some(character.clone())),
+            operation: tokio::sync::Mutex::new(()),
         };
         let before = state.manifest_summary().unwrap();
 
@@ -689,4 +817,211 @@ mod tests {
         assert_eq!(static_image.renderer, "static_image");
         assert!(static_image.capabilities.motions.is_empty());
     }
+
+    #[test]
+    fn character_operation_mutex_serializes_mutations() {
+        let state = super::CharacterState::default();
+
+        tauri::async_runtime::block_on(async {
+            let first = state.operation.lock().await;
+            assert!(state.operation.try_lock().is_err());
+            drop(first);
+            assert!(state.operation.try_lock().is_ok());
+        });
+    }
+
+    #[test]
+    fn manifest_load_holds_operation_lock_until_cache_is_committed() {
+        let state = Arc::new(super::CharacterState::default());
+
+        tauri::async_runtime::block_on(async {
+            let (loaded_tx, loaded_rx) = tokio::sync::oneshot::channel();
+            let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+            let request_state = Arc::clone(&state);
+            let request = tauri::async_runtime::spawn(async move {
+                load_and_cache_manifest(
+                    request_state.as_ref(),
+                    || Ok(live2d_character()),
+                    async move {
+                        loaded_tx.send(()).unwrap();
+                        resume_rx.await.unwrap();
+                    },
+                )
+                .await
+                .unwrap();
+            });
+
+            loaded_rx.await.unwrap();
+            assert!(
+                state.operation.try_lock().is_err(),
+                "manifest load must retain the operation lock before caching"
+            );
+
+            let (mutation_waiting_tx, mutation_waiting_rx) = tokio::sync::oneshot::channel();
+            let (mutation_acquired_tx, mut mutation_acquired_rx) = tokio::sync::oneshot::channel();
+            let mutation_state = Arc::clone(&state);
+            let mutation = tauri::async_runtime::spawn(async move {
+                assert!(mutation_state.operation.try_lock().is_err());
+                mutation_waiting_tx.send(()).unwrap();
+                let _operation = mutation_state.operation.lock().await;
+                mutation_acquired_tx.send(()).unwrap();
+                mutation_state.cache_manifest(static_character()).unwrap();
+            });
+
+            mutation_waiting_rx.await.unwrap();
+            assert!(
+                matches!(
+                    mutation_acquired_rx.try_recv(),
+                    Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+                ),
+                "a character mutation must wait for manifest caching"
+            );
+
+            resume_tx.send(()).unwrap();
+            request.await.unwrap();
+            mutation.await.unwrap();
+
+            assert_eq!(state.control_context().unwrap().renderer, "static_image");
+        });
+    }
+
+    #[derive(Default)]
+    struct FakeCharacterChangeEffects {
+        cached: Vec<String>,
+        events: Vec<(&'static str, &'static str, CharacterSettingsDto)>,
+    }
+
+    impl super::CharacterChangeEffects for FakeCharacterChangeEffects {
+        fn cache_manifest(&mut self, manifest: ResolvedCharacter) -> Result<(), String> {
+            self.cached.push(manifest.id);
+            Ok(())
+        }
+
+        fn emit_settings(
+            &mut self,
+            target: &'static str,
+            event: &'static str,
+            settings: CharacterSettingsDto,
+        ) -> Result<(), String> {
+            self.events.push((target, event, settings));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn active_character_change_caches_and_emits_only_to_character_webview() {
+        let mut effects = FakeCharacterChangeEffects::default();
+        let settings = CharacterSettingsDto {
+            active_character_id: Some("legacy-live2d".into()),
+            ..CharacterSettingsDto::default()
+        };
+
+        apply_character_change(
+            &mut effects,
+            true,
+            Some(live2d_character()),
+            settings.clone(),
+        )
+        .unwrap();
+
+        assert_eq!(effects.cached, ["legacy-live2d"]);
+        assert_eq!(effects.events.len(), 1);
+        assert_eq!(effects.events[0].0, "character");
+        assert_eq!(effects.events[0].1, CHARACTER_SETTINGS_CHANGED_EVENT);
+        assert_eq!(effects.events[0].2, settings);
+    }
+
+    #[test]
+    fn inactive_character_import_has_no_cache_or_renderer_event() {
+        let mut effects = FakeCharacterChangeEffects::default();
+
+        apply_character_change(&mut effects, false, None, CharacterSettingsDto::default()).unwrap();
+
+        assert!(effects.cached.is_empty());
+        assert!(effects.events.is_empty());
+    }
+}
+
+/// Returns the configured and active renderer sources.
+///
+/// # Errors
+///
+/// Returns a redacted setup error when character discovery fails.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri commands deserialize owned State arguments.
+pub fn get_character_setup(layout: State<'_, AppDataLayout>) -> Result<CharacterSetupDto, String> {
+    discover_setup(&layout, cfg!(debug_assertions))
+}
+
+/// Selects one exact configured renderer source and applies it immediately.
+///
+/// # Errors
+///
+/// Returns a redacted setup, persistence, cache, or event error.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn set_active_character_renderer<R: Runtime>(
+    app: AppHandle<R>,
+    layout: State<'_, AppDataLayout>,
+    state: State<'_, CharacterState>,
+    kind: CharacterRendererKindDto,
+) -> Result<CharacterSetupDto, String> {
+    let _operation = state.operation.lock().await;
+    let before = load_character_settings(&layout).active_character_id;
+    let setup = select_active_renderer(&layout, kind)?;
+    let settings = load_character_settings(&layout);
+    let active_changed = before != settings.active_character_id;
+    let manifest = active_changed
+        .then(|| load_manifest(&layout))
+        .transpose()
+        .map_err(|error| character_setup_command_error("active_manifest", error))?;
+    let mut effects = TauriCharacterChangeEffects {
+        app: &app,
+        state: &state,
+    };
+    apply_character_change(&mut effects, active_changed, manifest, settings)?;
+    Ok(setup)
+}
+
+/// Imports a managed source on a blocking worker and applies it when active.
+///
+/// # Errors
+///
+/// Returns a redacted policy, validation, filesystem, persistence, worker, cache, or event error.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn import_character_asset<R: Runtime>(
+    app: AppHandle<R>,
+    layout: State<'_, AppDataLayout>,
+    state: State<'_, CharacterState>,
+    kind: CharacterRendererKindDto,
+    source_path: String,
+) -> Result<CharacterSetupDto, String> {
+    let _operation = state.operation.lock().await;
+    let layout = layout.inner().clone();
+    let before = load_character_settings(&layout).active_character_id;
+    let setup = tauri::async_runtime::spawn_blocking(move || {
+        import_character_source(
+            &layout,
+            kind,
+            &PathBuf::from(source_path),
+            cfg!(debug_assertions),
+        )
+        .map(|setup| (setup, layout))
+    })
+    .await
+    .map_err(|error| character_setup_command_error("blocking_worker", error))??;
+    let (setup, layout) = setup;
+    let settings = load_character_settings(&layout);
+    let active_changed = before != settings.active_character_id;
+    let manifest = active_changed
+        .then(|| load_manifest(&layout))
+        .transpose()
+        .map_err(|error| character_setup_command_error("active_manifest", error))?;
+    let mut effects = TauriCharacterChangeEffects {
+        app: &app,
+        state: &state,
+    };
+    apply_character_change(&mut effects, active_changed, manifest, settings)?;
+    Ok(setup)
 }

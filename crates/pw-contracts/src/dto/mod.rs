@@ -19,8 +19,10 @@ pub use audio::{
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{
     CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
-    CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
-    CharacterSettingsChangedEventDto, CharacterSettingsDto, MotionGroupDto, StaticExpressionDto,
+    CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto,
+    CharacterRendererDto, CharacterRendererKindDto, CharacterSettingsChangedEventDto,
+    CharacterSettingsDto, CharacterSetupDto, CharacterSourceStatusDto, MotionGroupDto,
+    StaticExpressionDto,
 };
 pub use chat::{
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,

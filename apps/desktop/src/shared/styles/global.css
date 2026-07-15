@@ -419,6 +419,131 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.character-panel {
+  max-width: 920px;
+}
+
+.character-setup,
+.character-runtime-controls {
+  display: grid;
+  gap: 14px;
+  margin-block: 14px 20px;
+}
+
+.character-renderer-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+
+.character-renderer-selector legend {
+  width: 100%;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.character-renderer-selector label {
+  cursor: pointer;
+}
+
+.character-renderer-selector label:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.character-renderer-selector input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.character-renderer-selector span {
+  display: inline-flex;
+  min-width: 110px;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 7px 13px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.character-renderer-selector input:checked + span {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 700;
+}
+
+.character-renderer-selector input:focus-visible + span {
+  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
+}
+
+.character-source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.character-source-card {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.character-source-card__heading,
+.character-source-details div {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.character-source-card__heading h3 {
+  margin: 0;
+}
+
+.character-source-state,
+.character-source-note,
+.character-setup-progress,
+.character-source-details dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.character-source-details {
+  display: grid;
+  gap: 6px;
+  margin-block: 12px;
+}
+
+.character-source-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  text-align: end;
+}
+
+.character-source-note {
+  margin-block-end: 0;
+}
+
+.character-setup-progress {
+  margin: 0;
+}
+
+@media (max-width: 720px) {
+  .character-source-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .character-canvas {
   display: block;
   width: 100vw;

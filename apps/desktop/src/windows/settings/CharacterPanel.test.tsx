@@ -1,6 +1,7 @@
 import type {
   CharacterManifestDto,
   CharacterSettingsDto,
+  CharacterSetupDto,
 } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,8 +11,12 @@ import {
 } from './CharacterPanel';
 
 const invokeMock = vi.hoisted(() => vi.fn());
+const openMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
+}));
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: openMock,
 }));
 
 const MANIFEST: CharacterManifestDto = {
@@ -47,10 +52,52 @@ const STATIC_MANIFEST: CharacterManifestDto = {
 };
 
 const SETTINGS: CharacterSettingsDto = {
-  schema_version: 1,
+  schema_version: 2,
   active_character_id: 'epsilon',
+  live2d_character_id: 'epsilon',
+  static_image_character_id: 'epsilon-static',
   expression_idle_timeout_seconds: 20,
 };
+
+const UPDATED_LIVE2D_MANIFEST: CharacterManifestDto = {
+  schema_version: 2,
+  id: 'epsilon',
+  display_name: 'New Live2D',
+  renderer: {
+    kind: 'live2d',
+    model_path: 'C:/data/characters/epsilon/New.model3.json',
+    default_expression: 'Normal',
+    expressions: ['Normal', 'NewSmile'],
+    motion_groups: [{ name: 'Wave', motion_count: 1 }],
+  },
+};
+
+const SETUP: CharacterSetupDto = {
+  schema_version: 1,
+  active_renderer: 'live2d',
+  live2d: {
+    kind: 'live2d',
+    configured: true,
+    display_name: 'Epsilon Live2D',
+    file_name: 'Epsilon.model3.json',
+    import_enabled: false,
+    active: true,
+  },
+  static_image: {
+    kind: 'static_image',
+    configured: true,
+    display_name: 'Epsilon Static',
+    file_name: 'epsilon.webp',
+    import_enabled: true,
+    active: false,
+  },
+};
+
+function setupWith(
+  overrides: Partial<Pick<CharacterSetupDto, 'active_renderer' | 'live2d' | 'static_image'>>,
+): CharacterSetupDto {
+  return { ...SETUP, ...overrides };
+}
 
 const TIMEOUT_OPTIONS = [
   ['10秒', '10'],
@@ -75,8 +122,10 @@ function deferred<T>() {
 function mockLoadedPanel(
   manifest: CharacterManifestDto = MANIFEST,
   settings: CharacterSettingsDto = SETTINGS,
+  setup: CharacterSetupDto = SETUP,
 ): void {
   invokeMock.mockImplementation((command: string) => {
+    if (command === 'get_character_setup') return Promise.resolve(setup);
     if (command === 'get_character_manifest') return Promise.resolve(manifest);
     if (command === 'get_character_settings') return Promise.resolve(settings);
     return Promise.resolve(undefined);
@@ -86,6 +135,283 @@ function mockLoadedPanel(
 describe('CharacterPanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    openMock.mockReset();
+  });
+
+  it('renders setup cards and an active two-choice renderer selector from setup state', async () => {
+    mockLoadedPanel();
+    render(<CharacterPanel />);
+
+    const group = await screen.findByRole('radiogroup', { name: '表示するキャラクター形式' });
+    expect(group).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Live2D' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '静止画' })).not.toBeChecked();
+    expect(screen.getByRole('heading', { name: 'Live2D' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '静止画' })).toBeInTheDocument();
+    expect(screen.getByText('Epsilon.model3.json')).toBeInTheDocument();
+    expect(screen.getByText('epsilon.webp')).toBeInTheDocument();
+  });
+
+  it('disables an unconfigured renderer choice but keeps a configured inactive choice switchable', async () => {
+    const unconfiguredStatic = setupWith({
+      static_image: {
+        ...SETUP.static_image,
+        configured: false,
+        display_name: null,
+        file_name: null,
+      },
+    });
+    mockLoadedPanel(MANIFEST, SETTINGS, unconfiguredStatic);
+    const first = render(<CharacterPanel />);
+    expect(await screen.findByRole('radio', { name: '静止画' })).toBeDisabled();
+    first.unmount();
+
+    const inactiveLive2d = setupWith({
+      active_renderer: 'static_image',
+      live2d: { ...SETUP.live2d, active: false },
+      static_image: { ...SETUP.static_image, active: true },
+    });
+    mockLoadedPanel(STATIC_MANIFEST, { ...SETTINGS, active_character_id: 'epsilon-static' }, inactiveLive2d);
+    render(<CharacterPanel />);
+    expect(await screen.findByRole('radio', { name: 'Live2D' })).toBeEnabled();
+  });
+
+  it('explains release Live2D import while leaving configured Live2D switchable', async () => {
+    const inactiveLive2d = setupWith({
+      active_renderer: 'static_image',
+      live2d: { ...SETUP.live2d, active: false, import_enabled: false },
+      static_image: { ...SETUP.static_image, active: true },
+    });
+    mockLoadedPanel(STATIC_MANIFEST, { ...SETTINGS, active_character_id: 'epsilon-static' }, inactiveLive2d);
+    render(<CharacterPanel />);
+
+    expect(await screen.findByRole('radio', { name: 'Live2D' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Live2Dファイルを選択' })).toBeDisabled();
+    expect(screen.getByText('任意のLive2D読み込みは開発ビルドでのみ利用できます。')).toBeInTheDocument();
+  });
+
+  it('treats native dialog cancellation as silent and does not import', async () => {
+    mockLoadedPanel();
+    openMock.mockResolvedValue(null);
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '静止画ファイルを選択' }));
+    await waitFor(() => expect(openMock).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [{ name: '静止画', extensions: ['png', 'webp'] }],
+    }));
+    expect(invokeMock).not.toHaveBeenCalledWith('import_character_asset', expect.anything());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('imports an inactive static image without switching and explains the toggle', async () => {
+    const imported = setupWith({
+      static_image: {
+        ...SETUP.static_image,
+        display_name: 'New Still',
+        file_name: 'new-still.png',
+      },
+    });
+    mockLoadedPanel();
+    openMock.mockResolvedValue('C:/images/new-still.png');
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'import_character_asset') return Promise.resolve(imported);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '静止画ファイルを選択' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('トグルで切替できます');
+    expect(invokeMock).toHaveBeenCalledWith('import_character_asset', {
+      kind: 'static_image',
+      sourcePath: 'C:/images/new-still.png',
+    });
+    expect(screen.getByRole('radio', { name: 'Live2D' })).toBeChecked();
+    expect(invokeMock).not.toHaveBeenCalledWith('set_active_character_renderer', expect.anything());
+  });
+
+  it('refreshes renderer controls after importing the active renderer kind', async () => {
+    const developmentSetup = setupWith({
+      live2d: { ...SETUP.live2d, import_enabled: true },
+    });
+    const imported = setupWith({
+      live2d: {
+        ...developmentSetup.live2d,
+        display_name: 'New Live2D',
+        file_name: 'New.model3.json',
+      },
+    });
+    let manifestLoads = 0;
+    openMock.mockResolvedValue('C:/models/New.model3.json');
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(developmentSetup);
+      if (command === 'get_character_manifest') {
+        manifestLoads += 1;
+        return Promise.resolve(manifestLoads === 1 ? MANIFEST : UPDATED_LIVE2D_MANIFEST);
+      }
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'import_character_asset') return Promise.resolve(imported);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Live2Dファイルを選択' }));
+
+    expect(await screen.findByText('New.model3.json')).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('表示中のアセットを更新しました');
+    expect(screen.getByRole('option', { name: 'NewSmile' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Wave を再生' })).toBeInTheDocument();
+    expect(manifestLoads).toBe(2);
+  });
+
+  it('loads renderer controls after the first import becomes active', async () => {
+    const emptySetup = setupWith({
+      active_renderer: null,
+      live2d: { ...SETUP.live2d, configured: false, active: false, display_name: null, file_name: null },
+      static_image: { ...SETUP.static_image, configured: false, active: false, display_name: null, file_name: null },
+    });
+    const imported = setupWith({
+      active_renderer: 'static_image',
+      live2d: emptySetup.live2d,
+      static_image: { ...SETUP.static_image, active: true, file_name: 'first.png' },
+    });
+    let manifestLoads = 0;
+    openMock.mockResolvedValue('C:/images/first.png');
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(emptySetup);
+      if (command === 'get_character_settings') return Promise.resolve({ ...SETTINGS, active_character_id: null });
+      if (command === 'get_character_manifest') {
+        manifestLoads += 1;
+        return manifestLoads === 1
+          ? Promise.reject(new Error('selection_required'))
+          : Promise.resolve(STATIC_MANIFEST);
+      }
+      if (command === 'import_character_asset') return Promise.resolve(imported);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '静止画ファイルを選択' }));
+
+    expect(await screen.findByRole('option', { name: 'happy' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: '静止画' })).toBeChecked();
+    expect(manifestLoads).toBe(2);
+  });
+
+  it('preserves the prior setup when import fails', async () => {
+    mockLoadedPanel();
+    openMock.mockResolvedValue('C:/images/broken.png');
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'import_character_asset') return Promise.reject(new Error('decode failed'));
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '静止画ファイルを選択' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('読み込めません');
+    expect(screen.getByText('epsilon.webp')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'Live2D' })).toBeChecked();
+  });
+
+  it('switches renderer, reloads the manifest once, and updates renderer-specific controls', async () => {
+    const switched = setupWith({
+      active_renderer: 'static_image',
+      live2d: { ...SETUP.live2d, active: false },
+      static_image: { ...SETUP.static_image, active: true },
+    });
+    let manifestLoads = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'get_character_manifest') {
+        manifestLoads += 1;
+        return Promise.resolve(manifestLoads === 1 ? MANIFEST : STATIC_MANIFEST);
+      }
+      if (command === 'set_active_character_renderer') return Promise.resolve(switched);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: '静止画' }));
+
+    expect(await screen.findByRole('option', { name: 'happy' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'モーション' })).not.toBeInTheDocument();
+    expect(manifestLoads).toBe(2);
+    expect(invokeMock).toHaveBeenCalledWith('set_active_character_renderer', { kind: 'static_image' });
+  });
+
+  it('preserves the prior selection when switching renderer fails', async () => {
+    mockLoadedPanel();
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'set_active_character_renderer') return Promise.reject(new Error('save failed'));
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: '静止画' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('切り替えできません');
+    expect(screen.getByRole('radio', { name: 'Live2D' })).toBeChecked();
+  });
+
+  it('keeps the committed selection and offers retry when switch manifest refresh fails', async () => {
+    const switched = setupWith({
+      active_renderer: 'static_image',
+      live2d: { ...SETUP.live2d, active: false },
+      static_image: { ...SETUP.static_image, active: true },
+    });
+    let manifestLoads = 0;
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'get_character_manifest') {
+        manifestLoads += 1;
+        return manifestLoads === 1
+          ? Promise.resolve(MANIFEST)
+          : Promise.reject(new Error('manifest unavailable'));
+      }
+      if (command === 'set_active_character_renderer') return Promise.resolve(switched);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    fireEvent.click(await screen.findByRole('radio', { name: '静止画' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('切り替えは完了しました');
+    expect(screen.getByRole('radio', { name: '静止画' })).toBeChecked();
+    expect(screen.queryByLabelText('表情')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '再読み込み' })).toBeEnabled();
+    expect(manifestLoads).toBe(2);
+  });
+
+  it('keeps setup controls visible when no manifest is selected', async () => {
+    const emptySetup = setupWith({
+      active_renderer: null,
+      live2d: { ...SETUP.live2d, configured: false, active: false, display_name: null, file_name: null },
+      static_image: { ...SETUP.static_image, configured: false, active: false, display_name: null, file_name: null },
+    });
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(emptySetup);
+      if (command === 'get_character_settings') return Promise.resolve({ ...SETTINGS, active_character_id: null });
+      if (command === 'get_character_manifest') return Promise.reject(new Error('selection_required'));
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+
+    expect(await screen.findByRole('heading', { name: 'Live2D' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '静止画' })).toBeInTheDocument();
   });
 
   it('lists Live2D expressions and motion groups from the renderer manifest', async () => {
@@ -140,6 +466,7 @@ describe('CharacterPanel', () => {
     mockLoadedPanel();
     const saved = { ...SETTINGS, expression_idle_timeout_seconds: null };
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
       if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
       if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
       if (command === 'set_expression_idle_timeout') return Promise.resolve(saved);
@@ -163,6 +490,7 @@ describe('CharacterPanel', () => {
       expression_idle_timeout_seconds: 30,
     };
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
       if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
       if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
       if (command === 'set_expression_idle_timeout') return Promise.resolve(saved);
@@ -185,6 +513,7 @@ describe('CharacterPanel', () => {
     const latest = deferred<CharacterSettingsDto>();
     let saveCount = 0;
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
       if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
       if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
       if (command === 'set_expression_idle_timeout') {
@@ -214,6 +543,7 @@ describe('CharacterPanel', () => {
   it('retains the previous timeout and shows the existing alert path on save failure', async () => {
     mockLoadedPanel();
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
       if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
       if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
       if (command === 'set_expression_idle_timeout') return Promise.reject(new Error('disk full'));
@@ -229,9 +559,11 @@ describe('CharacterPanel', () => {
   });
 
   it('shows an alert when the manifest cannot be loaded', async () => {
-    invokeMock.mockImplementation((command: string) => command === 'get_character_manifest'
-      ? Promise.reject(new Error('no character model'))
-      : Promise.resolve(SETTINGS));
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_manifest') return Promise.reject(new Error('no character model'));
+      return Promise.resolve(SETTINGS);
+    });
     render(<CharacterPanel />);
 
     expect(await screen.findByRole('alert')).toHaveTextContent('キャラクターモデルを読み込めません');
@@ -240,6 +572,7 @@ describe('CharacterPanel', () => {
   it('reloads the panel when retry is clicked after a failure', async () => {
     let manifestAttempts = 0;
     invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
       if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
       if (command === 'get_character_manifest') {
         manifestAttempts += 1;

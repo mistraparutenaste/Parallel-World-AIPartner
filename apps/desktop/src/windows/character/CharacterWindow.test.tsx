@@ -2,7 +2,7 @@ import type {
   CharacterManifestDto,
   CharacterSettingsDto,
 } from '@parallel-world/contracts';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import type { CharacterRenderer } from './character-renderer';
@@ -25,14 +25,16 @@ const STATIC_MANIFEST: CharacterManifestDto = {
 };
 
 const SETTINGS: CharacterSettingsDto = {
-  schema_version: 1,
+  schema_version: 2,
   active_character_id: 'epsilon-static',
+  live2d_character_id: 'epsilon-live2d',
+  static_image_character_id: 'epsilon-static',
   expression_idle_timeout_seconds: 20,
 };
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((yes) => { resolve = yes; });
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((yes) => { resolve = yes; });
   return { promise, resolve };
 }
 
@@ -160,7 +162,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     h.publish('speech-stop', { schema_version: 1, turn_id: 7 });
     expect(h.player.stop).toHaveBeenCalledOnce();
     expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
-    h.publish('character-settings-changed', { schema_version: 1, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
+    h.publish('character-settings-changed', { schema_version: 2, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
     expect(h.idle.setTimeoutSeconds).toHaveBeenLastCalledWith(null);
   });
 
@@ -171,7 +173,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     render(<CharacterWindow dependencies={h.dependencies} />);
     await waitFor(() => expect(h.invokeMock).toHaveBeenCalledWith('get_character_settings'));
     h.publish('character-settings-changed', {
-      schema_version: 1,
+      schema_version: 2,
       settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
     });
     resolveSettings(SETTINGS);
@@ -192,6 +194,83 @@ describe('CharacterWindow common renderer lifecycle', () => {
 
     expect(h.renderer.setExpression).toHaveBeenCalledWith('neutral');
     expect(h.idle.activity).not.toHaveBeenCalled();
+  });
+
+  it('does not restart for a timeout-only event and restarts exactly once when the active id changes', async () => {
+    const h = harness();
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+    const manifestLoadsBeforeEvents = h.invokeMock.mock.calls
+      .filter(([command]) => command === 'get_character_manifest').length;
+
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
+    });
+    await Promise.resolve();
+    expect(h.dependencies.createRenderer).toHaveBeenCalledOnce();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
+      manifestLoadsBeforeEvents,
+    );
+
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: {
+        ...SETTINGS,
+        active_character_id: 'epsilon-live2d',
+        expression_idle_timeout_seconds: null,
+      },
+    });
+
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledTimes(2));
+    expect(h.renderer.dispose).toHaveBeenCalled();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
+      manifestLoadsBeforeEvents + 1,
+    );
+  });
+
+  it('does not restart again for the same requested id while the replacement manifest is pending', async () => {
+    const h = harness();
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+
+    const replacementManifest = deferred<CharacterManifestDto>();
+    h.invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_character_manifest') return replacementManifest.promise;
+      if (command === 'get_character_settings') return SETTINGS;
+      return undefined;
+    });
+    const replacementSettings = {
+      ...SETTINGS,
+      active_character_id: 'epsilon-replacement',
+    };
+
+    await act(async () => {
+      h.publish('character-settings-changed', {
+        schema_version: 2,
+        settings: replacementSettings,
+      });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(
+      h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest'),
+    ).toHaveLength(2));
+
+    await act(async () => {
+      h.publish('character-settings-changed', {
+        schema_version: 2,
+        settings: replacementSettings,
+      });
+      await Promise.resolve();
+    });
+
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
+    expect(h.dependencies.createRenderer).toHaveBeenCalledOnce();
+
+    replacementManifest.resolve({ ...STATIC_MANIFEST, id: 'epsilon-replacement' });
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledTimes(2));
+    expect(h.renderer.load).toHaveBeenCalledTimes(2);
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
   });
 
   it('re-arms the idle deadline when a slow renderer becomes ready', async () => {
@@ -251,6 +330,27 @@ describe('CharacterWindow common renderer lifecycle', () => {
       turnId: 9, seq: 0, url: 'asset:fallback.wav',
     });
     expect(h.player.stop).toHaveBeenCalledOnce();
+  });
+
+  it('recovers from selection_required when settings announce the first active character', async () => {
+    const h = harness({ manifestError: new Error('selection_required') });
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await screen.findByText(/チャットは通常どおり/);
+    expect(h.dependencies.createRenderer).not.toHaveBeenCalled();
+
+    h.invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_character_manifest') return STATIC_MANIFEST;
+      if (command === 'get_character_settings') return SETTINGS;
+      return undefined;
+    });
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: SETTINGS,
+    });
+
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+    expect(h.renderer.load).toHaveBeenCalledOnce();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(2);
   });
 
   it('cancels an active speech reaction when conversation enters interrupting', async () => {

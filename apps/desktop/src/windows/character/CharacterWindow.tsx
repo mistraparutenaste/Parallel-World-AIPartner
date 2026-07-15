@@ -124,6 +124,7 @@ export function CharacterWindow({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [permanentFailure, setPermanentFailure] = useState(false);
   const [retryGeneration, setRetryGeneration] = useState(0);
+  const lifecycleCharacterIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -203,14 +204,32 @@ export function CharacterWindow({
       },
     ));
 
+    unlisteners.push(dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
+      'character-settings-changed',
+      ({ settings }) => {
+        settingsRevision += 1;
+        idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
+        if (settings.active_character_id === lifecycleCharacterIdRef.current) return;
+        lifecycleCharacterIdRef.current = settings.active_character_id;
+        setLoadError(null);
+        setPermanentFailure(false);
+        setState('starting');
+        setRetryGeneration((generation) => generation + 1);
+      },
+    ));
+
     const boot = async () => {
       try {
         manifest = await dependencies.invoke<CharacterManifestDto>('get_character_manifest');
       } catch (error) {
+        if (!disposed && String(error).includes('selection_required')) {
+          lifecycleCharacterIdRef.current = null;
+        }
         recordFailure(error);
         return;
       }
       if (disposed) return;
+      lifecycleCharacterIdRef.current = manifest.id;
 
       const names = expressionNames(manifest);
       const resetExpression = () => {
@@ -233,13 +252,6 @@ export function CharacterWindow({
           ({ state: conversationState }) => {
             idle?.setConversationState(conversationState);
             if (conversationState === 'interrupting') renderer?.resetSpeechReaction();
-          },
-        ),
-        dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
-          'character-settings-changed',
-          ({ settings }) => {
-            settingsRevision += 1;
-            idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
           },
         ),
         dependencies.subscribeEvent<CharacterCursorEventDto>('character-cursor', (payload) => {
