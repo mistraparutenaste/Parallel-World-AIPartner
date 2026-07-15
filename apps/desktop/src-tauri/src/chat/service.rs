@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use pw_application::PortError;
+use pw_application::behavior::proactive::InteractionGate;
 use pw_application::conversation::{
     ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
     PromptBuilder,
@@ -36,7 +37,9 @@ use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::character::CharacterCapabilities;
-use crate::commands::character::{CharacterState, EXPRESSION_EVENT, MOTION_EVENT};
+use crate::commands::character::{
+    CharacterSnapshot, CharacterState, EXPRESSION_EVENT, MOTION_EVENT, resolve_character_manifest,
+};
 use crate::diagnostics::QueueMetrics;
 
 pub const MESSAGE_EVENT: &str = "chat-message";
@@ -369,7 +372,7 @@ fn run_context_worker_loop<M: MemoryStore>(
         };
         submit_metrics.dequeued();
         match command {
-            Command::Submit(text, turn_id) => {
+            Command::Submit(text, turn_id, lease) => {
                 context_metrics.enqueued();
                 let context = load_memory_context(&mut memory, &text, turn_id, unix_timestamp());
                 context_metrics.dequeued();
@@ -377,7 +380,7 @@ fn run_context_worker_loop<M: MemoryStore>(
                 // Increment before send so a fast consumer cannot underflow depth.
                 conversation_metrics.enqueued();
                 if conversation_tx
-                    .send(Command::Prepared(text, turn_id, context))
+                    .send(Command::Prepared(text, turn_id, context, lease))
                     .is_err()
                 {
                     conversation_metrics.dequeued();
@@ -579,9 +582,37 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
     }
 }
 
+#[derive(Debug)]
+struct UserTurnLease {
+    gate: Arc<InteractionGate>,
+}
+
+impl UserTurnLease {
+    fn new(gate: Arc<InteractionGate>) -> Self {
+        gate.begin_user_turn();
+        Self { gate }
+    }
+}
+
+impl Drop for UserTurnLease {
+    fn drop(&mut self) {
+        self.gate.end_user_turn();
+    }
+}
+
 enum Command {
-    Submit(String, u64),
-    Prepared(String, u64, MemoryContext),
+    Submit(String, u64, UserTurnLease),
+    Prepared(String, u64, MemoryContext, UserTurnLease),
+}
+
+fn run_prepared_command<T>(
+    command: Command,
+    submit: impl FnOnce(&str, u64, &MemoryContext) -> T,
+) -> Option<T> {
+    match command {
+        Command::Prepared(text, turn_id, context, _lease) => Some(submit(&text, turn_id, &context)),
+        Command::Submit(..) => None,
+    }
 }
 
 fn enqueue_submit(
@@ -589,9 +620,10 @@ fn enqueue_submit(
     metrics: &QueueMetrics,
     text: String,
     turn_id: u64,
+    lease: UserTurnLease,
 ) -> Result<(), String> {
     metrics.enqueued();
-    tx.try_send(Command::Submit(text, turn_id))
+    tx.try_send(Command::Submit(text, turn_id, lease))
         .map_err(|error| match error {
             TrySendError::Full(_) => {
                 metrics.dequeued();
@@ -651,6 +683,7 @@ pub struct ChatService {
     context_metrics: Arc<QueueMetrics>,
     conversation_metrics: Arc<QueueMetrics>,
     enrichment_metrics: Arc<QueueMetrics>,
+    interaction_gate: Arc<InteractionGate>,
 }
 
 impl Default for ChatService {
@@ -675,23 +708,88 @@ impl Default for ChatService {
                 "chat_enrichment",
                 ENRICHMENT_PENDING_CAPACITY,
             )),
+            interaction_gate: Arc::new(InteractionGate::new()),
         }
     }
 }
 
-fn fingerprint(settings: &LlmSettingsDto) -> String {
-    format!(
-        "{}|{}|{}|{}|{}|{}",
-        settings.base_url,
-        settings.model,
-        settings.allow_remote,
-        settings.system_prompt,
-        settings.character_prompt,
-        settings.strip_emoji
-    )
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ChatWorkerContext {
+    character_prompt: String,
+    persona_fingerprint: String,
+    character: Option<CharacterSnapshot>,
+}
+
+fn prepare_worker_context(
+    persona: crate::behavior::ResolvedPersonaPrompt,
+    character: Option<CharacterSnapshot>,
+) -> ChatWorkerContext {
+    let matching_character =
+        character.filter(|snapshot| persona.character_id.as_deref() == Some(snapshot.id.as_str()));
+    let character_prompt = matching_character.as_ref().map_or_else(
+        || persona.character_prompt.clone(),
+        |snapshot| character_instruction(&persona.character_prompt, &snapshot.capabilities),
+    );
+    ChatWorkerContext {
+        character_prompt,
+        persona_fingerprint: persona.fingerprint,
+        character: matching_character,
+    }
+}
+
+fn resolve_worker_context(
+    layout: &AppDataLayout,
+    state: &CharacterState,
+    settings: &LlmSettingsDto,
+) -> ChatWorkerContext {
+    let character = resolve_character_manifest(layout, state)
+        .ok()
+        .map(|manifest| CharacterSnapshot::from_manifest(&manifest));
+    let persona = crate::behavior::resolve_persona_prompt(
+        layout,
+        character.as_ref().map(|snapshot| snapshot.id.as_str()),
+        settings,
+    );
+    prepare_worker_context(persona, character)
+}
+
+fn worker_fingerprint(settings: &LlmSettingsDto, context: &ChatWorkerContext) -> String {
+    serde_json::json!({
+        "version": 1,
+        "base_url": settings.base_url,
+        "model": settings.model,
+        "allow_remote": settings.allow_remote,
+        "system_prompt": settings.system_prompt,
+        "strip_emoji": settings.strip_emoji,
+        "persona": context.persona_fingerprint,
+        "character_prompt": context.character_prompt,
+        "character": context.character.as_ref().map(|character| serde_json::json!({
+            "id": character.id,
+            "renderer": character.renderer,
+            "expressions": character.capabilities.expressions,
+            "motions": character.capabilities.motions,
+        })),
+    })
+    .to_string()
 }
 
 impl ChatService {
+    #[must_use]
+    pub(crate) fn interaction_gate(&self) -> Arc<InteractionGate> {
+        Arc::clone(&self.interaction_gate)
+    }
+    fn require_healthy(&self, lease: UserTurnLease) -> Result<UserTurnLease, String> {
+        if self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .can_attempt()
+        {
+            Ok(lease)
+        } else {
+            Err("language model is recovering; retry after the backoff period".to_owned())
+        }
+    }
     /// Clears the application-owned LLM circuit.
     ///
     /// # Errors
@@ -787,21 +885,15 @@ impl ChatService {
     ///
     /// Returns an error message when the worker cannot be started.
     pub fn submit<R: Runtime>(&self, app: &AppHandle<R>, text: String) -> Result<(), String> {
+        let lease = self.require_healthy(UserTurnLease::new(self.interaction_gate()))?;
         let _operation = self
             .operation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !self
-            .health
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .can_attempt()
-        {
-            return Err("language model is recovering; retry after the backoff period".to_owned());
-        }
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_llm_settings(&layout);
-        let wanted = fingerprint(&settings);
+        let context = resolve_worker_context(&layout, &app.state::<CharacterState>(), &settings);
+        let wanted = worker_fingerprint(&settings, &context);
 
         let mut guard = self.lock();
         let restart = match guard.as_ref() {
@@ -812,14 +904,14 @@ impl ChatService {
             if let Some(worker) = guard.take() {
                 worker.shutdown()?;
             }
-            *guard = Some(self.start_worker(app.clone(), &settings)?);
+            *guard = Some(self.start_worker(app.clone(), &settings, &context)?);
         }
         let Some(worker) = guard.as_ref() else {
             return Err("conversation worker is not available".to_owned());
         };
         let database_path = layout.data.join("parallel-world.sqlite3");
         let turn_id = self.reserve_turn_id(&database_path);
-        enqueue_submit(&worker.tx, &self.submit_metrics, text, turn_id)
+        enqueue_submit(&worker.tx, &self.submit_metrics, text, turn_id, lease)
     }
 
     /// Cancels the in-flight turn (生成途中で停止).
@@ -832,6 +924,7 @@ impl ChatService {
         &self,
         app: AppHandle<R>,
         settings: &LlmSettingsDto,
+        context: &ChatWorkerContext,
     ) -> Result<Worker, String> {
         let llm_config = LlmClientConfig {
             base_url: settings.base_url.clone(),
@@ -841,11 +934,10 @@ impl ChatService {
         };
         let llm = OpenAiCompatClient::new(llm_config.clone()).map_err(|error| error.to_string())?;
 
-        let character_prompt = with_character_abilities(&app, settings.character_prompt.clone());
         let config = OrchestratorConfig {
             prompt: PromptBuilder {
                 system_rules: settings.system_prompt.clone(),
-                character_prompt,
+                character_prompt: context.character_prompt.clone(),
             },
             max_history_messages: MAX_HISTORY_MESSAGES,
             strip_emoji: settings.strip_emoji,
@@ -955,20 +1047,17 @@ impl ChatService {
                 );
                 while let Ok(command) = rx.recv() {
                     conversation_metrics_for_worker.dequeued();
-                    match command {
-                        Command::Prepared(text, turn_id, context) => {
-                            orchestrator.recover();
-                            orchestrator.submit_user_text_with_context(&text, turn_id, &context);
-                        }
-                        Command::Submit(..) => {}
-                    }
+                    let _ = run_prepared_command(command, |text, turn_id, context| {
+                        orchestrator.recover();
+                        orchestrator.submit_user_text_with_context(text, turn_id, context);
+                    });
                 }
             })
             .map_err(|error| format!("failed to spawn conversation worker: {error}"))?;
 
         Ok(Worker {
             tx,
-            settings_fingerprint: fingerprint(settings),
+            settings_fingerprint: worker_fingerprint(settings, context),
             thread: Some(thread),
             context_thread: Some(context_thread),
             enrichment_thread: Some(enrichment_thread),
@@ -994,14 +1083,6 @@ fn character_instruction(base: &str, capabilities: &CharacterCapabilities) -> St
         ));
     }
     lines.join("\n")
-}
-
-fn with_character_abilities<R: Runtime>(app: &AppHandle<R>, base: String) -> String {
-    let state = app.state::<CharacterState>();
-    match state.manifest_summary() {
-        Some(capabilities) => character_instruction(&base, &capabilities),
-        _ => base,
-    }
 }
 
 fn dispatch_character_control(
@@ -1247,6 +1328,10 @@ mod tests {
     use pw_domain::reply::TurnTracker;
     use pw_storage::{Database, SqliteConversationHistory};
 
+    fn test_lease() -> UserTurnLease {
+        UserTurnLease::new(Arc::new(InteractionGate::new()))
+    }
+
     #[test]
     fn production_llm_timeout_allows_local_streaming_inference() {
         assert!(ADAPTER_TIMEOUT >= std::time::Duration::from_secs(30));
@@ -1280,6 +1365,135 @@ mod tests {
 
         assert!(instruction.contains("利用できる表情(emotion): neutral, happy"));
         assert!(instruction.contains("利用できるモーション(motion): Idle, Tap"));
+    }
+
+    fn resolved_persona_for_test(id: &str, prompt: &str) -> crate::behavior::ResolvedPersonaPrompt {
+        crate::behavior::ResolvedPersonaPrompt {
+            character_id: Some(id.into()),
+            character_prompt: prompt.into(),
+            source: crate::behavior::PersonaPromptSource::Persona,
+            fingerprint: serde_json::to_string(&(Some(id), prompt)).unwrap(),
+        }
+    }
+
+    fn character_snapshot_for_test(
+        id: &str,
+        renderer: &'static str,
+        capabilities: CharacterCapabilities,
+    ) -> crate::commands::character::CharacterSnapshot {
+        crate::commands::character::CharacterSnapshot {
+            id: id.into(),
+            renderer,
+            capabilities,
+        }
+    }
+
+    #[test]
+    fn chat_worker_fingerprint_changes_for_persona_character_or_capabilities() {
+        let settings = crate::chat::default_llm_settings();
+        let base = prepare_worker_context(
+            resolved_persona_for_test("epsilon", "persona"),
+            Some(character_snapshot_for_test(
+                "epsilon",
+                "live2d",
+                live2d_capabilities(),
+            )),
+        );
+        let same = base.clone();
+        let edited = prepare_worker_context(
+            resolved_persona_for_test("epsilon", "persona edited"),
+            Some(character_snapshot_for_test(
+                "epsilon",
+                "live2d",
+                live2d_capabilities(),
+            )),
+        );
+        let changed_character = prepare_worker_context(
+            resolved_persona_for_test("zeta", "persona"),
+            Some(character_snapshot_for_test(
+                "zeta",
+                "static_image",
+                static_capabilities(),
+            )),
+        );
+        let changed_capabilities = prepare_worker_context(
+            resolved_persona_for_test("epsilon", "persona"),
+            Some(character_snapshot_for_test(
+                "epsilon",
+                "live2d",
+                CharacterCapabilities {
+                    expressions: vec!["neutral".into()],
+                    motions: vec!["Idle".into()],
+                },
+            )),
+        );
+
+        assert_eq!(
+            worker_fingerprint(&settings, &base),
+            worker_fingerprint(&settings, &same)
+        );
+        assert_ne!(
+            worker_fingerprint(&settings, &base),
+            worker_fingerprint(&settings, &edited)
+        );
+        assert_ne!(
+            worker_fingerprint(&settings, &base),
+            worker_fingerprint(&settings, &changed_character)
+        );
+        assert_ne!(
+            worker_fingerprint(&settings, &base),
+            worker_fingerprint(&settings, &changed_capabilities)
+        );
+    }
+
+    #[test]
+    fn chat_worker_prompt_uses_persona_and_capabilities_from_matching_snapshot() {
+        let context = prepare_worker_context(
+            resolved_persona_for_test("epsilon", "persona data"),
+            Some(character_snapshot_for_test(
+                "epsilon",
+                "live2d",
+                live2d_capabilities(),
+            )),
+        );
+
+        assert!(context.character_prompt.starts_with("persona data\n"));
+        assert!(context.character_prompt.contains("neutral, happy"));
+        assert!(context.character_prompt.contains("Idle, Tap"));
+    }
+
+    #[test]
+    fn chat_worker_omits_capabilities_when_snapshot_identity_does_not_match_persona() {
+        let context = prepare_worker_context(
+            resolved_persona_for_test("epsilon", "legacy rollback"),
+            Some(character_snapshot_for_test(
+                "stale-character",
+                "live2d",
+                live2d_capabilities(),
+            )),
+        );
+
+        assert_eq!(context.character_prompt, "legacy rollback");
+        assert_eq!(context.character, None);
+    }
+
+    #[test]
+    fn chat_character_resolution_failure_uses_legacy_without_persona_write() {
+        let root =
+            std::env::temp_dir().join(format!("pw-chat-character-failure-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        let state = CharacterState::default();
+        let mut settings = crate::chat::default_llm_settings();
+        settings.character_prompt = "legacy fallback".into();
+
+        let context = resolve_worker_context(&layout, &state, &settings);
+
+        assert_eq!(context.character_prompt, "legacy fallback");
+        assert_eq!(context.character, None);
+        assert!(!layout.config.join("personas.json").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1573,6 +1787,193 @@ mod tests {
             .unwrap();
         thread.join().unwrap();
         waiter.join().unwrap();
+    }
+
+    #[test]
+    fn interaction_gate_lease_invalidates_epoch_and_releases_exactly_once() {
+        let gate = Arc::new(pw_application::behavior::proactive::InteractionGate::new());
+        let captured = gate.capture_idle_epoch().unwrap();
+
+        let lease = UserTurnLease::new(Arc::clone(&gate));
+
+        assert!(gate.is_cancelled(captured));
+        assert_eq!(gate.capture_idle_epoch(), None);
+        drop(lease);
+        let after = gate.capture_idle_epoch().expect("lease released");
+        assert_ne!(after, captured);
+    }
+
+    #[test]
+    fn interaction_gate_multiple_queued_leases_are_counted_independently() {
+        let gate = Arc::new(pw_application::behavior::proactive::InteractionGate::new());
+        let first = UserTurnLease::new(Arc::clone(&gate));
+        let second = UserTurnLease::new(Arc::clone(&gate));
+
+        drop(first);
+        assert_eq!(gate.capture_idle_epoch(), None);
+        drop(second);
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_prepared_command_holds_lease_until_command_drop() {
+        let gate = Arc::new(pw_application::behavior::proactive::InteractionGate::new());
+        let command = Command::Prepared(
+            "text".into(),
+            1,
+            MemoryContext::default(),
+            UserTurnLease::new(Arc::clone(&gate)),
+        );
+
+        assert_eq!(gate.capture_idle_epoch(), None);
+        drop(command);
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_thread_unwind_drops_prepared_lease() {
+        let gate = Arc::new(pw_application::behavior::proactive::InteractionGate::new());
+        let worker_gate = Arc::clone(&gate);
+        let thread = std::thread::spawn(move || {
+            let _command = Command::Prepared(
+                "text".into(),
+                1,
+                MemoryContext::default(),
+                UserTurnLease::new(worker_gate),
+            );
+            panic!("injected worker unwind");
+        });
+
+        assert!(thread.join().is_err());
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_prepared_callback_holds_until_success_or_error_returns() {
+        for succeeds in [true, false] {
+            let gate = Arc::new(InteractionGate::new());
+            let command = Command::Prepared(
+                "text".into(),
+                1,
+                MemoryContext::default(),
+                UserTurnLease::new(Arc::clone(&gate)),
+            );
+            let result = run_prepared_command(command, |_, _, _| {
+                assert_eq!(gate.capture_idle_epoch(), None);
+                if succeeds { Ok(()) } else { Err("cancelled") }
+            })
+            .expect("prepared command");
+
+            assert_eq!(result.is_ok(), succeeds);
+            assert!(gate.capture_idle_epoch().is_some());
+        }
+    }
+
+    #[test]
+    fn interaction_gate_context_failure_paths_release_lease() {
+        for conversation_connected in [true, false] {
+            let gate = Arc::new(InteractionGate::new());
+            let (tx, rx) = sync_channel(1);
+            let (conversation_tx, conversation_rx) = sync_channel(1);
+            let conversation_rx = conversation_connected.then_some(conversation_rx);
+            let worker = std::thread::spawn(move || {
+                run_context_worker(
+                    FailingMemory::new(),
+                    rx,
+                    conversation_tx,
+                    Arc::new(QueueMetrics::new("test_submit", 1)),
+                    Arc::new(QueueMetrics::new("test_context", 1)),
+                    Arc::new(QueueMetrics::new("test_conversation", 1)),
+                );
+            });
+            tx.send(Command::Submit(
+                "query".into(),
+                1,
+                UserTurnLease::new(Arc::clone(&gate)),
+            ))
+            .unwrap();
+            drop(tx);
+            if let Some(conversation_rx) = conversation_rx {
+                let prepared = conversation_rx.recv().unwrap();
+                assert_eq!(gate.capture_idle_epoch(), None);
+                drop(prepared);
+            }
+            worker.join().unwrap();
+            assert!(gate.capture_idle_epoch().is_some());
+        }
+    }
+
+    #[test]
+    fn interaction_gate_disconnected_submit_queue_releases_rejected_lease() {
+        let gate = Arc::new(InteractionGate::new());
+        let captured = gate.capture_idle_epoch().unwrap();
+        let (tx, rx) = sync_channel(1);
+        drop(rx);
+
+        let error = enqueue_submit(
+            &tx,
+            &QueueMetrics::new("test_submit", 1),
+            "rejected".into(),
+            1,
+            UserTurnLease::new(Arc::clone(&gate)),
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "conversation worker is not available");
+        assert!(gate.is_cancelled(captured));
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_health_rejection_still_advances_epoch_and_releases() {
+        let service = ChatService::default();
+        service
+            .health
+            .lock()
+            .unwrap()
+            .record_failure(RuntimeFailure::permanent(FailureCode::InvalidConfiguration));
+        let gate = service.interaction_gate();
+        let captured = gate.capture_idle_epoch().unwrap();
+
+        let error = service
+            .require_healthy(UserTurnLease::new(Arc::clone(&gate)))
+            .expect_err("health gate must reject");
+
+        assert!(error.contains("recovering"));
+        assert!(gate.is_cancelled(captured));
+        assert!(gate.capture_idle_epoch().is_some());
+    }
+
+    #[test]
+    fn interaction_gate_reset_releases_queued_worker_lease() {
+        let service = ChatService::default();
+        let gate = service.interaction_gate();
+        let (tx, rx) = sync_channel(1);
+        tx.send(Command::Submit(
+            "queued".into(),
+            1,
+            UserTurnLease::new(Arc::clone(&gate)),
+        ))
+        .unwrap();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let thread = std::thread::spawn(move || {
+            release_rx.recv().unwrap();
+            while rx.recv().is_ok() {}
+        });
+        *service.lock() = Some(Worker {
+            tx,
+            settings_fingerprint: "test".into(),
+            thread: Some(thread),
+            context_thread: None,
+            enrichment_thread: None,
+            enrichment_cancel: Arc::new(AtomicBool::new(false)),
+        });
+        assert_eq!(gate.capture_idle_epoch(), None);
+
+        release_tx.send(()).unwrap();
+        service.reset().unwrap();
+
+        assert!(gate.capture_idle_epoch().is_some());
     }
 
     #[test]
@@ -2480,11 +2881,12 @@ mod tests {
             );
         });
         let started = std::time::Instant::now();
-        tx.send(Command::Submit("query".into(), 1)).unwrap();
+        tx.send(Command::Submit("query".into(), 1, test_lease()))
+            .unwrap();
         assert!(started.elapsed() < std::time::Duration::from_millis(50));
         assert!(matches!(
             conversation_rx.recv().unwrap(),
-            Command::Prepared(_, 1, _)
+            Command::Prepared(_, 1, _, _)
         ));
         drop(tx);
         worker.join().unwrap();
@@ -2515,12 +2917,13 @@ mod tests {
         assert!(recorded.len() >= 2);
         assert!(recorded.iter().all(|(_, limit)| *limit == 100));
         assert!(recorded.windows(2).all(|pair| pair[0].0 <= pair[1].0));
-        tx.send(Command::Submit("query".into(), 1)).unwrap();
+        tx.send(Command::Submit("query".into(), 1, test_lease()))
+            .unwrap();
         assert!(matches!(
             conversation_rx
                 .recv_timeout(std::time::Duration::from_secs(1))
                 .unwrap(),
-            Command::Prepared(_, 1, _)
+            Command::Prepared(_, 1, _, _)
         ));
         drop(tx);
         worker.join().unwrap();
@@ -2564,6 +2967,7 @@ mod tests {
             tx.send(Command::Submit(
                 "query".into(),
                 u64::try_from(turn_id).unwrap(),
+                test_lease(),
             ))
             .unwrap();
         }
@@ -2728,8 +3132,8 @@ mod tests {
         let thread = std::thread::spawn(move || {
             while let Ok(command) = rx.recv() {
                 match command {
-                    Command::Submit(_, _) => worker_persisted.store(true, Ordering::SeqCst),
-                    Command::Prepared(_, _, _) => {}
+                    Command::Submit(..) => worker_persisted.store(true, Ordering::SeqCst),
+                    Command::Prepared(..) => {}
                 }
             }
         });
@@ -2741,7 +3145,10 @@ mod tests {
             enrichment_thread: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
-        worker.tx.send(Command::Submit("turn".into(), 1)).unwrap();
+        worker
+            .tx
+            .send(Command::Submit("turn".into(), 1, test_lease()))
+            .unwrap();
 
         worker.shutdown().unwrap();
 
@@ -2776,15 +3183,33 @@ mod tests {
     fn bounded_submit_queue_returns_busy_without_silently_dropping_user_text() {
         let (tx, rx) = sync_channel(1);
         let metrics = QueueMetrics::new("test_submit", 1);
-        enqueue_submit(&tx, &metrics, "first".to_owned(), 1).unwrap();
+        let gate = Arc::new(pw_application::behavior::proactive::InteractionGate::new());
+        enqueue_submit(
+            &tx,
+            &metrics,
+            "first".to_owned(),
+            1,
+            UserTurnLease::new(Arc::clone(&gate)),
+        )
+        .unwrap();
 
-        let error = enqueue_submit(&tx, &metrics, "second".to_owned(), 2).unwrap_err();
+        let error = enqueue_submit(
+            &tx,
+            &metrics,
+            "second".to_owned(),
+            2,
+            UserTurnLease::new(Arc::clone(&gate)),
+        )
+        .unwrap_err();
 
         assert_eq!(error, "conversation is busy; please retry");
-        let Command::Submit(text, turn_id) = rx.recv().unwrap() else {
+        assert_eq!(gate.capture_idle_epoch(), None);
+        let Command::Submit(text, turn_id, lease) = rx.recv().unwrap() else {
             panic!("expected queued user submission");
         };
         assert_eq!((text.as_str(), turn_id), ("first", 1));
+        drop(lease);
+        assert!(gate.capture_idle_epoch().is_some());
     }
 
     #[test]
@@ -2890,7 +3315,8 @@ mod tests {
     #[test]
     fn shutdown_does_not_block_sending_control_into_a_full_queue() {
         let (tx, rx) = sync_channel(1);
-        tx.send(Command::Submit("queued".into(), 1)).unwrap();
+        tx.send(Command::Submit("queued".into(), 1, test_lease()))
+            .unwrap();
         let context = std::thread::spawn(move || while rx.recv().is_ok() {});
         let worker = Worker {
             tx,
