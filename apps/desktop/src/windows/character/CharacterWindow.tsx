@@ -136,6 +136,7 @@ export function CharacterWindow({
     let idle: IdleResetLike | null = null;
     let pendingExpression: string | null = null;
     let manifest: CharacterManifestDto | null = null;
+    let bootedCharacterId: string | null = null;
     let interactive = true;
     let settingsRevision = 0;
     const unlisteners: Array<() => void> = [];
@@ -211,6 +212,7 @@ export function CharacterWindow({
         return;
       }
       if (disposed) return;
+      bootedCharacterId = manifest.id;
 
       const names = expressionNames(manifest);
       const resetExpression = () => {
@@ -240,6 +242,12 @@ export function CharacterWindow({
           ({ settings }) => {
             settingsRevision += 1;
             idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);
+            if (settings.active_character_id === bootedCharacterId) return;
+            bootedCharacterId = settings.active_character_id;
+            setLoadError(null);
+            setPermanentFailure(false);
+            setState('starting');
+            setRetryGeneration((generation) => generation + 1);
           },
         ),
         dependencies.subscribeEvent<CharacterCursorEventDto>('character-cursor', (payload) => {

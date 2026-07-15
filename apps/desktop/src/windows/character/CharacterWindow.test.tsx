@@ -25,8 +25,10 @@ const STATIC_MANIFEST: CharacterManifestDto = {
 };
 
 const SETTINGS: CharacterSettingsDto = {
-  schema_version: 1,
+  schema_version: 2,
   active_character_id: 'epsilon-static',
+  live2d_character_id: 'epsilon-live2d',
+  static_image_character_id: 'epsilon-static',
   expression_idle_timeout_seconds: 20,
 };
 
@@ -160,7 +162,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     h.publish('speech-stop', { schema_version: 1, turn_id: 7 });
     expect(h.player.stop).toHaveBeenCalledOnce();
     expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
-    h.publish('character-settings-changed', { schema_version: 1, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
+    h.publish('character-settings-changed', { schema_version: 2, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
     expect(h.idle.setTimeoutSeconds).toHaveBeenLastCalledWith(null);
   });
 
@@ -171,7 +173,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     render(<CharacterWindow dependencies={h.dependencies} />);
     await waitFor(() => expect(h.invokeMock).toHaveBeenCalledWith('get_character_settings'));
     h.publish('character-settings-changed', {
-      schema_version: 1,
+      schema_version: 2,
       settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
     });
     resolveSettings(SETTINGS);
@@ -192,6 +194,39 @@ describe('CharacterWindow common renderer lifecycle', () => {
 
     expect(h.renderer.setExpression).toHaveBeenCalledWith('neutral');
     expect(h.idle.activity).not.toHaveBeenCalled();
+  });
+
+  it('does not restart for a timeout-only event and restarts exactly once when the active id changes', async () => {
+    const h = harness();
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+    const manifestLoadsBeforeEvents = h.invokeMock.mock.calls
+      .filter(([command]) => command === 'get_character_manifest').length;
+
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
+    });
+    await Promise.resolve();
+    expect(h.dependencies.createRenderer).toHaveBeenCalledOnce();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
+      manifestLoadsBeforeEvents,
+    );
+
+    h.publish('character-settings-changed', {
+      schema_version: 2,
+      settings: {
+        ...SETTINGS,
+        active_character_id: 'epsilon-live2d',
+        expression_idle_timeout_seconds: null,
+      },
+    });
+
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledTimes(2));
+    expect(h.renderer.dispose).toHaveBeenCalled();
+    expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
+      manifestLoadsBeforeEvents + 1,
+    );
   });
 
   it('re-arms the idle deadline when a slow renderer becomes ready', async () => {
