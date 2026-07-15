@@ -8,6 +8,83 @@ use thiserror::Error;
 
 const INITIAL_MIGRATION: &str = include_str!("../activity-migrations/0001_initial.sql");
 const CURRENT_SCHEMA_VERSION: i64 = 1;
+const ACTIVITY_SESSIONS_CREATE_SQL: &str = "
+    CREATE TABLE activity_sessions (
+        id INTEGER PRIMARY KEY,
+        started_at INTEGER NOT NULL CHECK (started_at >= 0),
+        ended_at INTEGER CHECK (ended_at IS NULL OR (ended_at >= 0 AND ended_at >= started_at)),
+        duration_seconds INTEGER NOT NULL CHECK (duration_seconds >= 0),
+        category TEXT NOT NULL,
+        payload_version INTEGER NOT NULL,
+        protected_context BLOB NOT NULL CHECK (length(protected_context) > 0)
+    ) STRICT
+";
+const PROACTIVE_DECISIONS_CREATE_SQL: &str = "
+    CREATE TABLE proactive_decisions (
+        id INTEGER PRIMARY KEY,
+        created_at INTEGER NOT NULL CHECK (created_at >= 0),
+        candidate_kind TEXT NOT NULL,
+        decision TEXT NOT NULL CHECK (decision IN ('speak', 'skip')),
+        topic_hash BLOB NOT NULL UNIQUE CHECK (length(topic_hash) > 0)
+    ) STRICT
+";
+const ACTIVITY_SESSION_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec::new("id", "INTEGER", false, 1),
+    ColumnSpec::new("started_at", "INTEGER", true, 0),
+    ColumnSpec::new("ended_at", "INTEGER", false, 0),
+    ColumnSpec::new("duration_seconds", "INTEGER", true, 0),
+    ColumnSpec::new("category", "TEXT", true, 0),
+    ColumnSpec::new("payload_version", "INTEGER", true, 0),
+    ColumnSpec::new("protected_context", "BLOB", true, 0),
+];
+const PROACTIVE_DECISION_COLUMNS: &[ColumnSpec] = &[
+    ColumnSpec::new("id", "INTEGER", false, 1),
+    ColumnSpec::new("created_at", "INTEGER", true, 0),
+    ColumnSpec::new("candidate_kind", "TEXT", true, 0),
+    ColumnSpec::new("decision", "TEXT", true, 0),
+    ColumnSpec::new("topic_hash", "BLOB", true, 0),
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ColumnSpec {
+    name: &'static str,
+    declared_type: &'static str,
+    not_null: bool,
+    primary_key_position: i64,
+}
+
+impl ColumnSpec {
+    const fn new(
+        name: &'static str,
+        declared_type: &'static str,
+        not_null: bool,
+        primary_key_position: i64,
+    ) -> Self {
+        Self {
+            name,
+            declared_type,
+            not_null,
+            primary_key_position,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct ColumnMetadata {
+    name: String,
+    declared_type: String,
+    not_null: bool,
+    primary_key_position: i64,
+    hidden: i64,
+}
+
+#[derive(Debug)]
+struct IndexMetadata {
+    name: String,
+    unique: bool,
+    origin: String,
+    partial: bool,
+}
 
 #[derive(Debug, Error)]
 pub enum ActivityStorageError {
@@ -143,18 +220,42 @@ impl ActivityDatabase {
         if strict_table_count != 2 {
             return Err(ActivityStorageError::InvalidSchema);
         }
-        connection
-            .prepare(
-                "SELECT id,started_at,ended_at,duration_seconds,category,payload_version,protected_context \
-                 FROM activity_sessions LIMIT 0",
-            )
-            .map_err(|_| ActivityStorageError::InvalidSchema)?;
-        connection
-            .prepare(
-                "SELECT id,created_at,candidate_kind,decision,topic_hash \
-                 FROM proactive_decisions LIMIT 0",
-            )
-            .map_err(|_| ActivityStorageError::InvalidSchema)?;
+        if !table_columns_match(connection, "activity_sessions", ACTIVITY_SESSION_COLUMNS)?
+            || !table_columns_match(
+                connection,
+                "proactive_decisions",
+                PROACTIVE_DECISION_COLUMNS,
+            )?
+            || !table_create_sql_matches(
+                connection,
+                "activity_sessions",
+                ACTIVITY_SESSIONS_CREATE_SQL,
+            )?
+            || !table_create_sql_matches(
+                connection,
+                "proactive_decisions",
+                PROACTIVE_DECISIONS_CREATE_SQL,
+            )?
+            || !required_index_matches(
+                connection,
+                "activity_sessions",
+                "activity_sessions_started_at_idx",
+                false,
+                "c",
+                &["started_at"],
+            )?
+            || !required_index_matches(
+                connection,
+                "proactive_decisions",
+                "proactive_decisions_created_at_idx",
+                false,
+                "c",
+                &["created_at"],
+            )?
+            || !topic_hash_unique_index_matches(connection)?
+        {
+            return Err(ActivityStorageError::InvalidSchema);
+        }
         Ok(())
     }
 
@@ -354,6 +455,137 @@ impl ActivityDatabase {
             |row| row.get(0),
         )?)
     }
+}
+
+fn table_columns_match(
+    connection: &Connection,
+    table: &str,
+    expected: &[ColumnSpec],
+) -> Result<bool, ActivityStorageError> {
+    let mut statement = connection.prepare(
+        "SELECT name,type,\"notnull\",pk,hidden FROM pragma_table_xinfo(?1) ORDER BY cid",
+    )?;
+    let actual = statement
+        .query_map([table], |row| {
+            Ok(ColumnMetadata {
+                name: row.get(0)?,
+                declared_type: row.get(1)?,
+                not_null: row.get::<_, i64>(2)? != 0,
+                primary_key_position: row.get(3)?,
+                hidden: row.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(actual.len() == expected.len()
+        && actual.iter().zip(expected).all(|(actual, expected)| {
+            actual.name == expected.name
+                && actual.declared_type == expected.declared_type
+                && actual.not_null == expected.not_null
+                && actual.primary_key_position == expected.primary_key_position
+                && actual.hidden == 0
+        }))
+}
+
+fn table_create_sql_matches(
+    connection: &Connection,
+    table: &str,
+    expected: &str,
+) -> Result<bool, ActivityStorageError> {
+    let actual: String = connection.query_row(
+        "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?1",
+        [table],
+        |row| row.get(0),
+    )?;
+    Ok(normalize_create_sql(&actual) == normalize_create_sql(expected))
+}
+
+fn normalize_create_sql(sql: &str) -> String {
+    let mut normalized = String::with_capacity(sql.len());
+    let mut inside_string = false;
+    for character in sql.chars() {
+        if character == '\'' {
+            inside_string = !inside_string;
+            normalized.push(character);
+        } else if inside_string {
+            normalized.push(character);
+        } else if !character.is_ascii_whitespace() {
+            normalized.push(character.to_ascii_lowercase());
+        }
+    }
+    normalized
+}
+
+fn table_indexes(
+    connection: &Connection,
+    table: &str,
+) -> Result<Vec<IndexMetadata>, ActivityStorageError> {
+    let mut statement = connection
+        .prepare("SELECT name,\"unique\",origin,partial FROM pragma_index_list(?1) ORDER BY seq")?;
+    Ok(statement
+        .query_map([table], |row| {
+            Ok(IndexMetadata {
+                name: row.get(0)?,
+                unique: row.get::<_, i64>(1)? != 0,
+                origin: row.get(2)?,
+                partial: row.get::<_, i64>(3)? != 0,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn index_key_columns(
+    connection: &Connection,
+    index: &str,
+) -> Result<Vec<Option<String>>, ActivityStorageError> {
+    let mut statement =
+        connection.prepare("SELECT name FROM pragma_index_xinfo(?1) WHERE key=1 ORDER BY seqno")?;
+    Ok(statement
+        .query_map([index], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn index_key_columns_match(
+    connection: &Connection,
+    index: &str,
+    expected: &[&str],
+) -> Result<bool, ActivityStorageError> {
+    let actual = index_key_columns(connection, index)?;
+    Ok(actual.len() == expected.len()
+        && actual
+            .iter()
+            .zip(expected)
+            .all(|(actual, expected)| actual.as_deref() == Some(*expected)))
+}
+
+fn required_index_matches(
+    connection: &Connection,
+    table: &str,
+    required_name: &str,
+    unique: bool,
+    origin: &str,
+    columns: &[&str],
+) -> Result<bool, ActivityStorageError> {
+    let indexes = table_indexes(connection, table)?;
+    let Some(index) = indexes.iter().find(|index| index.name == required_name) else {
+        return Ok(false);
+    };
+    Ok(index.unique == unique
+        && index.origin == origin
+        && !index.partial
+        && index_key_columns_match(connection, &index.name, columns)?)
+}
+
+fn topic_hash_unique_index_matches(connection: &Connection) -> Result<bool, ActivityStorageError> {
+    for index in table_indexes(connection, "proactive_decisions")? {
+        if index.unique
+            && index.origin == "u"
+            && !index.partial
+            && index_key_columns_match(connection, &index.name, &["topic_hash"])?
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn stored_session_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredActivitySession> {
