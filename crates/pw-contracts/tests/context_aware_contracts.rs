@@ -21,11 +21,11 @@ fn behavior_settings_defaults_are_private_and_rate_limited() {
     assert_eq!(settings.triggers.category_change_minutes, 10);
     assert_eq!(settings.manual_mode_override, None);
     assert_eq!(settings.activation.fullscreen.mode, CompanionModeDto::Focus);
-    assert_eq!(settings.shortcuts.toggle_chat, "Ctrl+Alt+Space");
-    assert_eq!(settings.shortcuts.cycle_mode, "Ctrl+Alt+M");
-    assert_eq!(settings.shortcuts.pause_proactive, "Ctrl+Alt+P");
-    assert_eq!(settings.shortcuts.toggle_collection, "Ctrl+Alt+C");
-    assert_eq!(settings.shortcuts.toggle_focus, "Ctrl+Alt+F");
+    assert_eq!(settings.shortcuts.push_to_talk, "Ctrl+Alt+Space");
+    assert_eq!(settings.shortcuts.toggle_mute, "Ctrl+Alt+M");
+    assert_eq!(settings.shortcuts.open_control_center, "Ctrl+Alt+P");
+    assert_eq!(settings.shortcuts.toggle_character, "Ctrl+Alt+C");
+    assert_eq!(settings.shortcuts.cycle_mode, "Ctrl+Alt+F");
     assert!(settings.profiles.normal.proactive_enabled);
     assert!(settings.profiles.normal.tts_enabled);
     assert!(settings.profiles.normal.character_enabled);

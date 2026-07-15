@@ -41,6 +41,49 @@ fn behavior_legacy_prompt_migration_is_idempotent_and_preserves_legacy_settings(
 }
 
 #[test]
+fn behavior_legacy_migration_rejects_invalid_existing_store_without_overwrite() {
+    let valid_profile = PersonaProfileDto::for_character("epsilon");
+    let mut invalid_slider = valid_profile.clone();
+    invalid_slider.initiative = 101;
+
+    for (name, raw) in [
+        ("corrupt", "{not-json".to_owned()),
+        (
+            "wrong-schema",
+            r#"{"schema_version":99,"personas":{}}"#.to_owned(),
+        ),
+        (
+            "key-mismatch",
+            serde_json::json!({
+                "schema_version": 1,
+                "personas": { "wrong": valid_profile }
+            })
+            .to_string(),
+        ),
+        (
+            "invalid-slider",
+            serde_json::json!({
+                "schema_version": 1,
+                "personas": { "epsilon": invalid_slider }
+            })
+            .to_string(),
+        ),
+    ] {
+        let test = TestLayout::new(name);
+        let path = test.layout.config.join("personas.json");
+        std::fs::write(&path, raw.as_bytes()).expect("write invalid personas");
+        let before = std::fs::read(&path).expect("read original personas");
+        let legacy = default_llm_settings();
+
+        assert!(
+            migrate_legacy_character_prompt(&test.layout, "epsilon", &legacy).is_err(),
+            "{name}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before, "{name}");
+    }
+}
+
+#[test]
 fn behavior_persona_store_rejects_duplicate_character_identities() {
     let test = TestLayout::new("persona-duplicate");
     let profile = serde_json::to_string(&PersonaProfileDto::for_character("epsilon"))

@@ -52,11 +52,11 @@ pub struct TriggerPolicyDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "ShortcutSettingsDto.ts")]
 pub struct ShortcutSettingsDto {
-    pub toggle_chat: String,
+    pub push_to_talk: String,
+    pub toggle_mute: String,
+    pub open_control_center: String,
+    pub toggle_character: String,
     pub cycle_mode: String,
-    pub pause_proactive: String,
-    pub toggle_collection: String,
-    pub toggle_focus: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -158,11 +158,11 @@ impl Default for BehaviorSettingsDto {
             evaluator_endpoint: None,
             evaluator_model: None,
             shortcuts: ShortcutSettingsDto {
-                toggle_chat: "Ctrl+Alt+Space".to_owned(),
-                cycle_mode: "Ctrl+Alt+M".to_owned(),
-                pause_proactive: "Ctrl+Alt+P".to_owned(),
-                toggle_collection: "Ctrl+Alt+C".to_owned(),
-                toggle_focus: "Ctrl+Alt+F".to_owned(),
+                push_to_talk: "Ctrl+Alt+Space".to_owned(),
+                toggle_mute: "Ctrl+Alt+M".to_owned(),
+                open_control_center: "Ctrl+Alt+P".to_owned(),
+                toggle_character: "Ctrl+Alt+C".to_owned(),
+                cycle_mode: "Ctrl+Alt+F".to_owned(),
             },
             profiles: ModeProfilesDto {
                 normal: ModeProfileDto {
