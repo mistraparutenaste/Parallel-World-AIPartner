@@ -3,6 +3,7 @@
 //! This layer only wires windows, IPC commands and lifecycle; all
 //! behaviour lives in the `pw-*` crates.
 
+pub mod behavior;
 pub mod bootstrap;
 pub mod character;
 pub mod chat;

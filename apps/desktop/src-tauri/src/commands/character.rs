@@ -37,6 +37,27 @@ pub(crate) struct CharacterControlContext {
     pub capabilities: CharacterCapabilities,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CharacterSnapshot {
+    pub id: String,
+    pub renderer: &'static str,
+    pub capabilities: CharacterCapabilities,
+}
+
+impl CharacterSnapshot {
+    pub(crate) fn from_manifest(manifest: &ResolvedCharacter) -> Self {
+        let renderer = match manifest.renderer {
+            ResolvedRenderer::Live2d { .. } => "live2d",
+            ResolvedRenderer::StaticImage { .. } => "static_image",
+        };
+        Self {
+            id: manifest.id.clone(),
+            renderer,
+            capabilities: manifest.capabilities(),
+        }
+    }
+}
+
 pub(crate) trait CharacterWindows {
     fn show_chat(&mut self) -> Result<(), String>;
     fn hide_character(&mut self) -> Result<(), String>;
@@ -170,7 +191,16 @@ impl CharacterState {
         Ok(())
     }
 
+    /// Returns identity, renderer, and capabilities from one cached generation.
     #[must_use]
+    #[allow(dead_code)]
+    pub(crate) fn snapshot(&self) -> Option<CharacterSnapshot> {
+        let guard = self.manifest.lock().ok()?;
+        Some(CharacterSnapshot::from_manifest(guard.as_ref()?))
+    }
+
+    #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn control_context(&self) -> Option<CharacterControlContext> {
         let guard = self.manifest.lock().ok()?;
         let manifest = guard.as_ref()?;
@@ -213,6 +243,17 @@ fn load_manifest(layout: &AppDataLayout) -> Result<ResolvedCharacter, String> {
             )
         })?;
     }
+    Ok(manifest)
+}
+
+/// Resolves the active catalog entry and updates the cache with the same
+/// manifest generation returned to the caller.
+pub(crate) fn resolve_character_manifest(
+    layout: &AppDataLayout,
+    state: &CharacterState,
+) -> Result<ResolvedCharacter, String> {
+    let manifest = load_manifest(layout)?;
+    state.cache_manifest(manifest.clone())?;
     Ok(manifest)
 }
 
@@ -652,6 +693,29 @@ mod tests {
     }
 
     #[test]
+    fn shared_resolver_returns_and_caches_stable_manifest_id_when_setting_is_absent() {
+        let root =
+            std::env::temp_dir().join(format!("pw-cmd-shared-resolver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let layout = AppDataLayout::under(root.clone());
+        layout.create_all().unwrap();
+        write_explicit_live2d_profile(&layout, "alpha");
+        let state = super::CharacterState::default();
+
+        let resolved = super::resolve_character_manifest(&layout, &state).unwrap();
+
+        assert_eq!(resolved.id, "alpha");
+        assert_eq!(state.snapshot().unwrap().id, "alpha");
+        assert_eq!(
+            crate::character::load_character_settings(&layout)
+                .active_character_id
+                .as_deref(),
+            Some("alpha")
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn remembered_source_prevents_sole_profile_auto_activation() {
         let root = std::env::temp_dir().join(format!(
             "pw-cmd-remembered-no-auto-select-{}",
@@ -816,6 +880,19 @@ mod tests {
         assert_eq!(live2d.capabilities.motions, ["Idle", "Tap"]);
         assert_eq!(static_image.renderer, "static_image");
         assert!(static_image.capabilities.motions.is_empty());
+    }
+
+    #[test]
+    fn character_snapshot_keeps_identity_renderer_and_capabilities_in_one_generation() {
+        let state = super::CharacterState::default();
+        state.cache_manifest(live2d_character()).unwrap();
+
+        let snapshot = state.snapshot().unwrap();
+
+        assert_eq!(snapshot.id, LEGACY_CHARACTER_ID);
+        assert_eq!(snapshot.renderer, "live2d");
+        assert_eq!(snapshot.capabilities.expressions, ["Normal", "Smile"]);
+        assert_eq!(snapshot.capabilities.motions, ["Idle", "Tap"]);
     }
 
     #[test]

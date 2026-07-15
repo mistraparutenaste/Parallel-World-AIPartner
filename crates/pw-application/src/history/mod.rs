@@ -2,4 +2,8 @@
 
 mod ports;
 
-pub use ports::{ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn};
+pub use ports::{
+    ConversationHistory, MessageRole, PersistedProactiveAssistantMessage,
+    ProactiveAssistantHistory, ProactiveAssistantHistoryError, ProactiveAssistantMessage,
+    StoredConversation, StoredMessage, StoredTurn,
+};

@@ -32,6 +32,48 @@ pub struct StoredTurn {
     pub created_at: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProactiveAssistantMessage {
+    pub conversation_id: String,
+    pub content: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PersistedProactiveAssistantMessage {
+    pub turn_id: u64,
+    pub message_id: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct ProactiveAssistantHistoryError;
+
+impl std::fmt::Debug for ProactiveAssistantHistoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProactiveAssistantHistoryError")
+    }
+}
+
+impl std::fmt::Display for ProactiveAssistantHistoryError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("proactive assistant history unavailable")
+    }
+}
+
+impl std::error::Error for ProactiveAssistantHistoryError {}
+
+/// Minimal persistence port for an assistant-only proactive message.
+pub trait ProactiveAssistantHistory: Send {
+    /// Atomically reserves a detached turn id and appends one assistant row.
+    ///
+    /// # Errors
+    /// Returns an opaque error and writes nothing when validation or storage fails.
+    fn append_proactive_assistant(
+        &mut self,
+        message: &ProactiveAssistantMessage,
+    ) -> Result<PersistedProactiveAssistantMessage, ProactiveAssistantHistoryError>;
+}
+
 pub trait ConversationHistory: Send {
     /// Atomically stores one completed user/assistant turn. Repeating the same
     /// conversation and turn id is idempotent.

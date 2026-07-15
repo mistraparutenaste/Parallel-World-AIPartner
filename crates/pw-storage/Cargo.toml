@@ -11,5 +11,8 @@ pw-application = { workspace = true }
 rusqlite.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+pw-platform = { workspace = true }
+
 [lints]
 workspace = true
