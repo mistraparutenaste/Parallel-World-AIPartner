@@ -1,6 +1,7 @@
 //! Application services: use-case orchestration over the domain,
 //! with all external capabilities abstracted behind ports.
 
+pub mod behavior;
 pub mod conversation;
 pub mod history;
 pub mod memory;
