@@ -330,10 +330,21 @@ test("repository local overlays and branded icon set satisfy distribution policy
     "downloadBootstrapper",
   );
   assert.equal(macos.bundle.macOS.signingIdentity, "-");
-  assert.equal(
-    (await readFile(path.join(REPOSITORY_ROOT, "assets/branding/app-icon.svg"), "utf8"))
-      .includes("PW orbit mark"),
-    true,
+  const appIconPath = path.join(REPOSITORY_ROOT, "assets/branding/app-icon.png");
+  const appIcon = await readFile(appIconPath);
+  assert.deepEqual([...appIcon.subarray(0, 8)], [
+    0x89,
+    0x50,
+    0x4e,
+    0x47,
+    0x0d,
+    0x0a,
+    0x1a,
+    0x0a,
+  ]);
+  await assert.rejects(
+    readFile(path.join(REPOSITORY_ROOT, "assets/branding/app-icon.svg")),
+    { code: "ENOENT" },
   );
   await verifyGeneratedIcons(
     path.join(tauriDirectory, "icons"),
