@@ -258,6 +258,7 @@ fn behavior_mode_rules_reject_invalid_or_duplicate_app_ids() {
         Vec::new(),
         vec!["   ".to_owned()],
         vec!["bad\0app.exe".to_owned()],
+        vec!["bad\u{0007}app.exe".to_owned()],
         vec!["a".repeat(261)],
         vec!["ÄPP.exe".to_owned(), "äpp.EXE".to_owned()],
     ];
@@ -289,4 +290,57 @@ fn behavior_mode_rules_reject_invalid_or_duplicate_app_ids() {
         })
         .collect();
     assert!(too_many_rules.validate().is_err());
+}
+
+fn valid_schedule_rule() -> ScheduleActivationRuleDto {
+    ScheduleActivationRuleDto {
+        enabled: true,
+        mode: CompanionModeDto::Focus,
+        days_of_week: vec![0],
+        start_local_time: "09:00".to_owned(),
+        end_local_time: "17:00".to_owned(),
+    }
+}
+
+fn valid_app_rule(app_ids: Vec<String>) -> AppActivationRuleDto {
+    AppActivationRuleDto {
+        enabled: true,
+        mode: CompanionModeDto::Focus,
+        app_ids,
+    }
+}
+
+#[test]
+fn behavior_mode_rules_accept_thirty_two_schedules() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.activation.schedules = vec![valid_schedule_rule(); 32];
+    assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn behavior_mode_rules_accept_thirty_two_app_rules() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.activation.apps = (0..32)
+        .map(|index| valid_app_rule(vec![format!("app-{index}.exe")]))
+        .collect();
+    assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn behavior_mode_rules_accept_sixty_four_app_ids() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.activation.apps.push(valid_app_rule(
+        (0..64).map(|index| format!("app-{index}.exe")).collect(),
+    ));
+    assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn behavior_mode_rules_accept_two_hundred_sixty_unicode_scalars() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings
+        .activation
+        .apps
+        .push(valid_app_rule(vec!["界".repeat(260)]));
+    assert!(settings.validate().is_ok());
 }

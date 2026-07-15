@@ -62,3 +62,35 @@ Unrelated Tauri generated schema and permission line-ending churn produced by de
 
 - Local timezone/DST conversion and reading system foreground/fullscreen state remain intentionally deferred to platform adapters.
 - No Tauri runtime integration or visual/manual UI verification applies to this pure resolver task.
+
+## Review addendum
+
+The first review found no production defect but identified insufficient test constraints. The test suite was strengthened without a final production-code change:
+
+- The precedence test now starts with manual, fullscreen, app, and schedule tiers matching simultaneously, then disables each winning tier in order through the Normal default.
+- Both app and schedule tiers now prove `Focus > Normal` in forward and reversed rule order, in addition to the existing `Night > Focus` coverage.
+- Normal, Focus, and Night profiles now each use distinct boolean combinations and volumes; every manual selection asserts complete profile equality.
+- Contract boundary tests now accept exactly 32 schedules, 32 app rules, 64 app ids, and a 260-Unicode-scalar app id. A non-NUL control character is explicitly rejected.
+
+### Review RED evidence
+
+Temporary, uncommitted mutations were applied only to prove the new tests constrain the intended behavior, then fully restored:
+
+- Reordered fullscreen ahead of manual, collapsed Focus severity to Normal, and mapped Normal to the Focus profile.
+  - `cargo test -p parallel-world-desktop --test mode` exited 1 with 5 expected failures: full-tier precedence, both Normal/Focus severity tests, default profile, and all-profile selection.
+- Reduced the four inclusive limits by one and temporarily validated only NUL rather than all control characters.
+  - `cargo test -p pw-contracts --test context_aware_contracts behavior_mode_rules` exited 1 with the 32/32/64/260 boundary tests and non-NUL control rejection failing as expected.
+
+After restoring the original production implementation:
+
+- `cargo test -p parallel-world-desktop --test mode`: exit 0; 13 passed.
+- `cargo test -p pw-contracts --test context_aware_contracts behavior_mode_rules`: exit 0; 6 passed.
+
+### Review acceptance verification
+
+- `cargo test -p pw-contracts context_aware`: exit 0; still 0 tests due to the documented name-filter behavior.
+- `cargo test -p pw-contracts --test context_aware_contracts`: exit 0; 12 passed.
+- `cargo test -p parallel-world-desktop mode`: exit 0; mode suite 13/13 and 8 existing matched tests passed.
+- `cargo fmt --all --check`: exit 0.
+- `cargo clippy -p pw-contracts -p parallel-world-desktop --all-targets -- -D warnings`: exit 0.
+- `git diff --check`: run after generated-churn restoration and report update before the follow-up commit.

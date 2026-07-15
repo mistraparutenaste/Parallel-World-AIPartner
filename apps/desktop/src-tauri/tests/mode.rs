@@ -65,6 +65,7 @@ fn mode_manual_override_selects_each_mode_and_preserves_override() {
 #[test]
 fn mode_uses_fixed_cross_tier_precedence() {
     let mut settings = BehaviorSettingsDto::default();
+    settings.manual_mode_override = Some(CompanionModeDto::Night);
     settings.activation.fullscreen.enabled = true;
     settings.activation.fullscreen.mode = CompanionModeDto::Normal;
     settings.activation.apps.push(AppActivationRuleDto {
@@ -78,12 +79,17 @@ fn mode_uses_fixed_cross_tier_precedence() {
         "09:00",
         "17:00",
     ));
-    let matching = ModeResolutionInput {
+    let mut matching = ModeResolutionInput {
         foreground_app_id: Some("CODE.EXE".to_owned()),
         fullscreen: Some(true),
         ..input(0, 600)
     };
 
+    let resolved = resolve_mode(&settings, &matching).unwrap();
+    assert_eq!(resolved.active_mode.source, ActiveModeSourceDto::Manual);
+    assert_eq!(resolved.active_mode.mode, CompanionModeDto::Night);
+
+    settings.manual_mode_override = None;
     assert_eq!(
         resolve_mode(&settings, &matching)
             .unwrap()
@@ -91,7 +97,7 @@ fn mode_uses_fixed_cross_tier_precedence() {
             .source,
         ActiveModeSourceDto::Fullscreen
     );
-    settings.activation.fullscreen.enabled = false;
+    matching.fullscreen = Some(false);
     assert_eq!(
         resolve_mode(&settings, &matching)
             .unwrap()
@@ -99,7 +105,7 @@ fn mode_uses_fixed_cross_tier_precedence() {
             .source,
         ActiveModeSourceDto::App
     );
-    settings.activation.apps[0].enabled = false;
+    matching.foreground_app_id = Some("other.exe".to_owned());
     assert_eq!(
         resolve_mode(&settings, &matching)
             .unwrap()
@@ -107,13 +113,13 @@ fn mode_uses_fixed_cross_tier_precedence() {
             .source,
         ActiveModeSourceDto::Schedule
     );
-    settings.manual_mode_override = Some(CompanionModeDto::Night);
+    matching.local_minutes = 1_020;
     assert_eq!(
         resolve_mode(&settings, &matching)
             .unwrap()
             .active_mode
             .source,
-        ActiveModeSourceDto::Manual
+        ActiveModeSourceDto::Default
     );
 }
 
@@ -161,6 +167,33 @@ fn mode_app_matching_uses_unicode_lowercase_and_quietest_severity() {
     let reverse = resolve_mode(&settings, &app_input).unwrap();
     assert_eq!(forward.active_mode.mode, CompanionModeDto::Night);
     assert_eq!(forward.active_mode.source, ActiveModeSourceDto::App);
+    assert_eq!(reverse.active_mode, forward.active_mode);
+}
+
+#[test]
+fn mode_app_normal_focus_severity_is_independent_of_rule_order() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.activation.apps = vec![
+        AppActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Normal,
+            app_ids: vec!["code.exe".to_owned()],
+        },
+        AppActivationRuleDto {
+            enabled: true,
+            mode: CompanionModeDto::Focus,
+            app_ids: vec!["code.exe".to_owned()],
+        },
+    ];
+    let app_input = ModeResolutionInput {
+        foreground_app_id: Some("CODE.EXE".to_owned()),
+        ..input(0, 0)
+    };
+
+    let forward = resolve_mode(&settings, &app_input).unwrap();
+    settings.activation.apps.reverse();
+    let reverse = resolve_mode(&settings, &app_input).unwrap();
+    assert_eq!(forward.active_mode.mode, CompanionModeDto::Focus);
     assert_eq!(reverse.active_mode, forward.active_mode);
 }
 
@@ -269,19 +302,55 @@ fn mode_schedule_severity_is_independent_of_rule_order() {
 }
 
 #[test]
-fn mode_selected_profile_is_cloned_without_modification() {
+fn mode_schedule_normal_focus_severity_is_independent_of_rule_order() {
     let mut settings = BehaviorSettingsDto::default();
-    settings.profiles.focus = ModeProfileDto {
+    settings.activation.schedules = vec![
+        schedule(CompanionModeDto::Normal, vec![1], "08:00", "18:00"),
+        schedule(CompanionModeDto::Focus, vec![1], "09:00", "17:00"),
+    ];
+
+    let forward = resolve_mode(&settings, &input(1, 600)).unwrap();
+    settings.activation.schedules.reverse();
+    let reverse = resolve_mode(&settings, &input(1, 600)).unwrap();
+    assert_eq!(forward.active_mode.mode, CompanionModeDto::Focus);
+    assert_eq!(reverse.active_mode, forward.active_mode);
+}
+
+#[test]
+fn mode_each_selected_profile_is_cloned_without_modification() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.profiles.normal = ModeProfileDto {
         proactive_enabled: true,
         tts_enabled: false,
         character_enabled: true,
-        notifications_enabled: true,
-        volume: 0.375,
+        notifications_enabled: false,
+        volume: 0.125,
     };
-    settings.manual_mode_override = Some(CompanionModeDto::Focus);
+    settings.profiles.focus = ModeProfileDto {
+        proactive_enabled: false,
+        tts_enabled: true,
+        character_enabled: false,
+        notifications_enabled: true,
+        volume: 0.5,
+    };
+    settings.profiles.night = ModeProfileDto {
+        proactive_enabled: true,
+        tts_enabled: true,
+        character_enabled: false,
+        notifications_enabled: false,
+        volume: 0.875,
+    };
 
-    let resolved = resolve_mode(&settings, &input(0, 0)).unwrap();
-    assert_eq!(resolved.profile, settings.profiles.focus);
+    for (mode, expected) in [
+        (CompanionModeDto::Normal, settings.profiles.normal.clone()),
+        (CompanionModeDto::Focus, settings.profiles.focus.clone()),
+        (CompanionModeDto::Night, settings.profiles.night.clone()),
+    ] {
+        settings.manual_mode_override = Some(mode);
+        let resolved = resolve_mode(&settings, &input(0, 0)).unwrap();
+        assert_eq!(resolved.active_mode.mode, mode);
+        assert_eq!(resolved.profile, expected);
+    }
 }
 
 #[test]
