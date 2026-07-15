@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use super::{
     CharacterManifest, find_first_model3, load_character_settings, parse_model3_json,
-    setup::is_unreferenced_managed_profile,
+    setup::{is_managed_profile_directory, is_unreferenced_managed_profile},
 };
 
 const PROFILE_SCHEMA_VERSION: u16 = 1;
@@ -210,7 +210,7 @@ impl CharacterCatalog {
         let mut explicit = discover_profile_files(&layout.characters)?;
         explicit.retain(|path| !is_unreferenced_managed_profile(path, &settings));
         if explicit.is_empty() {
-            let model_path = find_first_model3(&layout.characters)
+            let model_path = find_legacy_model3(&layout.characters)
                 .ok_or(CharacterProfileError::NoCharacterAvailable)?;
             return Ok(Self {
                 profiles: vec![resolve_legacy(&characters_root, &model_path)?],
@@ -280,6 +280,37 @@ impl CharacterCatalog {
             _ => Err(CharacterProfileError::SelectionRequired),
         }
     }
+}
+
+fn find_legacy_model3(characters: &Path) -> Option<PathBuf> {
+    let mut entries: Vec<_> = fs::read_dir(characters)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect();
+    entries.sort();
+    for path in &entries {
+        if path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".model3.json"))
+        {
+            return Some(path.clone());
+        }
+    }
+    for path in entries {
+        if !path.is_dir()
+            || path.file_name().is_some_and(|name| name == ".staging")
+            || is_managed_profile_directory(&path)
+        {
+            continue;
+        }
+        if let Some(found) = find_first_model3(&path) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 pub(crate) fn validate_profile_manifest(
@@ -1023,6 +1054,60 @@ mod tests {
                 .profile_root
                 .starts_with(profile.canonicalize().unwrap())
         );
+    }
+
+    #[test]
+    fn unreferenced_marked_live2d_is_never_reexposed_as_virtual_legacy() {
+        let fixture = Fixture::new("marked-live2d-no-legacy");
+        let id = "managed-live2d-1-2-3";
+        let profile = fixture.profile_dir(id);
+        std::fs::write(
+            profile.join("friend.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join("character.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "id": id,
+                "display_name": "Managed Live2D",
+                "renderer": {"kind": "live2d", "model": "friend.model3.json", "default_expression": null}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            profile.join(".parallel-world-managed.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "id": id,
+                "kind": "live2d",
+                "generation": "1-2-3"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let error = CharacterCatalog::discover(&fixture.layout).unwrap_err();
+
+        assert!(matches!(error, CharacterProfileError::NoCharacterAvailable));
+    }
+
+    #[test]
+    fn staged_live2d_is_never_discovered_as_virtual_legacy() {
+        let fixture = Fixture::new("staged-live2d-no-legacy");
+        let staging = fixture.layout.characters.join(".staging").join("1-2-3");
+        std::fs::create_dir_all(&staging).unwrap();
+        std::fs::write(
+            staging.join("friend.model3.json"),
+            r#"{"FileReferences":{}}"#,
+        )
+        .unwrap();
+
+        let error = CharacterCatalog::discover(&fixture.layout).unwrap_err();
+
+        assert!(matches!(error, CharacterProfileError::NoCharacterAvailable));
     }
 
     #[test]

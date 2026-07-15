@@ -78,6 +78,14 @@ fn has_reparse_attribute(attributes: u32) -> bool {
     attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
 
+fn managed_directory_metadata_is_safe(
+    is_directory: bool,
+    is_symlink: bool,
+    attributes: u32,
+) -> bool {
+    is_directory && !is_symlink && !has_reparse_attribute(attributes)
+}
+
 fn renderer_kind(character: &ResolvedCharacter) -> CharacterRendererKindDto {
     match character.renderer {
         ResolvedRenderer::Live2d { .. } => CharacterRendererKindDto::Live2d,
@@ -835,37 +843,43 @@ pub(crate) fn is_unreferenced_managed_profile(
     let Some(directory) = manifest_path.parent() else {
         return false;
     };
+    let Some(marker) = valid_managed_marker(directory) else {
+        return false;
+    };
+    ![
+        settings.active_character_id.as_deref(),
+        settings.live2d_character_id.as_deref(),
+        settings.static_image_character_id.as_deref(),
+    ]
+    .contains(&Some(marker.id.as_str()))
+}
+
+pub(crate) fn is_managed_profile_directory(directory: &Path) -> bool {
+    valid_managed_marker(directory).is_some()
+}
+
+fn valid_managed_marker(directory: &Path) -> Option<ManagedMarker> {
     let marker_path = directory.join(MANAGED_MARKER_FILE);
     let metadata = match fs::symlink_metadata(&marker_path) {
         Ok(metadata) if metadata.file_type().is_file() && !metadata.file_type().is_symlink() => {
             metadata
         }
-        _ => return false,
+        _ => return None,
     };
     #[cfg(windows)]
     if ensure_not_reparse(&metadata).is_err() {
-        return false;
+        return None;
     }
     #[cfg(not(windows))]
     let _ = metadata;
-    let marker: ManagedMarker = match fs::read(&marker_path)
+    let marker: ManagedMarker = fs::read(&marker_path)
         .ok()
-        .and_then(|raw| serde_json::from_slice(&raw).ok())
-    {
-        Some(marker) => marker,
-        None => return false,
-    };
+        .and_then(|raw| serde_json::from_slice(&raw).ok())?;
     let directory_id = directory.file_name().and_then(|name| name.to_str());
     let valid = marker.schema_version == 1
         && directory_id == Some(marker.id.as_str())
         && managed_identity(&marker.id, marker.kind) == Some(marker.generation.as_str());
-    valid
-        && ![
-            settings.active_character_id.as_deref(),
-            settings.live2d_character_id.as_deref(),
-            settings.static_image_character_id.as_deref(),
-        ]
-        .contains(&Some(marker.id.as_str()))
+    valid.then_some(marker)
 }
 
 fn cleanup_managed_generation(
@@ -883,8 +897,25 @@ fn cleanup_managed_generation(
     let Ok(root) = layout.characters.canonicalize() else {
         return;
     };
-    let candidate = layout.characters.join(id);
-    let Ok(candidate) = candidate.canonicalize() else {
+    let candidate_path = layout.characters.join(id);
+    let Ok(candidate_metadata) = fs::symlink_metadata(&candidate_path) else {
+        return;
+    };
+    #[cfg(windows)]
+    let candidate_attributes = {
+        use std::os::windows::fs::MetadataExt;
+        candidate_metadata.file_attributes()
+    };
+    #[cfg(not(windows))]
+    let candidate_attributes = 0;
+    if !managed_directory_metadata_is_safe(
+        candidate_metadata.file_type().is_dir(),
+        candidate_metadata.file_type().is_symlink(),
+        candidate_attributes,
+    ) {
+        return;
+    }
+    let Ok(candidate) = candidate_path.canonicalize() else {
         return;
     };
     if candidate.parent() != Some(root.as_path()) {
@@ -913,7 +944,15 @@ fn cleanup_managed_generation(
         && marker.kind == kind
         && marker.generation == generation
     {
-        let _ = fs::remove_dir_all(candidate);
+        let staging = layout.characters.join(".staging");
+        if fs::create_dir_all(&staging).is_err() {
+            return;
+        }
+        let quarantine = staging.join(format!(".cleanup-{generation}"));
+        if quarantine.exists() || fs::rename(&candidate_path, &quarantine).is_err() {
+            return;
+        }
+        let _ = fs::remove_dir_all(quarantine);
     }
 }
 
@@ -935,7 +974,8 @@ mod tests {
     use super::{
         Live2dCopyLimits, ManagedKind, PreparedGeneration, commit_prepared_with, copy_bounded,
         copy_live2d_references, discover_setup, has_reparse_attribute, import_character_source,
-        import_character_source_with_saver, select_active_renderer,
+        import_character_source_with_saver, managed_directory_metadata_is_safe,
+        select_active_renderer,
     };
 
     static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -1275,6 +1315,46 @@ mod tests {
         assert!(fixture.layout.characters.join(manual_id).is_dir());
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn static_reimport_never_cleans_a_managed_directory_symlink() {
+        use std::os::windows::fs::symlink_dir;
+
+        let fixture = Fixture::new("managed-directory-symlink");
+        let first = fixture.root.join("first.png");
+        write_png(&first, 2, 2, true);
+        import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &first,
+            true,
+        )
+        .unwrap();
+        let id = crate::character::load_character_settings(&fixture.layout)
+            .static_image_character_id
+            .unwrap();
+        let managed_path = fixture.layout.characters.join(&id);
+        let real_target = fixture.layout.characters.join("real-managed-target");
+        std::fs::rename(&managed_path, &real_target).unwrap();
+        if let Err(error) = symlink_dir(&real_target, &managed_path) {
+            eprintln!("SKIP managed directory symlink regression: {error}");
+            return;
+        }
+        let second = fixture.root.join("second.png");
+        write_png(&second, 2, 2, true);
+
+        import_character_source(
+            &fixture.layout,
+            CharacterRendererKindDto::StaticImage,
+            &second,
+            true,
+        )
+        .unwrap();
+
+        assert!(real_target.join("character.json").is_file());
+        assert!(managed_path.exists());
+    }
+
     #[test]
     fn static_import_never_cleans_a_traversal_shaped_previous_id() {
         let fixture = Fixture::new("cleanup-traversal");
@@ -1506,6 +1586,14 @@ mod tests {
         assert!(!has_reparse_attribute(0x20));
         assert!(has_reparse_attribute(0x400));
         assert!(has_reparse_attribute(0x420));
+    }
+
+    #[test]
+    fn managed_cleanup_metadata_rejects_files_symlinks_and_reparse_directories() {
+        assert!(managed_directory_metadata_is_safe(true, false, 0));
+        assert!(!managed_directory_metadata_is_safe(false, false, 0));
+        assert!(!managed_directory_metadata_is_safe(true, true, 0));
+        assert!(!managed_directory_metadata_is_safe(true, false, 0x400));
     }
 
     #[test]
