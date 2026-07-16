@@ -46,7 +46,10 @@ pub use diagnostics::{
     DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto,
 };
-pub use persona::{PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto, PersonaSettingsDto};
+pub use persona::{
+    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto,
+    PersonaSettingsDto,
+};
 pub use runtime_health::{
     FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
     RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,

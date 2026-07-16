@@ -9,10 +9,8 @@ publish.workspace = true
 [dependencies]
 pw-domain = { workspace = true }
 serde = { workspace = true }
-ts-rs = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+ts-rs = { workspace = true }
 
 [[bin]]
 name = "export-bindings"

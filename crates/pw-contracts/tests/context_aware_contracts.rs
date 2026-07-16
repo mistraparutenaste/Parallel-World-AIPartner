@@ -4,7 +4,8 @@ use pw_contracts::{
     ACTIVITY_SESSION_SCHEMA_VERSION, ActiveModeChangedEventDto, ActiveModeDto, ActiveModeSourceDto,
     ActivitySessionDto, ActivitySessionPageDto, AppActivationRuleDto,
     BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsDto, CompanionModeDto, ConsentStateDto,
-    ExclusionRuleDto, PersonaProfileDto, ScheduleActivationRuleDto,
+    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, ExclusionRuleDto, PERSONA_SETTINGS_SCHEMA_VERSION,
+    PersonaProfileDto, PersonaSettingsDto, ScheduleActivationRuleDto,
 };
 use ts_rs::{Config, TS};
 
@@ -122,6 +123,85 @@ fn persona_sliders_are_bounded_and_serialize_with_snake_case_names() {
         }
         assert!(invalid.validate().is_err(), "{slider}");
     }
+}
+
+#[test]
+fn persona_v2_defaults_dark_traits_and_intense_expression_safely() {
+    let profile = PersonaProfileDto::for_character("epsilon");
+
+    assert_eq!(PERSONA_SETTINGS_SCHEMA_VERSION, 2);
+    assert_eq!(profile.machiavellianism, 50);
+    assert_eq!(profile.narcissism, 50);
+    assert_eq!(profile.psychopathy, 50);
+    assert!(!profile.allow_intense_dark_expression);
+    assert_eq!(profile.dark_expression_acknowledgement_version, None);
+}
+
+#[test]
+fn persona_rejects_out_of_range_dark_traits() {
+    for trait_name in ["machiavellianism", "narcissism", "psychopathy"] {
+        let mut profile = PersonaProfileDto::for_character("epsilon");
+        match trait_name {
+            "machiavellianism" => profile.machiavellianism = 101,
+            "narcissism" => profile.narcissism = 101,
+            "psychopathy" => profile.psychopathy = 101,
+            _ => unreachable!(),
+        }
+        assert!(profile.validate().is_err(), "{trait_name}");
+    }
+}
+
+#[test]
+fn intense_dark_expression_requires_current_acknowledgement() {
+    let mut profile = PersonaProfileDto::for_character("epsilon");
+    profile.allow_intense_dark_expression = true;
+    assert!(profile.validate().is_err());
+
+    profile.dark_expression_acknowledgement_version = Some(DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION);
+    assert!(profile.validate().is_ok());
+}
+
+#[test]
+fn persona_v1_deserializes_to_safe_v2_defaults_without_losing_existing_values() {
+    let decoded: PersonaSettingsDto = serde_json::from_value(serde_json::json!({
+        "schema_version": 1,
+        "personas": {
+            "epsilon": {
+                "character_id": "epsilon",
+                "name": "Epsilon",
+                "first_person_pronoun": "私",
+                "user_name": "",
+                "user_address": "",
+                "relationship": "",
+                "speaking_style": "",
+                "interests": [],
+                "dislikes": [],
+                "values": [],
+                "background": "",
+                "boundaries": [],
+                "free_text": "legacy",
+                "preset": null,
+                "initiative": 9,
+                "closeness": 19,
+                "humor": 29,
+                "response_length": 39,
+                "emotional_expression": 49,
+                "reaction_interval": 59
+            }
+        }
+    }))
+    .expect("v1 persona settings migrate");
+
+    let profile = &decoded.personas["epsilon"];
+    assert_eq!(decoded.schema_version, 2);
+    assert_eq!(profile.initiative, 9);
+    assert_eq!(profile.reaction_interval, 59);
+    assert_eq!(profile.free_text, "legacy");
+    assert_eq!(profile.machiavellianism, 50);
+    assert_eq!(profile.narcissism, 50);
+    assert_eq!(profile.psychopathy, 50);
+    assert!(!profile.allow_intense_dark_expression);
+    assert_eq!(profile.dark_expression_acknowledgement_version, None);
 }
 
 #[test]

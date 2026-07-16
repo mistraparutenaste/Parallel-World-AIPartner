@@ -7,7 +7,8 @@ use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
-pub const PERSONA_SETTINGS_SCHEMA_VERSION: u16 = 1;
+pub const PERSONA_SETTINGS_SCHEMA_VERSION: u16 = 2;
+pub const DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "PersonaProfileDto.ts")]
@@ -32,6 +33,11 @@ pub struct PersonaProfileDto {
     pub response_length: u8,
     pub emotional_expression: u8,
     pub reaction_interval: u8,
+    pub machiavellianism: u8,
+    pub narcissism: u8,
+    pub psychopathy: u8,
+    pub allow_intense_dark_expression: bool,
+    pub dark_expression_acknowledgement_version: Option<u16>,
 }
 
 impl PersonaProfileDto {
@@ -58,6 +64,11 @@ impl PersonaProfileDto {
             response_length: 50,
             emotional_expression: 50,
             reaction_interval: 50,
+            machiavellianism: 50,
+            narcissism: 50,
+            psychopathy: 50,
+            allow_intense_dark_expression: false,
+            dark_expression_acknowledgement_version: None,
         }
     }
 
@@ -77,10 +88,19 @@ impl PersonaProfileDto {
             ("response_length", self.response_length),
             ("emotional_expression", self.emotional_expression),
             ("reaction_interval", self.reaction_interval),
+            ("machiavellianism", self.machiavellianism),
+            ("narcissism", self.narcissism),
+            ("psychopathy", self.psychopathy),
         ] {
             if value > 100 {
                 return Err(format!("{name} must be between 0 and 100"));
             }
+        }
+        if self.allow_intense_dark_expression
+            && self.dark_expression_acknowledgement_version
+                != Some(DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION)
+        {
+            return Err("intense dark expression requires current acknowledgement".to_owned());
         }
         Ok(())
     }
@@ -101,28 +121,57 @@ impl<'de> Deserialize<'de> for PersonaSettingsDto {
         #[derive(Deserialize)]
         struct Wire {
             schema_version: u16,
-            #[serde(deserialize_with = "deserialize_personas")]
-            personas: BTreeMap<String, PersonaProfileDto>,
+            #[serde(deserialize_with = "deserialize_persona_values")]
+            personas: BTreeMap<String, serde_json::Value>,
         }
 
         let wire = Wire::deserialize(deserializer)?;
+        if !matches!(wire.schema_version, 1 | PERSONA_SETTINGS_SCHEMA_VERSION) {
+            return Err(serde::de::Error::custom(format!(
+                "unsupported persona settings schema version: {}",
+                wire.schema_version
+            )));
+        }
+        let mut personas = BTreeMap::new();
+        for (key, mut value) in wire.personas {
+            if wire.schema_version == 1 {
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::de::Error::custom(format!("persona {key:?} must be an object"))
+                })?;
+                for (name, default) in [
+                    ("machiavellianism", serde_json::json!(50)),
+                    ("narcissism", serde_json::json!(50)),
+                    ("psychopathy", serde_json::json!(50)),
+                    ("allow_intense_dark_expression", serde_json::json!(false)),
+                    (
+                        "dark_expression_acknowledgement_version",
+                        serde_json::Value::Null,
+                    ),
+                ] {
+                    object.entry(name).or_insert(default);
+                }
+            }
+            let profile = serde_json::from_value::<PersonaProfileDto>(value)
+                .map_err(serde::de::Error::custom)?;
+            personas.insert(key, profile);
+        }
         Ok(Self {
-            schema_version: wire.schema_version,
-            personas: wire.personas,
+            schema_version: PERSONA_SETTINGS_SCHEMA_VERSION,
+            personas,
         })
     }
 }
 
-fn deserialize_personas<'de, D>(
+fn deserialize_persona_values<'de, D>(
     deserializer: D,
-) -> Result<BTreeMap<String, PersonaProfileDto>, D::Error>
+) -> Result<BTreeMap<String, serde_json::Value>, D::Error>
 where
     D: Deserializer<'de>,
 {
     struct PersonasVisitor;
 
     impl<'de> Visitor<'de> for PersonasVisitor {
-        type Value = BTreeMap<String, PersonaProfileDto>;
+        type Value = BTreeMap<String, serde_json::Value>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str("a map with unique character ids")
@@ -133,7 +182,7 @@ where
             A: MapAccess<'de>,
         {
             let mut personas = BTreeMap::new();
-            while let Some((key, profile)) = map.next_entry::<String, PersonaProfileDto>()? {
+            while let Some((key, profile)) = map.next_entry::<String, serde_json::Value>()? {
                 if personas.insert(key.clone(), profile).is_some() {
                     return Err(serde::de::Error::custom(format!(
                         "duplicate persona identity: {key}"
