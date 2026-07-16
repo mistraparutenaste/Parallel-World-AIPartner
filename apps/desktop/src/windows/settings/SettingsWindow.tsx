@@ -10,6 +10,7 @@ import { DataPanel } from './DataPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
+import { PersonalityPanel } from './PersonalityPanel';
 import { RuntimeHealthPanel } from './RuntimeHealthPanel';
 import { TechnicalLogPanel } from './TechnicalLogPanel';
 import { TtsPanel } from './TtsPanel';
@@ -95,7 +96,7 @@ function SettingsContent({ active }: { active: SettingsArea }) {
   switch (active) {
     case 'audio': return <div className="panel-stack"><MicrophonePanel /><TtsPanel /></div>;
     case 'ai': return <div className="panel-stack"><LlmPanel /></div>;
-    case 'character': return <div className="panel-stack"><CharacterPanel /></div>;
+    case 'character': return <div className="panel-stack"><CharacterPanel /><PersonalityPanel /></div>;
     case 'data': return <div className="panel-stack"><DataPanel /></div>;
     case 'diagnostics': return <div className="panel-stack"><RuntimeHealthPanel /><DiagnosticsPanel /></div>;
     case 'updates': return <div className="panel-stack"><UpdatesPanel /></div>;
