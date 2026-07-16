@@ -43,6 +43,7 @@ dist/
 .superpowers/
 .worktrees/
 .pnpm-store/
+.codex-remote-attachments/
 
 # OneDrive同期の一時ファイル
 .tmp.driveupload/
