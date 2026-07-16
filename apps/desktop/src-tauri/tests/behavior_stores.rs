@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use parallel_world_desktop::behavior::{
-    load_behavior_settings, load_behavior_settings_checked, load_persona,
-    migrate_legacy_character_prompt, save_behavior_settings, save_persona_settings,
+    load_behavior_settings, load_behavior_settings_checked, load_persona, load_persona_checked,
+    migrate_legacy_character_prompt, save_behavior_settings, save_persona, save_persona_settings,
 };
 use parallel_world_desktop::chat::default_llm_settings;
 use pw_contracts::{BehaviorSettingsDto, PersonaProfileDto, PersonaSettingsDto};
@@ -123,6 +123,74 @@ fn behavior_persona_store_rejects_key_mismatch_and_round_trips_atomically() {
         .map(|entry| entry.expect("read entry").file_name())
         .collect::<Vec<_>>();
     assert_eq!(entries, ["personas.json"]);
+}
+
+#[test]
+fn behavior_checked_persona_load_migrates_v1_in_memory_without_writing() {
+    let test = TestLayout::new("persona-v1-checked");
+    let path = test.layout.config.join("personas.json");
+    let mut profile = serde_json::to_value(PersonaProfileDto::for_character("epsilon")).unwrap();
+    let object = profile.as_object_mut().unwrap();
+    for field in [
+        "machiavellianism",
+        "narcissism",
+        "psychopathy",
+        "allow_intense_dark_expression",
+        "dark_expression_acknowledgement_version",
+    ] {
+        object.remove(field);
+    }
+    let raw = serde_json::json!({
+        "schema_version": 1,
+        "personas": { "epsilon": profile }
+    })
+    .to_string();
+    std::fs::write(&path, raw.as_bytes()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    let loaded = load_persona_checked(&test.layout, "epsilon")
+        .expect("v1 is readable")
+        .expect("profile exists");
+
+    assert_eq!(loaded.machiavellianism, 50);
+    assert!(!loaded.allow_intense_dark_expression);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn behavior_checked_persona_load_reports_invalid_without_overwrite() {
+    let test = TestLayout::new("persona-invalid-checked");
+    let path = test.layout.config.join("personas.json");
+    std::fs::write(&path, b"{private-invalid").unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    assert!(load_persona_checked(&test.layout, "epsilon").is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn behavior_single_persona_save_preserves_other_characters() {
+    let test = TestLayout::new("persona-single-save");
+    let mut settings = PersonaSettingsDto::default();
+    settings.personas.insert(
+        "alpha".to_owned(),
+        PersonaProfileDto::for_character("alpha"),
+    );
+    settings
+        .personas
+        .insert("beta".to_owned(), PersonaProfileDto::for_character("beta"));
+    save_persona_settings(&test.layout, &settings).unwrap();
+    let mut alpha = settings.personas["alpha"].clone();
+    alpha.psychopathy = 80;
+
+    let saved = save_persona(&test.layout, alpha.clone()).expect("save one profile");
+
+    assert_eq!(saved, alpha);
+    assert_eq!(load_persona(&test.layout, "alpha"), Some(alpha));
+    assert_eq!(
+        load_persona(&test.layout, "beta"),
+        Some(settings.personas["beta"].clone())
+    );
 }
 
 #[test]
