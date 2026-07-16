@@ -64,6 +64,8 @@ pub fn run() {
             commands::chat::cancel_turn,
             commands::chat::get_llm_settings,
             commands::chat::set_llm_settings,
+            commands::persona::get_persona_profile,
+            commands::persona::set_persona_profile,
             commands::data::list_conversation_history,
             commands::data::list_conversation_log,
             commands::data::export_user_data,

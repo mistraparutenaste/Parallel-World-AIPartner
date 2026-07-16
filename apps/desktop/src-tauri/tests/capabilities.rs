@@ -137,6 +137,8 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-get-runtime-diagnostics",
             "allow-get-llm-settings",
             "allow-set-llm-settings",
+            "allow-get-persona-profile",
+            "allow-set-persona-profile",
             "allow-get-tts-settings",
             "allow-set-tts-settings",
             "allow-list-tts-speakers",
@@ -155,6 +157,24 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-install-update"
         ]
     );
+}
+
+#[test]
+fn persona_profile_commands_are_settings_only() {
+    let expected = ["allow-get-persona-profile", "allow-set-persona-profile"];
+    let (_, settings) = capability_permissions("settings");
+    for permission in expected {
+        assert!(settings.iter().any(|item| item == permission));
+    }
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            expected
+                .iter()
+                .all(|permission| !permissions.iter().any(|item| item == permission)),
+            "persona command leaked into {capability}"
+        );
+    }
 }
 
 #[test]
