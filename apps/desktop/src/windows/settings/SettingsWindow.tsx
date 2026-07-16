@@ -169,7 +169,11 @@ export function SettingsWindow() {
   };
 
   return (
-    <main aria-label="管理画面" className="control-center">
+    <main
+      aria-label="管理画面"
+      className="control-center"
+      data-ui-style="geometric-game"
+    >
       <aside className="control-sidebar">
         <div className="brand"><span className="brand-mark" aria-hidden="true" /><strong>Parallel World</strong></div>
         <TabList idPrefix="control-main" label="管理メニュー" items={MAIN_ITEMS} value={mainArea} onChange={setMainArea} orientation="vertical" className="main-tabs" />

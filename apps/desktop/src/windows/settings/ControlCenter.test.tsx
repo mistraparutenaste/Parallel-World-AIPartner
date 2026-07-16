@@ -54,7 +54,9 @@ beforeEach(() => {
 describe('control center', () => {
   it('switches the accessible sidebar with arrow keys and pops chat out', async () => {
     render(<SettingsWindow />);
-    const navigation = await screen.findByRole('tablist', { name: '管理メニュー' });
+    const controlCenter = await screen.findByRole('main', { name: '管理画面' });
+    expect(controlCenter).toHaveAttribute('data-ui-style', 'geometric-game');
+    const navigation = screen.getByRole('tablist', { name: '管理メニュー' });
     const activePanel = screen.getByRole('tabpanel');
     expect(activePanel).toHaveAttribute(
       'aria-labelledby',
