@@ -99,6 +99,7 @@ mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -110,12 +111,16 @@ mod tests {
 
     impl TestDirectory {
         fn new() -> Self {
+            // OSクロックの分解能が粗い環境では時刻だけだと並列テスト間で
+            // 同名になるため、プロセス内カウンターで一意性を保証する。
+            static SEQUENCE: AtomicU64 = AtomicU64::new(0);
             let unique = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system clock is before Unix epoch")
                 .as_nanos();
+            let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "pw-stt-sherpa-recognizer-{}-{unique}",
+                "pw-stt-sherpa-recognizer-{}-{unique}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).expect("create test directory");
