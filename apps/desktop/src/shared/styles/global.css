@@ -141,6 +141,11 @@ textarea {
 .control-center {
   display: grid;
   grid-template-columns: 150px minmax(0, 1fr);
+
+  /* コンテンツが縦に長いとき暗黙の行がコンテンツ高まで伸びると
+     .control-content が overflow せずスクロール不能になるため、
+     行の高さをウィンドウ高に固定する。 */
+  grid-template-rows: minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -149,6 +154,7 @@ textarea {
 
 .control-sidebar {
   padding: 18px 14px;
+  overflow-y: auto;
   border-right: 1px solid var(--line);
   background: var(--surface-muted);
 }
@@ -285,6 +291,15 @@ textarea {
   display: grid;
   gap: 5px;
   margin: 10px 0;
+}
+
+/* label内包型のcheckbox/radioはテキストと同じ行に横並びにする
+   （上のgridでは入力が別行へ分離し、幅いっぱいに引き伸ばされる）。 */
+.panel-stack label:has(> input[type='checkbox']),
+.panel-stack label:has(> input[type='radio']) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .chat-surface {
