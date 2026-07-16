@@ -1,48 +1,60 @@
+/* Diamond-pop design system.
+   モック準拠: ポップシアン基調 / 白サーフェス / ダイヤ型(45°回転)タブ /
+   しっぽ付き吹き出し(ユーザー=シアン塗り・左, AI=白+シアン輪郭・右) / ピル型ボタン。 */
+
 :root {
   color-scheme: light;
   font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', system-ui, sans-serif;
-  --accent: #2e9f90;
-  --accent-strong: #237d72;
-  --accent-soft: #dff3ef;
-  --page: #eef1f3;
-  --surface: #fbfcfc;
-  --surface-muted: #f2f5f6;
-  --line: #dce2e5;
-  --text: #172126;
-  --muted: #66747d;
-  --danger: #b64141;
+  --accent: #23c4d8;
+  --accent-strong: #0c92a6;
+  --accent-soft: #e0f9fc;
+  --on-accent: #fff;
+  --page: #f2fbfd;
+  --surface: #fff;
+  --surface-muted: #eaf7fa;
+  --line: #c5e9ef;
+  --text: #12333c;
+  --muted: #58787f;
+  --danger: #cf4b62;
+  --success: #128a5e;
   --radius: 12px;
+  --radius-lg: 18px;
+  --radius-bubble: 22px;
   background: var(--page);
   color: var(--text);
 }
 
 :root[data-theme='dark'] {
   color-scheme: dark;
-  --accent: #63cabb;
-  --accent-strong: #86ddd1;
-  --accent-soft: #173a35;
-  --page: #0d1216;
-  --surface: #141b20;
-  --surface-muted: #1a2329;
-  --line: #29353d;
-  --text: #edf3f5;
-  --muted: #91a0a9;
-  --danger: #ef8585;
+  --accent: #35cfe0;
+  --accent-strong: #8be8f2;
+  --accent-soft: #0c3944;
+  --on-accent: #03242b;
+  --page: #061a20;
+  --surface: #0b242c;
+  --surface-muted: #0f313b;
+  --line: #1d4a56;
+  --text: #e6f7fa;
+  --muted: #8cb2ba;
+  --danger: #ff8598;
+  --success: #57d69f;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
     color-scheme: dark;
-    --accent: #63cabb;
-    --accent-strong: #86ddd1;
-    --accent-soft: #173a35;
-    --page: #0d1216;
-    --surface: #141b20;
-    --surface-muted: #1a2329;
-    --line: #29353d;
-    --text: #edf3f5;
-    --muted: #91a0a9;
-    --danger: #ef8585;
+    --accent: #35cfe0;
+    --accent-strong: #8be8f2;
+    --accent-soft: #0c3944;
+    --on-accent: #03242b;
+    --page: #061a20;
+    --surface: #0b242c;
+    --surface-muted: #0f313b;
+    --line: #1d4a56;
+    --text: #e6f7fa;
+    --muted: #8cb2ba;
+    --danger: #ff8598;
+    --success: #57d69f;
   }
 }
 
@@ -69,7 +81,6 @@ textarea {
   font: inherit;
 }
 
-button,
 select,
 input,
 textarea {
@@ -77,15 +88,21 @@ textarea {
   border-radius: var(--radius);
 }
 
+/* ピル型プライマリボタン(モックの丸フォルムを踏襲)。 */
 button {
-  min-height: 36px;
-  padding: 7px 13px;
+  min-height: 38px;
+  padding: 7px 18px;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
+  font-weight: 700;
+  letter-spacing: 0.03em;
   cursor: pointer;
 }
 
 button:hover:not(:disabled) {
+  border-color: var(--accent-strong);
   background: var(--accent-strong);
 }
 
@@ -97,13 +114,27 @@ button:disabled {
 input,
 select,
 textarea {
-  padding: 8px 10px;
+  min-height: 38px;
+  padding: 8px 12px;
   background: var(--surface);
   color: var(--text);
 }
 
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+input[type='range'],
+input[type='checkbox'],
+input[type='radio'] {
+  min-height: auto;
+  accent-color: var(--accent);
+}
+
 :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 2px;
 }
 
@@ -121,21 +152,23 @@ textarea {
 
 .eyebrow {
   margin: 0 0 3px;
-  color: var(--muted);
+  color: var(--accent-strong);
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
 }
 
 .secondary-button {
-  border-color: var(--line);
+  border-color: var(--accent);
   background: var(--surface);
-  color: var(--text);
+  color: var(--accent-strong);
 }
 
 .secondary-button:hover:not(:disabled) {
-  background: var(--surface-muted);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 .control-center {
@@ -168,11 +201,12 @@ textarea {
 }
 
 .brand-mark {
-  width: 31px;
-  height: 31px;
-  flex: 0 0 31px;
-  border-radius: 10px;
-  background: linear-gradient(145deg, var(--accent), #7869df);
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: 4px;
+  background: var(--accent);
+  transform: rotate(45deg) scale(0.82);
 }
 
 .main-tabs {
@@ -200,10 +234,6 @@ textarea {
 .sub-tabs button[aria-selected='true'] {
   background: var(--accent-soft);
   color: var(--text);
-}
-
-.main-tabs button[aria-selected='true'] {
-  box-shadow: inset 3px 0 var(--accent);
 }
 
 .control-workspace {
@@ -256,6 +286,10 @@ textarea {
   color: var(--danger);
 }
 
+[role='status'] {
+  color: var(--accent-strong);
+}
+
 .sub-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -264,8 +298,8 @@ textarea {
 }
 
 .sub-tabs button {
-  min-height: 32px;
-  padding: 5px 11px;
+  min-height: 34px;
+  padding: 5px 14px;
   border-radius: 999px;
 }
 
@@ -276,10 +310,24 @@ textarea {
 }
 
 .panel-stack > section {
-  padding: 18px;
+  position: relative;
+  padding: 18px 20px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface);
+}
+
+/* セクション上辺のダイヤ飾り(モックのダイヤモチーフ)。 */
+.panel-stack > section::before {
+  position: absolute;
+  inset: -6px auto auto 24px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+  content: '';
+  transform: rotate(45deg);
+  pointer-events: none;
 }
 
 .panel-stack h2:first-child,
@@ -287,10 +335,27 @@ textarea {
   margin-top: 0;
 }
 
+.panel-stack h2,
+.panel-stack h3 {
+  color: var(--text);
+  font-size: 15px;
+  letter-spacing: 0.035em;
+}
+
+.panel-stack h2:first-child,
+.panel-stack h3:first-child {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
 .panel-stack label {
   display: grid;
   gap: 5px;
   margin: 10px 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 /* label内包型のcheckbox/radioはテキストと同じ行に横並びにする
@@ -323,30 +388,64 @@ textarea {
   padding: 0;
 }
 
+/* 吹き出し共通: 大きめの角丸 + しっぽ。
+   モック準拠でユーザー発話(会話内容)=シアン塗り・左寄せ、
+   AI発話(AI会話内容)=白+シアン輪郭・右寄せ。 */
 .chat-surface li,
 .conversation-log-list li {
+  position: relative;
   max-width: 76%;
   width: fit-content;
-  margin: 0 0 10px;
-  padding: 11px 14px;
-  border-radius: calc(var(--radius) + 2px);
-  background: var(--surface-muted);
-  line-height: 1.55;
+  margin: 0 0 20px auto;
+  padding: 12px 18px;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-bubble);
+  background: var(--surface);
+  color: var(--text);
+  line-height: 1.6;
+}
+
+/* AI吹き出しのしっぽ(右下・輪郭付き)。 */
+.chat-surface li::after,
+.conversation-log-list li::after {
+  position: absolute;
+  right: 26px;
+  bottom: -9px;
+  width: 15px;
+  height: 15px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  border-bottom-right-radius: 3px;
+  background: var(--surface);
+  content: '';
+  transform: rotate(45deg);
 }
 
 .chat-surface li[data-role='user'],
 .conversation-log-list li[data-role='user'] {
-  margin-left: auto;
-  background: var(--accent-soft);
+  margin-left: 0;
+  margin-right: auto;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+/* ユーザー吹き出しのしっぽ(左下・塗り)。 */
+.chat-surface li[data-role='user']::after,
+.conversation-log-list li[data-role='user']::after {
+  right: auto;
+  left: 26px;
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .chat-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--line);
-  border-radius: calc(var(--radius) + 3px);
+  padding: 12px;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-bubble);
   background: var(--surface);
 }
 
@@ -363,8 +462,8 @@ textarea {
 
 .empty-state {
   padding: 28px;
-  border: 1px dashed var(--line);
-  border-radius: var(--radius);
+  border: 2px dashed color-mix(in srgb, var(--accent) 60%, var(--line));
+  border-radius: var(--radius-lg);
   color: var(--muted);
   text-align: center;
 }
@@ -401,7 +500,7 @@ textarea {
 
 .conversation-log-list {
   display: grid;
-  gap: 8px;
+  gap: 12px;
 }
 
 .conversation-log-list li {
@@ -419,6 +518,11 @@ textarea {
   font-size: 11px;
 }
 
+/* シアン塗り吹き出し内のメタ情報は地色に馴染む半透明で。 */
+.conversation-log-list li[data-role='user'] .log-meta {
+  color: color-mix(in srgb, var(--on-accent) 78%, transparent);
+}
+
 .technical-log {
   min-height: 360px;
   max-height: calc(100vh - 240px);
@@ -427,8 +531,8 @@ textarea {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: #11171b;
-  color: #d8e7e4;
+  background: #06232a;
+  color: #d8f5f7;
   font: 12px/1.6 Consolas, 'Cascadia Mono', monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -479,24 +583,24 @@ textarea {
 .character-renderer-selector span {
   display: inline-flex;
   min-width: 110px;
-  min-height: 36px;
+  min-height: 38px;
   align-items: center;
   justify-content: center;
-  padding: 7px 13px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
+  padding: 7px 16px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
   background: var(--surface);
 }
 
 .character-renderer-selector input:checked + span {
   border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--accent);
+  color: var(--on-accent);
   font-weight: 700;
 }
 
 .character-renderer-selector input:focus-visible + span {
-  outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent);
   outline-offset: 2px;
 }
 
@@ -507,9 +611,9 @@ textarea {
 }
 
 .character-source-card {
-  padding: 14px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--surface-muted);
 }
 
@@ -633,424 +737,204 @@ body.transparent canvas {
   overflow-wrap: anywhere;
 }
 
-/* Geometric game UI: intentionally scoped to the control center. */
-.control-center[data-ui-style='geometric-game'] {
-  --accent: #08a5c2;
-  --accent-strong: #087e9a;
-  --accent-soft: #e5f7fb;
-  --page: #f2f6f9;
-  --surface: #fff;
-  --surface-muted: #f5f8fa;
-  --line: #cfd9e1;
-  --text: #182431;
-  --muted: #647383;
-  --danger: #ad3448;
-  --radius: 4px;
-  --game-line-strong: #8998a8;
-  --game-success: #168c5b;
-  color-scheme: light;
-}
+/* Diamond-pop UI chrome: intentionally scoped to the control center. */
+.control-center[data-ui-style='diamond-pop'] {
+  --line-strong: color-mix(in srgb, var(--accent) 45%, var(--line));
 
-:root[data-theme='dark'] .control-center[data-ui-style='geometric-game'] {
-  --accent: #24c5e3;
-  --accent-strong: #7ce5f5;
-  --accent-soft: #123646;
-  --page: #07131d;
-  --surface: #0b1b27;
-  --surface-muted: #102533;
-  --line: #2b4b5e;
-  --text: #eaf7fb;
-  --muted: #93aeba;
-  --danger: #ff8498;
-  --game-line-strong: #4c7488;
-  --game-success: #54d69a;
-  color-scheme: dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .control-center[data-ui-style='geometric-game'] {
-    --accent: #24c5e3;
-    --accent-strong: #7ce5f5;
-    --accent-soft: #123646;
-    --page: #07131d;
-    --surface: #0b1b27;
-    --surface-muted: #102533;
-    --line: #2b4b5e;
-    --text: #eaf7fb;
-    --muted: #93aeba;
-    --danger: #ff8498;
-    --game-line-strong: #4c7488;
-    --game-success: #54d69a;
-    color-scheme: dark;
-  }
-}
-
-.control-center[data-ui-style='geometric-game'] {
-  grid-template-columns: 164px minmax(0, 1fr);
+  grid-template-columns: 172px minmax(0, 1fr);
   background: var(--page);
 }
 
-.control-center[data-ui-style='geometric-game'] .control-sidebar {
-  position: relative;
-  padding: 20px 14px;
-  border-right: 1px solid var(--game-line-strong);
+.control-center[data-ui-style='diamond-pop'] .control-sidebar {
+  padding: 22px 14px;
+  border-right: 1px solid var(--line);
   background: var(--surface);
 }
 
-.control-center[data-ui-style='geometric-game'] .control-sidebar::before {
-  position: absolute;
-  inset: 67px 0 auto;
-  height: 1px;
-  background: var(--line);
-  content: '';
-}
-
-.control-center[data-ui-style='geometric-game'] .control-sidebar::after {
-  position: absolute;
-  inset: 64px -4px auto auto;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--game-line-strong);
-  background: var(--surface);
-  content: '';
-  transform: rotate(45deg);
-}
-
-.control-center[data-ui-style='geometric-game'] .brand {
+.control-center[data-ui-style='diamond-pop'] .brand {
   gap: 12px;
   min-height: 29px;
-  margin: 0 3px 35px;
-  letter-spacing: 0.015em;
+  margin: 0 3px 38px;
+  justify-content: center;
+  letter-spacing: 0.02em;
 }
 
-.control-center[data-ui-style='geometric-game'] .brand strong {
+.control-center[data-ui-style='diamond-pop'] .brand strong {
+  color: var(--accent-strong);
   font-size: 13px;
 }
 
-.control-center[data-ui-style='geometric-game'] .brand-mark {
-  position: relative;
-  width: 25px;
-  height: 25px;
-  flex-basis: 25px;
-  border: 1px solid var(--game-line-strong);
-  border-radius: 1px;
-  background: var(--surface);
-  transform: rotate(45deg);
-}
-
-.control-center[data-ui-style='geometric-game'] .brand-mark::after {
-  position: absolute;
-  inset: 6px;
-  border: 2px solid var(--accent);
-  content: '';
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs {
-  gap: 10px;
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs button {
-  position: relative;
-  min-height: 46px;
-  padding: 9px 12px;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  font-size: 13px;
-  font-weight: 650;
-  letter-spacing: 0.025em;
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs button > span:first-child {
-  display: inline-grid;
+.control-center[data-ui-style='diamond-pop'] .brand-mark {
   width: 22px;
+  height: 22px;
+  flex-basis: 22px;
+  border-radius: 3px;
+  background: var(--accent);
+  transform: rotate(45deg) scale(0.82);
+}
+
+/* ダイヤ型メインタブ: 45°回転させた角丸スクエアにラベルを逆回転で載せる。
+   選択中=シアン塗り+白文字、非選択=白+シアン輪郭(モックのダイヤ群)。 */
+.control-center[data-ui-style='diamond-pop'] .main-tabs {
+  display: grid;
+  justify-items: center;
+  gap: 42px;
+  padding-block: 26px 20px;
+}
+
+.control-center[data-ui-style='diamond-pop'] .main-tabs button {
+  display: grid;
   place-items: center;
-  font-size: 16px;
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs button:hover:not(:disabled) {
-  border-color: var(--line);
-  background: var(--surface-muted);
-  color: var(--text);
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs button[aria-selected='true'] {
-  border-color: var(--accent);
-  border-left-width: 3px;
-  background: var(--accent-soft);
-  color: var(--text);
-  box-shadow: none;
-}
-
-.control-center[data-ui-style='geometric-game'] .main-tabs button[aria-selected='true']::after {
-  position: absolute;
-  inset: 50% -5px auto auto;
-  width: 8px;
-  height: 8px;
-  border: 1px solid var(--accent);
+  width: 72px;
+  height: 72px;
+  min-height: 0;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
   background: var(--surface);
-  content: '';
-  transform: translateY(-50%) rotate(45deg);
-}
-
-.control-center[data-ui-style='geometric-game'] .control-workspace {
-  background: var(--page);
-}
-
-.control-center[data-ui-style='geometric-game'] .control-header {
-  position: relative;
-  min-height: 72px;
-  padding: 12px 26px;
-  border-bottom: 1px solid var(--game-line-strong);
-  background: var(--surface);
-}
-
-.control-center[data-ui-style='geometric-game'] .control-header::after {
-  position: absolute;
-  inset: auto auto -4px 28px;
-  width: 7px;
-  height: 7px;
-  border: 1px solid var(--game-line-strong);
-  background: var(--surface);
-  content: '';
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
   transform: rotate(45deg);
 }
 
-.control-center[data-ui-style='geometric-game'] .control-header .eyebrow {
+.control-center[data-ui-style='diamond-pop'] .main-tabs button > span {
+  grid-area: 1 / 1;
+  transform: rotate(-45deg);
+}
+
+/* デスクトップ幅ではアイコンを隠しラベルのみ(モックはダイヤに文字だけ)。 */
+.control-center[data-ui-style='diamond-pop'] .main-tabs button > span[aria-hidden='true'] {
   display: none;
 }
 
-.control-center[data-ui-style='geometric-game'] .control-header h1 {
-  font-size: 20px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+.control-center[data-ui-style='diamond-pop'] .main-tabs button:hover:not(:disabled, [aria-selected='true']) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
-.control-center[data-ui-style='geometric-game'] .theme-control {
+.control-center[data-ui-style='diamond-pop'] .main-tabs button[aria-selected='true'] {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.control-center[data-ui-style='diamond-pop'] .control-workspace {
+  background: var(--page);
+}
+
+/* ヘッダー下辺の太いシアンライン(モック下部の水平ライン)+ ダイヤ飾り。 */
+.control-center[data-ui-style='diamond-pop'] .control-header {
+  position: relative;
+  min-height: 72px;
+  padding: 12px 26px;
+  border-bottom: 3px solid var(--accent);
+  background: var(--surface);
+}
+
+.control-center[data-ui-style='diamond-pop'] .control-header::after {
+  position: absolute;
+  inset: auto auto -7px 30px;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--accent);
+  content: '';
+  transform: rotate(45deg);
+}
+
+.control-center[data-ui-style='diamond-pop'] .control-header h1 {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.control-center[data-ui-style='diamond-pop'] .theme-control {
   gap: 10px;
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
 }
 
-.control-center[data-ui-style='geometric-game'] .theme-control select {
+.control-center[data-ui-style='diamond-pop'] .theme-control select {
   min-width: 118px;
-  min-height: 38px;
 }
 
-.control-center[data-ui-style='geometric-game'] .control-content {
-  padding: 22px 26px 30px;
+.control-center[data-ui-style='diamond-pop'] .control-content {
+  padding: 24px 26px 30px;
 }
 
-.control-center[data-ui-style='geometric-game'] .global-error {
+.control-center[data-ui-style='diamond-pop'] .global-error {
   margin: 14px 26px 0;
-  padding: 10px 12px;
-  border: 1px solid var(--danger);
-  border-left-width: 3px;
+  padding: 10px 14px;
+  border: 2px solid var(--danger);
+  border-radius: var(--radius);
   background: color-mix(in srgb, var(--danger) 8%, var(--surface));
   font-size: 12px;
 }
 
-.control-center[data-ui-style='geometric-game'] .sub-tabs {
-  gap: 2px;
-  margin-bottom: 22px;
-  padding: 0 4px 9px;
-  border-bottom: 1px solid var(--line);
+/* サブタブ: ピル型。選択中はシアン塗り+下にダイヤマーカー。 */
+.control-center[data-ui-style='diamond-pop'] .sub-tabs {
+  gap: 8px;
+  margin-bottom: 24px;
 }
 
-.control-center[data-ui-style='geometric-game'] .sub-tabs button {
+.control-center[data-ui-style='diamond-pop'] .sub-tabs button {
   position: relative;
-  min-height: 38px;
-  padding: 7px 14px;
-  border-radius: 2px;
-  font-size: 12px;
-  font-weight: 650;
-  letter-spacing: 0.035em;
-}
-
-.control-center[data-ui-style='geometric-game'] .sub-tabs button:hover:not(:disabled) {
-  background: var(--surface-muted);
-  color: var(--text);
-}
-
-.control-center[data-ui-style='geometric-game'] .sub-tabs button[aria-selected='true'] {
-  background: transparent;
-  color: var(--accent-strong);
-}
-
-.control-center[data-ui-style='geometric-game'] .sub-tabs button[aria-selected='true']::before {
-  position: absolute;
-  inset: auto 18% -10px;
-  height: 2px;
-  background: var(--accent);
-  content: '';
-}
-
-.control-center[data-ui-style='geometric-game'] .sub-tabs button[aria-selected='true']::after {
-  position: absolute;
-  inset: auto 50% -13px auto;
-  width: 6px;
-  height: 6px;
-  border: 1px solid var(--accent);
+  min-height: 36px;
+  padding: 6px 16px;
+  border: 2px solid var(--line);
+  border-radius: 999px;
   background: var(--surface);
-  content: '';
-  transform: translateX(50%) rotate(45deg);
-}
-
-.control-center[data-ui-style='geometric-game'] .panel-stack {
-  gap: 16px;
-  max-width: 900px;
-}
-
-.control-center[data-ui-style='geometric-game'] .panel-stack > section {
-  position: relative;
-  padding: 20px;
-  border-color: var(--line);
-  border-radius: 3px;
-  background: var(--surface);
-}
-
-.control-center[data-ui-style='geometric-game'] .panel-stack > section::before {
-  position: absolute;
-  inset: -1px auto auto -1px;
-  width: 15px;
-  height: 15px;
-  border-top: 2px solid var(--accent);
-  border-left: 2px solid var(--accent);
-  content: '';
-  pointer-events: none;
-}
-
-.control-center[data-ui-style='geometric-game'] .panel-stack h2,
-.control-center[data-ui-style='geometric-game'] .panel-stack h3 {
-  color: var(--text);
-  font-size: 15px;
-  letter-spacing: 0.035em;
-}
-
-.control-center[data-ui-style='geometric-game'] .panel-stack h2:first-child,
-.control-center[data-ui-style='geometric-game'] .panel-stack h3:first-child {
-  margin-bottom: 16px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--line);
-}
-
-.control-center[data-ui-style='geometric-game'] label {
   color: var(--muted);
   font-size: 12px;
-  font-weight: 600;
-}
-
-.control-center[data-ui-style='geometric-game'] button,
-.control-center[data-ui-style='geometric-game'] select,
-.control-center[data-ui-style='geometric-game'] input,
-.control-center[data-ui-style='geometric-game'] textarea {
-  border-radius: 3px;
-}
-
-.control-center[data-ui-style='geometric-game'] input,
-.control-center[data-ui-style='geometric-game'] select,
-.control-center[data-ui-style='geometric-game'] textarea {
-  min-height: 38px;
-  border-color: var(--line);
-}
-
-.control-center[data-ui-style='geometric-game'] input:hover,
-.control-center[data-ui-style='geometric-game'] select:hover,
-.control-center[data-ui-style='geometric-game'] textarea:hover {
-  border-color: var(--game-line-strong);
-}
-
-.control-center[data-ui-style='geometric-game'] button:not([role='tab']):not(.secondary-button) {
-  min-height: 38px;
-  border-color: var(--accent);
-  background: var(--accent);
   font-weight: 700;
   letter-spacing: 0.04em;
 }
 
-.control-center[data-ui-style='geometric-game'] button:not([role='tab']):not(.secondary-button):hover:not(:disabled) {
-  border-color: var(--accent-strong);
-  background: var(--accent-strong);
-}
-
-.control-center[data-ui-style='geometric-game'] .secondary-button {
-  min-height: 38px;
-  border-color: var(--game-line-strong);
-  background: var(--surface);
-}
-
-.control-center[data-ui-style='geometric-game'] .secondary-button:hover:not(:disabled) {
+.control-center[data-ui-style='diamond-pop'] .sub-tabs button:hover:not(:disabled, [aria-selected='true']) {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent-strong);
 }
 
-.control-center[data-ui-style='geometric-game'] input[type='range'],
-.control-center[data-ui-style='geometric-game'] input[type='checkbox'],
-.control-center[data-ui-style='geometric-game'] input[type='radio'] {
-  min-height: auto;
-  accent-color: var(--accent);
-}
-
-.control-center[data-ui-style='geometric-game'] :focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 72%, white);
-  outline-offset: 3px;
-}
-
-.control-center[data-ui-style='geometric-game'] .chat-surface li,
-.control-center[data-ui-style='geometric-game'] .conversation-log-list li {
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  background: var(--surface);
-}
-
-.control-center[data-ui-style='geometric-game'] .chat-surface li[data-role='user'],
-.control-center[data-ui-style='geometric-game'] .conversation-log-list li[data-role='user'] {
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-  border-right-width: 3px;
-  background: var(--accent-soft);
-}
-
-.control-center[data-ui-style='geometric-game'] .chat-composer,
-.control-center[data-ui-style='geometric-game'] .technical-log,
-.control-center[data-ui-style='geometric-game'] .empty-state,
-.control-center[data-ui-style='geometric-game'] .character-source-card,
-.control-center[data-ui-style='geometric-game'] .character-renderer-selector span {
-  border-radius: 3px;
-}
-
-.control-center[data-ui-style='geometric-game'] .chat-composer {
-  border-color: var(--game-line-strong);
-}
-
-.control-center[data-ui-style='geometric-game'] .empty-state {
-  border-style: solid;
-  border-left: 3px solid var(--accent);
-  background: var(--surface);
-}
-
-.control-center[data-ui-style='geometric-game'] .technical-log {
-  border-color: var(--game-line-strong);
-  background: #061018;
-  color: #d8f5f7;
-}
-
-.control-center[data-ui-style='geometric-game'] .character-source-card {
-  border-color: var(--line);
-  background: var(--surface-muted);
-}
-
-.control-center[data-ui-style='geometric-game'] .character-renderer-selector input:checked + span {
+.control-center[data-ui-style='diamond-pop'] .sub-tabs button[aria-selected='true'] {
   border-color: var(--accent);
-  background: var(--accent-soft);
-  color: var(--accent-strong);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
-.control-center[data-ui-style='geometric-game'] [role='status'] {
-  color: var(--game-success);
+.control-center[data-ui-style='diamond-pop'] .sub-tabs button[aria-selected='true']::after {
+  position: absolute;
+  inset: auto auto -11px 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 1px;
+  background: var(--accent);
+  content: '';
+  transform: translateX(-50%) rotate(45deg);
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-panel__heading {
+.control-center[data-ui-style='diamond-pop'] .panel-stack {
+  gap: 18px;
+  max-width: 900px;
+}
+
+.control-center[data-ui-style='diamond-pop'] .chat-composer {
+  border-color: var(--accent);
+}
+
+.control-center[data-ui-style='diamond-pop'] .empty-state {
+  background: var(--surface);
+}
+
+.control-center[data-ui-style='diamond-pop'] [role='status'] {
+  color: var(--success);
+}
+
+.control-center[data-ui-style='diamond-pop'] .personality-panel__heading {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1060,15 +944,16 @@ body.transparent canvas {
   border-bottom: 1px solid var(--line);
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-panel__heading h2 {
+.control-center[data-ui-style='diamond-pop'] .personality-panel__heading h2 {
   margin: 0;
   padding: 0;
   border: 0;
 }
 
-.control-center[data-ui-style='geometric-game'] .character-scope {
-  padding: 4px 8px;
-  border: 1px solid color-mix(in srgb, var(--accent) 54%, var(--line));
+.control-center[data-ui-style='diamond-pop'] .character-scope {
+  padding: 4px 12px;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 10px;
@@ -1076,57 +961,59 @@ body.transparent canvas {
   letter-spacing: 0.06em;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-group {
+.control-center[data-ui-style='diamond-pop'] .personality-group {
   min-width: 0;
   margin: 0 0 18px;
   padding: 16px;
   border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
   background: var(--surface-muted);
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-group legend {
-  padding: 0 8px;
-  color: var(--text);
+.control-center[data-ui-style='diamond-pop'] .personality-group legend {
+  padding: 0 10px;
+  color: var(--accent-strong);
   font-size: 13px;
   font-weight: 750;
   letter-spacing: 0.05em;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-group--dark {
+.control-center[data-ui-style='diamond-pop'] .personality-group--dark {
   border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
   background: color-mix(in srgb, var(--danger) 4%, var(--surface));
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-group--dark legend {
+.control-center[data-ui-style='diamond-pop'] .personality-group--dark legend {
   color: var(--danger);
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-grid {
+.control-center[data-ui-style='diamond-pop'] .personality-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 18px 24px;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider {
+.control-center[data-ui-style='diamond-pop'] .personality-slider {
   min-width: 0;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider__heading {
+.control-center[data-ui-style='diamond-pop'] .personality-slider__heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider__heading label {
+.control-center[data-ui-style='diamond-pop'] .personality-slider__heading label {
   margin: 0;
   color: var(--text);
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider output {
-  min-width: 34px;
-  padding: 2px 6px;
+.control-center[data-ui-style='diamond-pop'] .personality-slider output {
+  min-width: 38px;
+  padding: 2px 8px;
   border: 1px solid var(--line);
+  border-radius: 999px;
   background: var(--surface);
   color: var(--accent-strong);
   font-variant-numeric: tabular-nums;
@@ -1135,7 +1022,7 @@ body.transparent canvas {
   text-align: center;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider input[type='range'] {
+.control-center[data-ui-style='diamond-pop'] .personality-slider input[type='range'] {
   width: 100%;
   height: 20px;
   margin: 7px 0 1px;
@@ -1144,7 +1031,7 @@ body.transparent canvas {
   background: transparent;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider__scale {
+.control-center[data-ui-style='diamond-pop'] .personality-slider__scale {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   gap: 6px;
@@ -1152,16 +1039,16 @@ body.transparent canvas {
   font-size: 9px;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider__scale span:nth-child(2) {
+.control-center[data-ui-style='diamond-pop'] .personality-slider__scale span:nth-child(2) {
   color: var(--accent-strong);
   text-align: center;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-slider__scale span:last-child {
+.control-center[data-ui-style='diamond-pop'] .personality-slider__scale span:last-child {
   text-align: right;
 }
 
-.control-center[data-ui-style='geometric-game'] .dark-triad-warning {
+.control-center[data-ui-style='diamond-pop'] .dark-triad-warning {
   margin: 0 0 16px;
   color: var(--danger);
   font-size: 11px;
@@ -1169,15 +1056,15 @@ body.transparent canvas {
   line-height: 1.65;
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control {
   margin-top: 18px;
-  padding: 13px 14px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
-  border-left: 3px solid var(--danger);
+  padding: 13px 16px;
+  border: 2px solid color-mix(in srgb, var(--danger) 45%, var(--line));
+  border-radius: var(--radius);
   background: var(--surface);
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control > label {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control > label {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -1185,87 +1072,88 @@ body.transparent canvas {
   color: var(--text);
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control input {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control input {
   margin-top: 3px;
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control span {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control span {
   display: grid;
   gap: 2px;
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control small {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control small {
   color: var(--danger);
   font-size: 10px;
 }
 
-.control-center[data-ui-style='geometric-game'] .intense-expression-control .dark-triad-warning {
+.control-center[data-ui-style='diamond-pop'] .intense-expression-control .dark-triad-warning {
   margin: 0 0 0 24px;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-disclaimer {
+.control-center[data-ui-style='diamond-pop'] .personality-disclaimer {
   margin: 0;
-  padding: 12px 14px;
-  border-left: 2px solid var(--game-line-strong);
+  padding: 12px 16px;
+  border-radius: var(--radius);
   background: var(--surface-muted);
   color: var(--muted);
   font-size: 10px;
   line-height: 1.7;
 }
 
-.control-center[data-ui-style='geometric-game'] .personality-actions,
-.control-center[data-ui-style='geometric-game'] .confirmation-actions {
+.control-center[data-ui-style='diamond-pop'] .personality-actions,
+.control-center[data-ui-style='diamond-pop'] .confirmation-actions {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
 }
 
-.control-center[data-ui-style='geometric-game'] .confirmation-backdrop {
+.control-center[data-ui-style='diamond-pop'] .confirmation-backdrop {
   position: fixed;
   z-index: 100;
   inset: 0;
   display: grid;
   place-items: center;
   padding: 20px;
-  background: rgb(2 12 18 / 64%);
+  background: rgb(2 18 24 / 58%);
 }
 
-.control-center[data-ui-style='geometric-game'] .confirmation-dialog {
+.control-center[data-ui-style='diamond-pop'] .confirmation-dialog {
   position: relative;
   width: min(500px, 100%);
   padding: 22px;
-  border: 1px solid var(--danger);
-  border-top-width: 3px;
+  border: 2px solid var(--danger);
+  border-radius: var(--radius-lg);
   background: var(--surface);
   box-shadow: 0 18px 55px rgb(0 0 0 / 32%);
 }
 
-.control-center[data-ui-style='geometric-game'] .confirmation-dialog h3 {
+.control-center[data-ui-style='diamond-pop'] .confirmation-dialog h3 {
   margin: 0 0 14px;
   color: var(--text);
   font-size: 17px;
 }
 
-.control-center[data-ui-style='geometric-game'] .confirmation-check {
+.control-center[data-ui-style='diamond-pop'] .confirmation-check {
   display: flex;
   align-items: flex-start;
   gap: 9px;
   margin: 15px 0 0;
   padding: 12px;
   border: 1px solid var(--line);
+  border-radius: var(--radius);
   background: var(--surface-muted);
   color: var(--text);
 }
 
-.control-center[data-ui-style='geometric-game'] .confirmation-check input {
+.control-center[data-ui-style='diamond-pop'] .confirmation-check input {
   margin-top: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .control-center[data-ui-style='geometric-game'] *,
-  .control-center[data-ui-style='geometric-game'] *::before,
-  .control-center[data-ui-style='geometric-game'] *::after {
+  .control-center[data-ui-style='diamond-pop'] *,
+  .control-center[data-ui-style='diamond-pop'] *::before,
+  .control-center[data-ui-style='diamond-pop'] *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
     animation-duration: 0.01ms !important;
@@ -1274,31 +1162,44 @@ body.transparent canvas {
 }
 
 @media (max-width: 640px) {
-  .control-center[data-ui-style='geometric-game'] {
-    grid-template-columns: 68px minmax(0, 1fr);
+  .control-center[data-ui-style='diamond-pop'] {
+    grid-template-columns: 76px minmax(0, 1fr);
   }
 
-  .control-center[data-ui-style='geometric-game'] .control-sidebar {
+  .control-center[data-ui-style='diamond-pop'] .control-sidebar {
     padding-inline: 9px;
   }
 
-  .control-center[data-ui-style='geometric-game'] .brand {
+  .control-center[data-ui-style='diamond-pop'] .brand {
     justify-content: center;
   }
 
-  .control-center[data-ui-style='geometric-game'] .main-tabs button {
-    padding-inline: 7px;
+  /* 幅が足りないのでダイヤを縮小し、ラベルの代わりにアイコンを表示する。 */
+  .control-center[data-ui-style='diamond-pop'] .main-tabs {
+    gap: 30px;
   }
 
-  .control-center[data-ui-style='geometric-game'] .control-header {
+  .control-center[data-ui-style='diamond-pop'] .main-tabs button {
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border-radius: 7px;
+  }
+
+  .control-center[data-ui-style='diamond-pop'] .main-tabs button > span[aria-hidden='true'] {
+    display: inline-grid;
+    font-size: 15px;
+  }
+
+  .control-center[data-ui-style='diamond-pop'] .control-header {
     padding-inline: 16px;
   }
 
-  .control-center[data-ui-style='geometric-game'] .control-content {
+  .control-center[data-ui-style='diamond-pop'] .control-content {
     padding: 18px 16px 24px;
   }
 
-  .control-center[data-ui-style='geometric-game'] .personality-grid {
+  .control-center[data-ui-style='diamond-pop'] .personality-grid {
     grid-template-columns: 1fr;
   }
 }

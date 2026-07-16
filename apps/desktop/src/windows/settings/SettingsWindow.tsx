@@ -173,7 +173,7 @@ export function SettingsWindow() {
     <main
       aria-label="管理画面"
       className="control-center"
-      data-ui-style="geometric-game"
+      data-ui-style="diamond-pop"
     >
       <aside className="control-sidebar">
         <div className="brand"><span className="brand-mark" aria-hidden="true" /><strong>Parallel World</strong></div>
