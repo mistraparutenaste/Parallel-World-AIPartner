@@ -29,6 +29,8 @@ fn main() {
             "cancel_turn",
             "get_llm_settings",
             "set_llm_settings",
+            "get_persona_profile",
+            "set_persona_profile",
             "set_speech_playback",
             "get_tts_settings",
             "set_tts_settings",

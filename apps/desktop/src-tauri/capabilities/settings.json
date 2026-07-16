@@ -33,6 +33,8 @@
     "allow-get-runtime-diagnostics",
     "allow-get-llm-settings",
     "allow-set-llm-settings",
+    "allow-get-persona-profile",
+    "allow-set-persona-profile",
     "allow-get-tts-settings",
     "allow-set-tts-settings",
     "allow-list-tts-speakers",

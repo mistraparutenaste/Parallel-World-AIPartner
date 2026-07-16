@@ -261,6 +261,12 @@
           "markdownDescription": "Enables the get_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_persona_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-persona-profile",
+          "markdownDescription": "Enables the get_persona_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_runtime_diagnostics command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-runtime-diagnostics",
@@ -423,6 +429,12 @@
           "markdownDescription": "Enables the set_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_persona_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-persona-profile",
+          "markdownDescription": "Enables the set_persona_profile command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_speech_playback command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-speech-playback",
@@ -541,6 +553,12 @@
           "type": "string",
           "const": "deny-get-llm-settings",
           "markdownDescription": "Denies the get_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_persona_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-persona-profile",
+          "markdownDescription": "Denies the get_persona_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the get_runtime_diagnostics command without any pre-configured scope.",
@@ -703,6 +721,12 @@
           "type": "string",
           "const": "deny-set-llm-settings",
           "markdownDescription": "Denies the set_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_persona_profile command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-persona-profile",
+          "markdownDescription": "Denies the set_persona_profile command without any pre-configured scope."
         },
         {
           "description": "Denies the set_speech_playback command without any pre-configured scope.",

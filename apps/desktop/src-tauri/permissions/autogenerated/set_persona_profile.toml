@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-persona-profile"
+description = "Enables the set_persona_profile command without any pre-configured scope."
+commands.allow = ["set_persona_profile"]
+
+[[permission]]
+identifier = "deny-set-persona-profile"
+description = "Denies the set_persona_profile command without any pre-configured scope."
+commands.deny = ["set_persona_profile"]

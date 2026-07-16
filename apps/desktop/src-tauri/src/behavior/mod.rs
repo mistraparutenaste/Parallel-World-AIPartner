@@ -15,7 +15,10 @@ pub use mode::{ModeResolutionError, ModeResolutionInput, ResolvedMode, resolve_m
 #[cfg(test)]
 pub(crate) use personas::PersonaPromptSource;
 pub(crate) use personas::{ResolvedPersonaPrompt, resolve_persona_prompt};
-pub use personas::{load_persona, migrate_legacy_character_prompt, save_persona_settings};
+pub use personas::{
+    load_persona, load_persona_checked, migrate_legacy_character_prompt, save_persona,
+    save_persona_settings,
+};
 pub use settings::{
     BehaviorSettingsLoadError, load_behavior_settings, load_behavior_settings_checked,
     save_behavior_settings,
