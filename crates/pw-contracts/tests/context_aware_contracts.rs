@@ -4,8 +4,9 @@ use pw_contracts::{
     ACTIVITY_SESSION_SCHEMA_VERSION, ActiveModeChangedEventDto, ActiveModeDto, ActiveModeSourceDto,
     ActivitySessionDto, ActivitySessionPageDto, AppActivationRuleDto,
     BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsDto, CompanionModeDto, ConsentStateDto,
-    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, ExclusionRuleDto, PERSONA_SETTINGS_SCHEMA_VERSION,
-    PersonaProfileDto, PersonaSettingsDto, ScheduleActivationRuleDto,
+    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
+    DarkExpressionSafetySettingsDto, ExclusionRuleDto, PERSONA_SETTINGS_SCHEMA_VERSION,
+    PersonaProfileDto, PersonaSettingsDto, QuietHoursRuleDto, ScheduleActivationRuleDto,
 };
 use ts_rs::{Config, TS};
 
@@ -14,15 +15,21 @@ fn behavior_settings_defaults_are_private_and_rate_limited() {
     let settings = BehaviorSettingsDto::default();
 
     assert_eq!(settings.schema_version, BEHAVIOR_SETTINGS_SCHEMA_VERSION);
+    assert!(!settings.proactive_master_enabled);
     assert_eq!(settings.consent, ConsentStateDto::Pending);
     assert!(!settings.collection_enabled);
     assert_eq!(settings.retention_days, 30);
-    assert_eq!(settings.frequency.minimum_interval_minutes, 15);
-    assert_eq!(settings.frequency.max_per_hour, 3);
-    assert_eq!(settings.frequency.max_per_day, 16);
+    assert_eq!(settings.frequency.minimum_interval_minutes, 30);
+    assert_eq!(settings.frequency.max_per_hour, 2);
+    assert_eq!(settings.frequency.max_per_day, 8);
+    assert!(settings.triggers.return_after_enabled);
+    assert!(settings.triggers.long_session_enabled);
+    assert!(settings.triggers.category_change_enabled);
     assert_eq!(settings.triggers.return_after_minutes, 10);
     assert_eq!(settings.triggers.long_session_minutes, 60);
     assert_eq!(settings.triggers.category_change_minutes, 10);
+    assert!(settings.quiet_hours.is_empty());
+    assert_eq!(settings.proactive_snoozed_until, None);
     assert_eq!(settings.manual_mode_override, None);
     assert_eq!(settings.activation.fullscreen.mode, CompanionModeDto::Focus);
     assert_eq!(settings.shortcuts.push_to_talk, "Ctrl+Alt+Space");
@@ -49,6 +56,139 @@ fn behavior_settings_defaults_are_private_and_rate_limited() {
 }
 
 #[test]
+fn behavior_v1_migrates_in_memory_without_enabling_proactive_behavior() {
+    let mut value = serde_json::to_value(BehaviorSettingsDto::default()).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.insert("schema_version".to_owned(), serde_json::json!(1));
+    object.remove("proactive_master_enabled");
+    object.remove("quiet_hours");
+    object.remove("proactive_snoozed_until");
+    object.insert(
+        "frequency".to_owned(),
+        serde_json::json!({
+            "minimum_interval_minutes": 15,
+            "max_per_hour": 3,
+            "max_per_day": 16
+        }),
+    );
+    let triggers = object["triggers"].as_object_mut().unwrap();
+    triggers.remove("return_after_enabled");
+    triggers.remove("long_session_enabled");
+    triggers.remove("category_change_enabled");
+
+    let migrated: BehaviorSettingsDto =
+        serde_json::from_value(value).expect("v1 behavior settings migrate");
+
+    assert_eq!(migrated.schema_version, BEHAVIOR_SETTINGS_SCHEMA_VERSION);
+    assert!(!migrated.proactive_master_enabled);
+    assert_eq!(migrated.frequency.minimum_interval_minutes, 15);
+    assert_eq!(migrated.frequency.max_per_hour, 3);
+    assert_eq!(migrated.frequency.max_per_day, 16);
+    assert!(migrated.triggers.return_after_enabled);
+    assert!(migrated.triggers.long_session_enabled);
+    assert!(migrated.triggers.category_change_enabled);
+    assert!(migrated.quiet_hours.is_empty());
+    assert_eq!(migrated.proactive_snoozed_until, None);
+}
+
+#[test]
+fn behavior_v1_frequency_migration_never_relaxes_custom_limits() {
+    let migrate = |minimum_interval_minutes, max_per_hour, max_per_day| {
+        let mut value = serde_json::to_value(BehaviorSettingsDto::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.insert("schema_version".to_owned(), serde_json::json!(1));
+        object.remove("proactive_master_enabled");
+        object.remove("quiet_hours");
+        object.remove("proactive_snoozed_until");
+        object.insert(
+            "frequency".to_owned(),
+            serde_json::json!({
+                "minimum_interval_minutes": minimum_interval_minutes,
+                "max_per_hour": max_per_hour,
+                "max_per_day": max_per_day
+            }),
+        );
+        let triggers = object["triggers"].as_object_mut().unwrap();
+        triggers.remove("return_after_enabled");
+        triggers.remove("long_session_enabled");
+        triggers.remove("category_change_enabled");
+        serde_json::from_value::<BehaviorSettingsDto>(value).unwrap()
+    };
+
+    let migrated = migrate(45, 2, 10);
+    assert_eq!(migrated.frequency.minimum_interval_minutes, 90);
+    assert_eq!(migrated.frequency.max_per_hour, 1);
+    assert_eq!(migrated.frequency.max_per_day, 4);
+
+    let stricter_than_all_presets = migrate(240, 1, 1);
+    assert_eq!(
+        stricter_than_all_presets.frequency.minimum_interval_minutes,
+        240
+    );
+    assert_eq!(stricter_than_all_presets.frequency.max_per_hour, 1);
+    assert_eq!(stricter_than_all_presets.frequency.max_per_day, 1);
+}
+
+#[test]
+fn behavior_quiet_hours_require_unique_ids_days_and_distinct_times() {
+    let valid = QuietHoursRuleDto {
+        rule_id: "night-weekdays".to_owned(),
+        enabled: true,
+        days_of_week: vec![0, 1, 2, 3, 4],
+        start_local_time: "23:00".to_owned(),
+        end_local_time: "07:00".to_owned(),
+    };
+    let mut settings = BehaviorSettingsDto::default();
+    settings.quiet_hours.push(valid.clone());
+    assert!(settings.validate().is_ok());
+
+    settings.quiet_hours.push(valid);
+    assert!(settings.validate().is_err());
+
+    for invalid in [
+        QuietHoursRuleDto {
+            rule_id: String::new(),
+            enabled: true,
+            days_of_week: vec![0],
+            start_local_time: "23:00".to_owned(),
+            end_local_time: "07:00".to_owned(),
+        },
+        QuietHoursRuleDto {
+            rule_id: "no-days".to_owned(),
+            enabled: true,
+            days_of_week: vec![],
+            start_local_time: "23:00".to_owned(),
+            end_local_time: "07:00".to_owned(),
+        },
+        QuietHoursRuleDto {
+            rule_id: "duplicate-days".to_owned(),
+            enabled: true,
+            days_of_week: vec![0, 0],
+            start_local_time: "23:00".to_owned(),
+            end_local_time: "07:00".to_owned(),
+        },
+        QuietHoursRuleDto {
+            rule_id: "same-time".to_owned(),
+            enabled: true,
+            days_of_week: vec![0],
+            start_local_time: "23:00".to_owned(),
+            end_local_time: "23:00".to_owned(),
+        },
+    ] {
+        let mut settings = BehaviorSettingsDto::default();
+        settings.quiet_hours.push(invalid);
+        assert!(settings.validate().is_err());
+    }
+}
+
+#[test]
+fn behavior_snooze_timestamp_must_not_be_negative() {
+    let mut settings = BehaviorSettingsDto::default();
+    settings.proactive_snoozed_until = Some(-1);
+    assert!(settings.validate().is_err());
+}
+
+#[test]
 fn active_mode_event_is_versioned_and_uses_snake_case_enums() {
     let payload = ActiveModeChangedEventDto {
         schema_version: BEHAVIOR_SETTINGS_SCHEMA_VERSION,
@@ -63,9 +203,9 @@ fn active_mode_event_is_versioned_and_uses_snake_case_enums() {
     assert_eq!(
         serde_json::to_value(payload).unwrap(),
         serde_json::json!({
-            "schema_version": 1,
+            "schema_version": BEHAVIOR_SETTINGS_SCHEMA_VERSION,
             "active_mode": {
-                "schema_version": 1,
+                "schema_version": BEHAVIOR_SETTINGS_SCHEMA_VERSION,
                 "mode": "night",
                 "source": "fullscreen",
                 "manual_override": null,
@@ -126,25 +266,27 @@ fn persona_sliders_are_bounded_and_serialize_with_snake_case_names() {
 }
 
 #[test]
-fn persona_v2_defaults_dark_traits_and_intense_expression_safely() {
+fn persona_v3_defaults_dark_traits_and_intense_expression_safely() {
     let profile = PersonaProfileDto::for_character("epsilon");
 
-    assert_eq!(PERSONA_SETTINGS_SCHEMA_VERSION, 2);
+    assert_eq!(PERSONA_SETTINGS_SCHEMA_VERSION, 3);
     assert_eq!(profile.machiavellianism, 50);
     assert_eq!(profile.narcissism, 50);
     assert_eq!(profile.psychopathy, 50);
+    assert_eq!(profile.sadism, 50);
     assert!(!profile.allow_intense_dark_expression);
     assert_eq!(profile.dark_expression_acknowledgement_version, None);
 }
 
 #[test]
 fn persona_rejects_out_of_range_dark_traits() {
-    for trait_name in ["machiavellianism", "narcissism", "psychopathy"] {
+    for trait_name in ["machiavellianism", "narcissism", "psychopathy", "sadism"] {
         let mut profile = PersonaProfileDto::for_character("epsilon");
         match trait_name {
             "machiavellianism" => profile.machiavellianism = 101,
             "narcissism" => profile.narcissism = 101,
             "psychopathy" => profile.psychopathy = 101,
+            "sadism" => profile.sadism = 101,
             _ => unreachable!(),
         }
         assert!(profile.validate().is_err(), "{trait_name}");
@@ -162,7 +304,7 @@ fn intense_dark_expression_requires_current_acknowledgement() {
 }
 
 #[test]
-fn persona_v1_deserializes_to_safe_v2_defaults_without_losing_existing_values() {
+fn persona_v1_deserializes_to_safe_v3_defaults_without_losing_existing_values() {
     let decoded: PersonaSettingsDto = serde_json::from_value(serde_json::json!({
         "schema_version": 1,
         "personas": {
@@ -193,15 +335,74 @@ fn persona_v1_deserializes_to_safe_v2_defaults_without_losing_existing_values() 
     .expect("v1 persona settings migrate");
 
     let profile = &decoded.personas["epsilon"];
-    assert_eq!(decoded.schema_version, 2);
+    assert_eq!(decoded.schema_version, 3);
     assert_eq!(profile.initiative, 9);
     assert_eq!(profile.reaction_interval, 59);
     assert_eq!(profile.free_text, "legacy");
     assert_eq!(profile.machiavellianism, 50);
     assert_eq!(profile.narcissism, 50);
     assert_eq!(profile.psychopathy, 50);
+    assert_eq!(profile.sadism, 50);
     assert!(!profile.allow_intense_dark_expression);
     assert_eq!(profile.dark_expression_acknowledgement_version, None);
+}
+
+#[test]
+fn persona_v2_deserializes_to_v3_without_reusing_old_dark_acknowledgement() {
+    let mut profile = PersonaProfileDto::for_character("epsilon");
+    profile.machiavellianism = 72;
+    profile.narcissism = 61;
+    profile.psychopathy = 83;
+    let mut value = serde_json::to_value(profile).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("sadism");
+    object.insert(
+        "allow_intense_dark_expression".into(),
+        serde_json::json!(true),
+    );
+    object.insert(
+        "dark_expression_acknowledgement_version".into(),
+        serde_json::json!(1),
+    );
+
+    let decoded: PersonaSettingsDto = serde_json::from_value(serde_json::json!({
+        "schema_version": 2,
+        "personas": { "epsilon": value }
+    }))
+    .expect("v2 persona settings migrate");
+
+    let migrated = &decoded.personas["epsilon"];
+    assert_eq!(decoded.schema_version, 3);
+    assert_eq!(migrated.machiavellianism, 72);
+    assert_eq!(migrated.narcissism, 61);
+    assert_eq!(migrated.psychopathy, 83);
+    assert_eq!(migrated.sadism, 50);
+    assert!(!migrated.allow_intense_dark_expression);
+    assert_eq!(migrated.dark_expression_acknowledgement_version, None);
+}
+
+#[test]
+fn dark_expression_safety_defaults_fail_closed_without_a_secret() {
+    let settings = DarkExpressionSafetySettingsDto::default();
+
+    assert_eq!(
+        settings.schema_version,
+        DARK_EXPRESSION_SAFETY_SCHEMA_VERSION
+    );
+    assert_eq!(settings.safe_word, None);
+    assert!(!settings.dark_expression_paused);
+    assert!(settings.validate().is_ok());
+}
+
+#[test]
+fn dark_expression_safety_rejects_control_characters_and_oversized_words() {
+    for safe_word in [Some("stop\nnow".to_owned()), Some("x".repeat(129))] {
+        let settings = DarkExpressionSafetySettingsDto {
+            safe_word,
+            ..DarkExpressionSafetySettingsDto::default()
+        };
+        assert!(settings.validate().is_err());
+    }
 }
 
 #[test]

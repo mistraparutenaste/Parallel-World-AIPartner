@@ -7,8 +7,8 @@ use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
-pub const PERSONA_SETTINGS_SCHEMA_VERSION: u16 = 2;
-pub const DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION: u16 = 1;
+pub const PERSONA_SETTINGS_SCHEMA_VERSION: u16 = 3;
+pub const DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "PersonaProfileDto.ts")]
@@ -36,6 +36,7 @@ pub struct PersonaProfileDto {
     pub machiavellianism: u8,
     pub narcissism: u8,
     pub psychopathy: u8,
+    pub sadism: u8,
     pub allow_intense_dark_expression: bool,
     pub dark_expression_acknowledgement_version: Option<u16>,
 }
@@ -67,6 +68,7 @@ impl PersonaProfileDto {
             machiavellianism: 50,
             narcissism: 50,
             psychopathy: 50,
+            sadism: 50,
             allow_intense_dark_expression: false,
             dark_expression_acknowledgement_version: None,
         }
@@ -91,6 +93,7 @@ impl PersonaProfileDto {
             ("machiavellianism", self.machiavellianism),
             ("narcissism", self.narcissism),
             ("psychopathy", self.psychopathy),
+            ("sadism", self.sadism),
         ] {
             if value > 100 {
                 return Err(format!("{name} must be between 0 and 100"));
@@ -126,7 +129,7 @@ impl<'de> Deserialize<'de> for PersonaSettingsDto {
         }
 
         let wire = Wire::deserialize(deserializer)?;
-        if !matches!(wire.schema_version, 1 | PERSONA_SETTINGS_SCHEMA_VERSION) {
+        if !matches!(wire.schema_version, 1 | 2 | PERSONA_SETTINGS_SCHEMA_VERSION) {
             return Err(serde::de::Error::custom(format!(
                 "unsupported persona settings schema version: {}",
                 wire.schema_version
@@ -150,6 +153,22 @@ impl<'de> Deserialize<'de> for PersonaSettingsDto {
                 ] {
                     object.entry(name).or_insert(default);
                 }
+            }
+            if wire.schema_version < PERSONA_SETTINGS_SCHEMA_VERSION {
+                let object = value.as_object_mut().ok_or_else(|| {
+                    serde::de::Error::custom(format!("persona {key:?} must be an object"))
+                })?;
+                object
+                    .entry("sadism")
+                    .or_insert_with(|| serde_json::json!(50));
+                object.insert(
+                    "allow_intense_dark_expression".to_owned(),
+                    serde_json::json!(false),
+                );
+                object.insert(
+                    "dark_expression_acknowledgement_version".to_owned(),
+                    serde_json::Value::Null,
+                );
             }
             let profile = serde_json::from_value::<PersonaProfileDto>(value)
                 .map_err(serde::de::Error::custom)?;

@@ -37,6 +37,7 @@ pub fn run() {
         .manage(speech::SpeechService::default())
         .manage(chat::ChatService::default())
         .manage(tts::TtsService::default())
+        .manage(behavior::DarkExpressionSafetyState::default())
         .manage(supervisor::FrontendRuntimeHealth::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_status::get_app_status,
@@ -55,6 +56,11 @@ pub fn run() {
             commands::audio::set_capture_enabled,
             commands::audio::set_speech_playback,
             commands::audio::get_audio_diagnostics,
+            commands::behavior::get_behavior_settings,
+            commands::behavior::set_behavior_settings,
+            commands::safety::get_dark_expression_safety_settings,
+            commands::safety::set_safe_word,
+            commands::safety::resume_dark_expression,
             commands::diagnostics::get_runtime_diagnostics,
             commands::diagnostics::report_frontend_error,
             commands::diagnostics::list_diagnostic_reports,
@@ -94,6 +100,9 @@ pub fn run() {
                 app.handle().clone(),
             ));
             let layout = bootstrap::initialize(app.handle())?;
+            let safety = behavior::load_dark_expression_safety(&layout);
+            app.state::<behavior::DarkExpressionSafetyState>()
+                .set_paused(safety.dark_expression_paused);
             let heartbeat_path = layout.logs.join("soak-heartbeat.json");
             app.manage(layout);
             app.manage(stability_heartbeat::StabilityHeartbeatService::start(

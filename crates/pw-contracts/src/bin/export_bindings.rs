@@ -16,15 +16,17 @@ use pw_contracts::{
     CharacterSourceStatusDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto, CompanionModeDto,
     ConsentStateDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DeviceFallbackEventDto, DiagnosticReportDto, ExclusionRuleDto, FailureClassDto,
-    FrequencyPolicyDto, FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto,
-    HealthStatusDto, LlmSettingsDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto,
-    MotionGroupDto, PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto,
-    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, ScheduleActivationRuleDto,
-    ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto, StaticExpressionDto, SttPhaseDto,
-    SttStateEventDto, TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto,
-    TranscriptEventDto, TriggerPolicyDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UiPreferencesDto, UpdateStateDto, UpdateStatusDto, UserDictWordDto,
+    DarkExpressionSafetyChangedEventDto, DarkExpressionSafetySettingsDto, DeviceFallbackEventDto,
+    DiagnosticReportDto, ExclusionRuleDto, FailureClassDto, FrequencyPolicyDto,
+    FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto, HealthStatusDto,
+    LlmSettingsDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto, MotionGroupDto,
+    PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto, QuietHoursRuleDto,
+    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SafewordTriggeredEventDto,
+    ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto,
+    StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
+    TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto,
+    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto, UpdateStateDto,
+    UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -42,6 +44,7 @@ fn main() {
     ExclusionRuleDto::export_all(&config).expect("export ExclusionRuleDto bindings");
     FrequencyPolicyDto::export_all(&config).expect("export FrequencyPolicyDto bindings");
     TriggerPolicyDto::export_all(&config).expect("export TriggerPolicyDto bindings");
+    QuietHoursRuleDto::export_all(&config).expect("export QuietHoursRuleDto bindings");
     ShortcutSettingsDto::export_all(&config).expect("export ShortcutSettingsDto bindings");
     ModeProfileDto::export_all(&config).expect("export ModeProfileDto bindings");
     ModeProfilesDto::export_all(&config).expect("export ModeProfilesDto bindings");
@@ -64,6 +67,12 @@ fn main() {
         .expect("export ActivityCollectionHealthEventDto bindings");
     PersonaProfileDto::export_all(&config).expect("export PersonaProfileDto bindings");
     PersonaSettingsDto::export_all(&config).expect("export PersonaSettingsDto bindings");
+    DarkExpressionSafetySettingsDto::export_all(&config)
+        .expect("export DarkExpressionSafetySettingsDto bindings");
+    DarkExpressionSafetyChangedEventDto::export_all(&config)
+        .expect("export DarkExpressionSafetyChangedEventDto bindings");
+    SafewordTriggeredEventDto::export_all(&config)
+        .expect("export SafewordTriggeredEventDto bindings");
     CharacterManifestDto::export_all(&config).expect("export CharacterManifestDto bindings");
     CharacterRendererDto::export_all(&config).expect("export CharacterRendererDto bindings");
     CharacterRendererKindDto::export_all(&config)

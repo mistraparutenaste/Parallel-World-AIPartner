@@ -237,6 +237,12 @@
           "markdownDescription": "Enables the get_audio_diagnostics command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_behavior_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-behavior-settings",
+          "markdownDescription": "Enables the get_behavior_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_character_manifest command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-character-manifest",
@@ -253,6 +259,12 @@
           "type": "string",
           "const": "allow-get-character-setup",
           "markdownDescription": "Enables the get_character_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_dark_expression_safety_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-dark-expression-safety-settings",
+          "markdownDescription": "Enables the get_dark_expression_safety_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the get_llm_settings command without any pre-configured scope.",
@@ -375,6 +387,12 @@
           "markdownDescription": "Enables the report_runtime_success command without any pre-configured scope."
         },
         {
+          "description": "Enables the resume_dark_expression command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-resume-dark-expression",
+          "markdownDescription": "Enables the resume_dark_expression command without any pre-configured scope."
+        },
+        {
           "description": "Enables the retry_character_renderer command without any pre-configured scope.",
           "type": "string",
           "const": "allow-retry-character-renderer",
@@ -391,6 +409,12 @@
           "type": "string",
           "const": "allow-set-active-character-renderer",
           "markdownDescription": "Enables the set_active_character_renderer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_behavior_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-behavior-settings",
+          "markdownDescription": "Enables the set_behavior_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the set_capture_enabled command without any pre-configured scope.",
@@ -433,6 +457,12 @@
           "type": "string",
           "const": "allow-set-persona-profile",
           "markdownDescription": "Enables the set_persona_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_safe_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-safe-word",
+          "markdownDescription": "Enables the set_safe_word command without any pre-configured scope."
         },
         {
           "description": "Enables the set_speech_playback command without any pre-configured scope.",
@@ -531,6 +561,12 @@
           "markdownDescription": "Denies the get_audio_diagnostics command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_behavior_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-behavior-settings",
+          "markdownDescription": "Denies the get_behavior_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_character_manifest command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-character-manifest",
@@ -547,6 +583,12 @@
           "type": "string",
           "const": "deny-get-character-setup",
           "markdownDescription": "Denies the get_character_setup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_dark_expression_safety_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-dark-expression-safety-settings",
+          "markdownDescription": "Denies the get_dark_expression_safety_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the get_llm_settings command without any pre-configured scope.",
@@ -669,6 +711,12 @@
           "markdownDescription": "Denies the report_runtime_success command without any pre-configured scope."
         },
         {
+          "description": "Denies the resume_dark_expression command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-resume-dark-expression",
+          "markdownDescription": "Denies the resume_dark_expression command without any pre-configured scope."
+        },
+        {
           "description": "Denies the retry_character_renderer command without any pre-configured scope.",
           "type": "string",
           "const": "deny-retry-character-renderer",
@@ -685,6 +733,12 @@
           "type": "string",
           "const": "deny-set-active-character-renderer",
           "markdownDescription": "Denies the set_active_character_renderer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_behavior_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-behavior-settings",
+          "markdownDescription": "Denies the set_behavior_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the set_capture_enabled command without any pre-configured scope.",
@@ -727,6 +781,12 @@
           "type": "string",
           "const": "deny-set-persona-profile",
           "markdownDescription": "Denies the set_persona_profile command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_safe_word command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-safe-word",
+          "markdownDescription": "Denies the set_safe_word command without any pre-configured scope."
         },
         {
           "description": "Denies the set_speech_playback command without any pre-configured scope.",

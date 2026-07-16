@@ -2,11 +2,13 @@
 
 pub mod app_status;
 pub mod audio;
+pub mod behavior;
 pub mod character;
 pub mod chat;
 pub mod data;
 pub mod diagnostics;
 pub mod persona;
+pub mod safety;
 pub mod tts;
 pub mod ui;
 pub mod updates;

@@ -19,6 +19,13 @@ export function subscribeEvent<T>(
   eventName: string,
   handler: (payload: T) => void,
 ): () => void {
+  if (
+    typeof window === 'undefined'
+    || !('__TAURI_INTERNALS__' in window)
+  ) {
+    return () => {};
+  }
+
   let handlers = channels.get(eventName);
   if (!handlers) {
     const created = new Set<Handler>();

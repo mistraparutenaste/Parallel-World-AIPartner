@@ -754,14 +754,16 @@ fn resolve_worker_context(
     layout: &AppDataLayout,
     state: &CharacterState,
     settings: &LlmSettingsDto,
+    dark_expression_paused: bool,
 ) -> ChatWorkerContext {
     let character = resolve_character_manifest(layout, state)
         .ok()
         .map(|manifest| CharacterSnapshot::from_manifest(&manifest));
-    let persona = crate::behavior::resolve_persona_prompt(
+    let persona = crate::behavior::resolve_persona_prompt_with_pause(
         layout,
         character.as_ref().map(|snapshot| snapshot.id.as_str()),
         settings,
+        dark_expression_paused,
     );
     prepare_worker_context(persona, character)
 }
@@ -920,7 +922,13 @@ impl ChatService {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_llm_settings(&layout);
-        let context = resolve_worker_context(&layout, &app.state::<CharacterState>(), &settings);
+        let context = resolve_worker_context(
+            &layout,
+            &app.state::<CharacterState>(),
+            &settings,
+            app.state::<crate::behavior::DarkExpressionSafetyState>()
+                .is_paused(),
+        );
         let wanted = worker_fingerprint(&settings, &context);
 
         let mut guard = self.lock();
@@ -1521,7 +1529,7 @@ mod tests {
         let mut settings = crate::chat::default_llm_settings();
         settings.character_prompt = "legacy fallback".into();
 
-        let context = resolve_worker_context(&layout, &state, &settings);
+        let context = resolve_worker_context(&layout, &state, &settings, false);
 
         assert_eq!(context.character_prompt, "legacy fallback");
         assert_eq!(context.character, None);

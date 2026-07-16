@@ -26,14 +26,16 @@ describe('desktop windows', () => {
   it('renders chat input and stop action', () => {
     render(<ChatWindow />);
     expect(screen.getByLabelText('メッセージ')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '停止' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '送信' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '停止' })).not.toBeInTheDocument();
   });
 
   it('renders control center navigation', () => {
     render(<SettingsWindow />);
-    const nav = screen.getByRole('tablist', { name: '管理メニュー' });
-    expect(within(nav).getByRole('tab', { name: '会話' })).toBeInTheDocument();
+    const nav = screen.getByRole('tablist', { name: '画面メニュー' });
     expect(within(nav).getByRole('tab', { name: '設定' })).toBeInTheDocument();
-    expect(within(nav).getByRole('tab', { name: 'ログ' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: '性格' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: '会話' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: 'チャット' })).toBeInTheDocument();
   });
 });

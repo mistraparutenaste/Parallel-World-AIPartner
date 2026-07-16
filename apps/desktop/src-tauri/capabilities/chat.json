@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "chat",
-  "description": "Chat window: conversation history and text input. Exposes app status, message submission and turn cancellation.",
+  "description": "Chat window: conversation history and text input. Exposes app status, message submission, turn cancellation, and dark-expression pause recovery.",
   "windows": [
     "chat"
   ],
@@ -13,6 +13,8 @@
     "allow-send-chat-message",
     "allow-cancel-turn",
     "allow-list-conversation-history",
+    "allow-get-dark-expression-safety-settings",
+    "allow-resume-dark-expression",
     "allow-report-frontend-error"
   ]
 }

@@ -10,6 +10,7 @@ mod chat;
 mod diagnostics;
 mod persona;
 mod runtime_health;
+mod safety;
 mod tts;
 mod ui;
 mod update;
@@ -27,8 +28,8 @@ pub use behavior::{
     BEHAVIOR_SETTINGS_SCHEMA_VERSION, BehaviorSettingsChangedEventDto, BehaviorSettingsDto,
     CompanionModeDto, ConsentStateDto, ExclusionRuleDto, FrequencyPolicyDto,
     FullscreenActivationRuleDto, MAX_ACTIVITY_APP_ID_CHARS, ModeActivationRulesDto, ModeProfileDto,
-    ModeProfilesDto, ScheduleActivationRuleDto, ShortcutSettingsDto, TriggerPolicyDto,
-    normalize_activity_app_id,
+    ModeProfilesDto, QuietHoursRuleDto, ScheduleActivationRuleDto, ShortcutSettingsDto,
+    TriggerPolicyDto, normalize_activity_app_id,
 };
 pub use character_cursor::CharacterCursorEventDto;
 pub use character_manifest::{
@@ -53,6 +54,11 @@ pub use persona::{
 pub use runtime_health::{
     FailureClassDto, HealthStatusDto, ProcessOwnershipDto, QueueMetricsDto, RUNTIME_HEALTH_EVENT,
     RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
+};
+pub use safety::{
+    DARK_EXPRESSION_SAFETY_CHANGED_EVENT, DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
+    DarkExpressionSafetyChangedEventDto, DarkExpressionSafetySettingsDto, SAFEWORD_TRIGGERED_EVENT,
+    SafewordTriggeredEventDto,
 };
 pub use tts::{
     SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,

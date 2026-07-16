@@ -1,22 +1,24 @@
 import type {
   ChatMessageEventDto,
-  ConversationMessageDto,
   ConversationHistoryDeletedEventDto,
+  ConversationMessageDto,
+  ConversationStateDto,
   ConversationStateEventDto,
+  DarkExpressionSafetyChangedEventDto,
+  DarkExpressionSafetySettingsDto,
+  SafewordTriggeredEventDto,
   TtsStateEventDto,
   UiPreferencesDto,
+} from '@parallel-world/contracts';
+import {
+  DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
+  DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
+  SAFEWORD_TRIGGERED_EVENT,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
 import { applyThemePreference } from '../../shared/ui-preferences';
-
-const STATE_LABELS: Partial<Record<ConversationStateEventDto['state'], string>> =
-  {
-    thinking: '考え中…',
-    speaking: '返答中…',
-    llm_unavailable: 'LLMに接続できません',
-  };
 
 type DisplayMessage = {
   id: string;
@@ -25,19 +27,36 @@ type DisplayMessage = {
   turnId?: number;
 };
 
+const WAITING_STATES = new Set<ConversationStateDto>(['starting', 'thinking', 'recovering']);
+
+function naturalFailure(state: ConversationStateDto) {
+  if (state === 'tts_unavailable') {
+    return '声がうまく出ないみたい。文字では話せるよ';
+  }
+  if (state === 'stt_unavailable') {
+    return 'うまく聞き取れないみたい。文字で話してくれる？';
+  }
+  if (state === 'llm_unavailable') {
+    return '今はうまく返事ができないみたい。少し待って、もう一度話しかけて';
+  }
+  return null;
+}
+
 /**
- * Conversation history and text input window.
+ * Conversation history and a keyboard-first composer.
  *
- * User messages (typed or recognized speech) and streamed assistant
- * sentences arrive as `chat-message` events; generation status
- * arrives as `conversation-state` events. The stop button cancels
- * the in-flight turn.
+ * The management shell can keep this component mounted while another
+ * surface is visible by setting `inactive`. Persistent episode navigation
+ * is intentionally owned by the future episode boundary, not this view.
  */
-export function ChatWindow({ placementControl = 'popout' }: { placementControl?: 'popout' | 'dock' }) {
+export function ChatWindow({ inactive = false }: { inactive?: boolean }) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [draft, setDraft] = useState('');
-  const [stateLabel, setStateLabel] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [safety, setSafety] = useState<DarkExpressionSafetySettingsDto | null>(null);
+  const [safetyPersistenceWarning, setSafetyPersistenceWarning] = useState(false);
+  const [resumingDarkExpression, setResumingDarkExpression] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -48,49 +67,114 @@ export function ChatWindow({ placementControl = 'popout' }: { placementControl?:
     const stopMessages = subscribeEvent<ChatMessageEventDto>(
       'chat-message',
       (payload) => {
+        setWaiting(false);
         setMessages((current) => {
-          const id = payload.message_id == null ? `live:${payload.turn_id}:${payload.role}` : `db:${payload.message_id}`;
-          const existing = current.findIndex((m) => m.id === id);
+          const id = payload.message_id == null
+            ? `live:${payload.turn_id}:${payload.role}`
+            : `db:${payload.message_id}`;
+          const existing = current.findIndex((message) => message.id === id);
           if (existing >= 0) {
             if (payload.role !== 'assistant') return current;
-            const next = [...current]; const prior = next[existing]!; next[existing] = { ...prior, text: prior.text + payload.text }; return next;
+            const next = [...current];
+            const prior = next[existing]!;
+            next[existing] = { ...prior, text: prior.text + payload.text };
+            return next;
           }
-          return [...current, { id, turnId: payload.turn_id, role: payload.role, text: payload.text }];
+          return [
+            ...current,
+            {
+              id,
+              turnId: payload.turn_id,
+              role: payload.role,
+              text: payload.text,
+            },
+          ];
         });
       },
     );
-    invoke<ConversationMessageDto[]>('list_conversation_history').then((history) => {
-      if (!Array.isArray(history)) return;
-      setMessages((current) => {
-        const liveTurns = new Set(current.filter((m) => m.turnId != null).map((m) => `${m.turnId}:${m.role}`));
-        const durable = history.filter((m) => !liveTurns.has(`${m.turn_id}:${m.role}`)).map((m) => ({ id: `db:${m.message_id}`, turnId: m.turn_id ?? undefined, role: m.role, text: m.text }));
-        return [...durable, ...current];
-      });
-    }).catch((problem: unknown) => setError(`履歴を読み込めませんでした: ${String(problem)}`));
+
+    invoke<ConversationMessageDto[]>('list_conversation_history')
+      .then((history) => {
+        if (!Array.isArray(history)) return;
+        setMessages((current) => {
+          const liveTurns = new Set(
+            current
+              .filter((message) => message.turnId != null)
+              .map((message) => `${message.turnId}:${message.role}`),
+          );
+          const durable = history
+            .filter((message) => !liveTurns.has(`${message.turn_id}:${message.role}`))
+            .map((message) => ({
+              id: `db:${message.message_id}`,
+              turnId: message.turn_id ?? undefined,
+              role: message.role,
+              text: message.text,
+            }));
+          return [...durable, ...current];
+        });
+      })
+      .catch(() => setNotice('前の会話をうまく思い出せないみたい。ここからは話せるよ'));
+
     invoke<UiPreferencesDto>('get_ui_preferences')
       .then((preferences) => {
-        if (mounted) applyThemePreference(preferences.theme);
+        if (mounted && preferences) applyThemePreference(preferences.theme);
       })
       .catch(() => {});
+
     const stopState = subscribeEvent<ConversationStateEventDto>(
       'conversation-state',
       (payload) => {
-        setStateLabel(STATE_LABELS[payload.state] ?? null);
-        // Keep the last error detail visible; state-only events
-        // (message: null) must not wipe it.
-        if (payload.message != null) {
-          setError(payload.message);
+        setWaiting(WAITING_STATES.has(payload.state));
+        const failure = naturalFailure(payload.state);
+        if (failure) setNotice(failure);
+        if (payload.state === 'idle' || payload.state === 'cancelled') {
+          setWaiting(false);
         }
       },
     );
-    // TTS failures degrade to text-only; surface the reason without
-    // interrupting the conversation (TTS障害 → テキスト表示).
+
     const stopTts = subscribeEvent<TtsStateEventDto>('tts-state', (payload) => {
       if (!payload.available) {
-        setError(`音声合成に接続できません: ${payload.message ?? ''}`);
+        setNotice('声がうまく出ないみたい。文字では話せるよ');
       }
     });
-    const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>('conversation-history-deleted', () => setMessages([]));
+    const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>(
+      'conversation-history-deleted',
+      () => setMessages([]),
+    );
+    const stopSafetyChanged = subscribeEvent<DarkExpressionSafetyChangedEventDto>(
+      DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
+      (payload) => {
+        setSafety(payload.settings);
+        if (!payload.settings.dark_expression_paused) {
+          setSafetyPersistenceWarning(false);
+        }
+      },
+    );
+    const stopSafewordTriggered = subscribeEvent<SafewordTriggeredEventDto>(
+      SAFEWORD_TRIGGERED_EVENT,
+      (payload) => {
+        setWaiting(false);
+        setSafety((current) => ({
+          schema_version: current?.schema_version ?? DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
+          safe_word: current?.safe_word ?? null,
+          dark_expression_paused: true,
+        }));
+        setSafetyPersistenceWarning(!payload.pause_persisted);
+      },
+    );
+
+    invoke<DarkExpressionSafetySettingsDto>('get_dark_expression_safety_settings')
+      .then((settings) => {
+        if (!mounted || !settings) return;
+        setSafety((current) => (
+          current?.dark_expression_paused && !settings.dark_expression_paused
+            ? current
+            : settings
+        ));
+      })
+      .catch(() => {});
+
     return () => {
       mounted = false;
       stopPreferences();
@@ -98,86 +182,114 @@ export function ChatWindow({ placementControl = 'popout' }: { placementControl?:
       stopState();
       stopTts();
       stopDeleted();
+      stopSafetyChanged();
+      stopSafewordTriggered();
     };
   }, []);
 
   const send = () => {
     const text = draft.trim();
-    if (text === '') {
-      return;
-    }
+    if (text === '') return;
     setDraft('');
-    setError(null);
-    invoke('send_chat_message', { text }).catch((problem: unknown) => {
-      setError(String(problem));
+    setNotice(null);
+    setWaiting(true);
+    invoke('send_chat_message', { text }).catch(() => {
+      setWaiting(false);
+      setNotice('今はうまく返事ができないみたい。少し待って、もう一度話しかけて');
     });
   };
 
   const stop = () => {
+    setWaiting(false);
     invoke('cancel_turn').catch(() => {});
   };
 
-  const setPlacement = (placement: 'docked' | 'popped') => {
-    invoke('set_chat_placement', { placement }).catch((problem: unknown) => {
-      setError(String(problem));
-    });
+  const resumeDarkExpression = () => {
+    if (resumingDarkExpression) return;
+    setResumingDarkExpression(true);
+    invoke<DarkExpressionSafetySettingsDto>('resume_dark_expression')
+      .then((settings) => {
+        setSafety(settings);
+        setSafetyPersistenceWarning(false);
+      })
+      .catch(() => {
+        setNotice('ダーク表現を再開できませんでした。設定からもう一度試してください。');
+      })
+      .finally(() => setResumingDarkExpression(false));
   };
 
   return (
     <section aria-label="チャット" className="chat-surface">
-      <header className="surface-heading">
-        <div>
-          <p className="eyebrow">Conversation</p>
-          <h2>会話</h2>
-        </div>
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => setPlacement(placementControl === 'dock' ? 'docked' : 'popped')}
-        >
-          {placementControl === 'dock' ? '再格納' : 'ポップアウト'}
-        </button>
-      </header>
-      <section aria-live="polite" aria-label="会話履歴">
-        {messages.length === 0 ? (
-          <p>まだメッセージはありません。</p>
-        ) : (
+      <section className="chat-history" aria-live="polite" aria-label="会話履歴">
+        {messages.length > 0 ? (
           <ul>
-            {messages.map((message) => (
-              <li key={message.id} data-role={message.role}>
-                {message.role === 'user' ? 'あなた: ' : ''}
+            {messages.map((message, index) => (
+              <li
+                key={message.id}
+                data-role={message.role}
+                data-latest={index >= Math.max(0, messages.length - 2)}
+              >
                 {message.text}
               </li>
             ))}
           </ul>
-        )}
-        {stateLabel !== null && <p role="status">{stateLabel}</p>}
-        {error !== null && <p role="alert">{error}</p>}
+        ) : null}
+
+        {waiting ? (
+          <p className="conversation-waiting" role="status" aria-label="返答を待っています">
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+            <span aria-hidden="true" />
+          </p>
+        ) : null}
+
+        {safety?.dark_expression_paused ? (
+          <div className="conversation-safety-notice" role="alert">
+            <p>セーフワードを受け付けました。ダーク表現を停止しています。</p>
+            {safetyPersistenceWarning ? (
+              <p className="conversation-safety-warning">
+                停止状態を保存できませんでした。アプリを閉じるまでは停止を保ちます。
+              </p>
+            ) : null}
+            <button
+              type="button"
+              disabled={resumingDarkExpression}
+              onClick={resumeDarkExpression}
+            >
+              {resumingDarkExpression ? '再開しています…' : 'ダーク表現を再開'}
+            </button>
+          </div>
+        ) : null}
+
+        {notice ? <p className="conversation-notice" role="alert">{notice}</p> : null}
       </section>
-      <form className="chat-composer"
+
+      <form
+        className="chat-composer"
         onSubmit={(event) => {
           event.preventDefault();
           send();
         }}
       >
-        <label htmlFor="chat-message">メッセージ</label>
+        <label className="sr-only" htmlFor="chat-message">メッセージ</label>
         <textarea
           id="chat-message"
           name="message"
-          rows={2}
+          rows={1}
           value={draft}
+          disabled={inactive}
+          placeholder="話しかける…"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === 'Enter' && !event.shiftKey) {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              stop();
+            } else if (event.key === 'Enter' && !event.shiftKey) {
               event.preventDefault();
               send();
             }
           }}
         />
-        <button type="submit">送信</button>
-        <button type="button" onClick={stop}>
-          停止
-        </button>
       </form>
     </section>
   );

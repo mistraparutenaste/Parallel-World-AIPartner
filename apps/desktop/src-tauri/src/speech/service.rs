@@ -884,6 +884,9 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
         if self.current_generation.load(Ordering::Acquire) != self.generation {
             return;
         }
+        if crate::commands::safety::intercept_user_input(&self.app, text) {
+            return;
+        }
         let payload = TranscriptEventDto {
             schema_version: SCHEMA_VERSION,
             text: text.to_owned(),

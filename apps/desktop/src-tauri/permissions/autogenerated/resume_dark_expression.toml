@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-dark-expression"
+description = "Enables the resume_dark_expression command without any pre-configured scope."
+commands.allow = ["resume_dark_expression"]
+
+[[permission]]
+identifier = "deny-resume-dark-expression"
+description = "Denies the resume_dark_expression command without any pre-configured scope."
+commands.deny = ["resume_dark_expression"]
