@@ -34,6 +34,8 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true }
+unicode-casefold = { workspace = true }
+unicode-normalization = { workspace = true }
 
 [dev-dependencies]
 rcgen = { workspace = true }

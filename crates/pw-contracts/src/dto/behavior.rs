@@ -2,16 +2,18 @@
 
 use std::collections::HashSet;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
-pub const BEHAVIOR_SETTINGS_SCHEMA_VERSION: u16 = 1;
+pub const BEHAVIOR_SETTINGS_SCHEMA_VERSION: u16 = 2;
 pub const BEHAVIOR_SETTINGS_CHANGED_EVENT: &str = "behavior-settings-changed";
 pub const ACTIVE_MODE_CHANGED_EVENT: &str = "active-mode-changed";
 pub const ACTIVITY_COLLECTION_HEALTH_EVENT: &str = "activity-collection-health";
 pub const MAX_ACTIVITY_APP_ID_CHARS: usize = 260;
 const MAX_MODE_ACTIVATION_RULES: usize = 32;
 const MAX_APP_IDS_PER_RULE: usize = 64;
+const MAX_QUIET_HOURS_RULES: usize = 32;
+const MAX_QUIET_HOURS_RULE_ID_CHARS: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -38,7 +40,7 @@ pub struct ExclusionRuleDto {
     pub title_pattern: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "FrequencyPolicyDto.ts")]
 pub struct FrequencyPolicyDto {
     pub minimum_interval_minutes: u16,
@@ -49,9 +51,22 @@ pub struct FrequencyPolicyDto {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "TriggerPolicyDto.ts")]
 pub struct TriggerPolicyDto {
+    pub return_after_enabled: bool,
     pub return_after_minutes: u16,
+    pub long_session_enabled: bool,
     pub long_session_minutes: u16,
+    pub category_change_enabled: bool,
     pub category_change_minutes: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "QuietHoursRuleDto.ts")]
+pub struct QuietHoursRuleDto {
+    pub rule_id: String,
+    pub enabled: bool,
+    pub days_of_week: Vec<u8>,
+    pub start_local_time: String,
+    pub end_local_time: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -116,10 +131,11 @@ pub struct ModeActivationRulesDto {
     pub fullscreen: FullscreenActivationRuleDto,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[ts(export_to = "BehaviorSettingsDto.ts")]
 pub struct BehaviorSettingsDto {
     pub schema_version: u16,
+    pub proactive_master_enabled: bool,
     pub consent: ConsentStateDto,
     pub consent_version: u16,
     pub collection_enabled: bool,
@@ -127,6 +143,9 @@ pub struct BehaviorSettingsDto {
     pub exclusions: Vec<ExclusionRuleDto>,
     pub frequency: FrequencyPolicyDto,
     pub triggers: TriggerPolicyDto,
+    pub quiet_hours: Vec<QuietHoursRuleDto>,
+    #[ts(type = "number | null")]
+    pub proactive_snoozed_until: Option<i64>,
     pub evaluator_endpoint: Option<String>,
     pub evaluator_model: Option<String>,
     pub shortcuts: ShortcutSettingsDto,
@@ -146,21 +165,27 @@ impl Default for BehaviorSettingsDto {
         };
         Self {
             schema_version: BEHAVIOR_SETTINGS_SCHEMA_VERSION,
+            proactive_master_enabled: false,
             consent: ConsentStateDto::Pending,
             consent_version: 1,
             collection_enabled: false,
             retention_days: 30,
             exclusions: Vec::new(),
             frequency: FrequencyPolicyDto {
-                minimum_interval_minutes: 15,
-                max_per_hour: 3,
-                max_per_day: 16,
+                minimum_interval_minutes: 30,
+                max_per_hour: 2,
+                max_per_day: 8,
             },
             triggers: TriggerPolicyDto {
+                return_after_enabled: true,
                 return_after_minutes: 10,
+                long_session_enabled: true,
                 long_session_minutes: 60,
+                category_change_enabled: true,
                 category_change_minutes: 10,
             },
+            quiet_hours: Vec::new(),
+            proactive_snoozed_until: None,
             evaluator_endpoint: None,
             evaluator_model: None,
             shortcuts: ShortcutSettingsDto {
@@ -191,6 +216,170 @@ impl Default for BehaviorSettingsDto {
             },
             manual_mode_override: None,
         }
+    }
+}
+
+#[derive(Deserialize)]
+struct BehaviorSettingsWire {
+    schema_version: u16,
+    proactive_master_enabled: bool,
+    consent: ConsentStateDto,
+    consent_version: u16,
+    collection_enabled: bool,
+    retention_days: u16,
+    exclusions: Vec<ExclusionRuleDto>,
+    frequency: FrequencyPolicyDto,
+    triggers: TriggerPolicyDto,
+    quiet_hours: Vec<QuietHoursRuleDto>,
+    proactive_snoozed_until: Option<i64>,
+    evaluator_endpoint: Option<String>,
+    evaluator_model: Option<String>,
+    shortcuts: ShortcutSettingsDto,
+    profiles: ModeProfilesDto,
+    activation: ModeActivationRulesDto,
+    manual_mode_override: Option<CompanionModeDto>,
+}
+
+impl From<BehaviorSettingsWire> for BehaviorSettingsDto {
+    fn from(wire: BehaviorSettingsWire) -> Self {
+        Self {
+            schema_version: wire.schema_version,
+            proactive_master_enabled: wire.proactive_master_enabled,
+            consent: wire.consent,
+            consent_version: wire.consent_version,
+            collection_enabled: wire.collection_enabled,
+            retention_days: wire.retention_days,
+            exclusions: wire.exclusions,
+            frequency: wire.frequency,
+            triggers: wire.triggers,
+            quiet_hours: wire.quiet_hours,
+            proactive_snoozed_until: wire.proactive_snoozed_until,
+            evaluator_endpoint: wire.evaluator_endpoint,
+            evaluator_model: wire.evaluator_model,
+            shortcuts: wire.shortcuts,
+            profiles: wire.profiles,
+            activation: wire.activation,
+            manual_mode_override: wire.manual_mode_override,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for BehaviorSettingsDto {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = serde_json::Value::deserialize(deserializer)?;
+        let object = value
+            .as_object_mut()
+            .ok_or_else(|| serde::de::Error::custom("behavior settings must be an object"))?;
+        let schema_version = object
+            .get("schema_version")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| {
+                serde::de::Error::custom("behavior settings schema_version is missing")
+            })?;
+        match schema_version {
+            1 => migrate_behavior_v1(object).map_err(serde::de::Error::custom)?,
+            version if version == u64::from(BEHAVIOR_SETTINGS_SCHEMA_VERSION) => {}
+            version => {
+                return Err(serde::de::Error::custom(format!(
+                    "unsupported behavior settings schema version: {version}"
+                )));
+            }
+        }
+        serde_json::from_value::<BehaviorSettingsWire>(value)
+            .map(Into::into)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+fn migrate_behavior_v1(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    object.insert(
+        "schema_version".to_owned(),
+        serde_json::json!(BEHAVIOR_SETTINGS_SCHEMA_VERSION),
+    );
+    object
+        .entry("proactive_master_enabled")
+        .or_insert(serde_json::json!(false));
+    object
+        .entry("quiet_hours")
+        .or_insert_with(|| serde_json::json!([]));
+    object
+        .entry("proactive_snoozed_until")
+        .or_insert(serde_json::Value::Null);
+
+    let triggers = object
+        .get_mut("triggers")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "behavior triggers must be an object".to_owned())?;
+    triggers
+        .entry("return_after_enabled")
+        .or_insert(serde_json::json!(true));
+    triggers
+        .entry("long_session_enabled")
+        .or_insert(serde_json::json!(true));
+    triggers
+        .entry("category_change_enabled")
+        .or_insert(serde_json::json!(true));
+
+    if let Some(frequency) = object.get_mut("frequency") {
+        migrate_behavior_v1_frequency(frequency);
+    }
+    Ok(())
+}
+
+const FREQUENCY_PRESETS: [FrequencyPolicyDto; 5] = [
+    FrequencyPolicyDto {
+        minimum_interval_minutes: 180,
+        max_per_hour: 1,
+        max_per_day: 2,
+    },
+    FrequencyPolicyDto {
+        minimum_interval_minutes: 90,
+        max_per_hour: 1,
+        max_per_day: 4,
+    },
+    FrequencyPolicyDto {
+        minimum_interval_minutes: 30,
+        max_per_hour: 2,
+        max_per_day: 8,
+    },
+    FrequencyPolicyDto {
+        minimum_interval_minutes: 15,
+        max_per_hour: 3,
+        max_per_day: 16,
+    },
+    FrequencyPolicyDto {
+        minimum_interval_minutes: 5,
+        max_per_hour: 6,
+        max_per_day: 32,
+    },
+];
+
+fn migrate_behavior_v1_frequency(value: &mut serde_json::Value) {
+    let Ok(current) = serde_json::from_value::<FrequencyPolicyDto>(value.clone()) else {
+        return;
+    };
+    let closest = FREQUENCY_PRESETS
+        .into_iter()
+        .filter(|candidate| {
+            candidate.minimum_interval_minutes >= current.minimum_interval_minutes
+                && candidate.max_per_hour <= current.max_per_hour
+                && candidate.max_per_day <= current.max_per_day
+        })
+        .min_by_key(|candidate| {
+            (
+                candidate.minimum_interval_minutes - current.minimum_interval_minutes,
+                current.max_per_hour - candidate.max_per_hour,
+                current.max_per_day - candidate.max_per_day,
+            )
+        });
+    if let Some(closest) = closest {
+        *value = serde_json::to_value(closest)
+            .expect("frequency policy with numeric fields always serializes");
     }
 }
 
@@ -247,6 +436,10 @@ impl BehaviorSettingsDto {
         {
             return Err("trigger intervals must be greater than zero".to_owned());
         }
+        validate_quiet_hours(&self.quiet_hours)?;
+        if self.proactive_snoozed_until.is_some_and(|value| value < 0) {
+            return Err("proactive_snoozed_until must not be negative".to_owned());
+        }
         for (name, profile) in [
             ("normal", &self.profiles.normal),
             ("focus", &self.profiles.focus),
@@ -259,6 +452,45 @@ impl BehaviorSettingsDto {
         validate_mode_activation_rules(&self.activation)?;
         Ok(())
     }
+}
+
+fn validate_quiet_hours(rules: &[QuietHoursRuleDto]) -> Result<(), String> {
+    if rules.len() > MAX_QUIET_HOURS_RULES {
+        return Err("quiet hours must contain at most 32 entries".to_owned());
+    }
+    let mut seen_rule_ids = HashSet::with_capacity(rules.len());
+    for rule in rules {
+        if rule.rule_id.trim().is_empty()
+            || rule.rule_id.chars().count() > MAX_QUIET_HOURS_RULE_ID_CHARS
+            || rule.rule_id.contains(char::is_control)
+        {
+            return Err("quiet hours rule_id is invalid".to_owned());
+        }
+        if !seen_rule_ids.insert(rule.rule_id.as_str()) {
+            return Err("quiet hours rule_id must be unique".to_owned());
+        }
+        if rule.days_of_week.is_empty() {
+            return Err("quiet hours days must not be empty".to_owned());
+        }
+        let mut seen_days = [false; 7];
+        for &day in &rule.days_of_week {
+            let Some(seen) = seen_days.get_mut(usize::from(day)) else {
+                return Err("quiet hours days must be between 0 and 6".to_owned());
+            };
+            if *seen {
+                return Err("quiet hours days must be unique".to_owned());
+            }
+            *seen = true;
+        }
+        let start = parse_local_time(&rule.start_local_time)
+            .ok_or_else(|| "quiet hours start time must use HH:MM".to_owned())?;
+        let end = parse_local_time(&rule.end_local_time)
+            .ok_or_else(|| "quiet hours end time must use HH:MM".to_owned())?;
+        if start == end {
+            return Err("quiet hours start and end times must differ".to_owned());
+        }
+    }
+    Ok(())
 }
 
 fn validate_mode_activation_rules(rules: &ModeActivationRulesDto) -> Result<(), String> {

@@ -24,6 +24,9 @@ pub fn send_chat_message<R: Runtime>(
     if text.is_empty() {
         return Err("メッセージが空です".to_owned());
     }
+    if crate::commands::safety::intercept_user_input(&app, &text) {
+        return Ok(());
+    }
     service.submit(&app, text)
 }
 

@@ -2,7 +2,7 @@
 
 use pw_contracts::PersonaProfileDto;
 use pw_platform::paths::AppDataLayout;
-use tauri::State;
+use tauri::{AppHandle, Runtime, State};
 
 use crate::behavior::{load_persona_checked, migrate_legacy_character_prompt, save_persona};
 use crate::character::load_character_settings;
@@ -26,6 +26,14 @@ fn ensure_known_character(layout: &AppDataLayout, character_id: &str) -> Result<
     } else {
         Err(format!("unknown character_id: {character_id}"))
     }
+}
+
+fn dark_expression_weakened(previous: &PersonaProfileDto, next: &PersonaProfileDto) -> bool {
+    (previous.allow_intense_dark_expression && !next.allow_intense_dark_expression)
+        || next.machiavellianism < previous.machiavellianism
+        || next.narcissism < previous.narcissism
+        || next.psychopathy < previous.psychopathy
+        || next.sadism < previous.sadism
 }
 
 pub(crate) fn get_persona_profile_for_layout(
@@ -69,11 +77,23 @@ pub fn get_persona_profile(
 /// Returns an identity, validation, existing-store, or filesystem error.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
-pub fn set_persona_profile(
+pub fn set_persona_profile<R: Runtime>(
+    app: AppHandle<R>,
+    service: State<'_, crate::chat::ChatService>,
+    tts: State<'_, crate::tts::TtsService>,
     layout: State<'_, AppDataLayout>,
     profile: PersonaProfileDto,
 ) -> Result<PersonaProfileDto, String> {
-    set_persona_profile_for_layout(&layout, profile)
+    let previous = load_persona_checked(&layout, &profile.character_id)?;
+    let saved = set_persona_profile_for_layout(&layout, profile)?;
+    if previous
+        .as_ref()
+        .is_some_and(|previous| dark_expression_weakened(previous, &saved))
+    {
+        service.cancel();
+        tts.stop(&app);
+    }
+    Ok(saved)
 }
 
 #[cfg(test)]
@@ -84,7 +104,9 @@ mod tests {
     use pw_contracts::{CharacterSettingsDto, PersonaProfileDto};
     use pw_platform::paths::AppDataLayout;
 
-    use super::{get_persona_profile_for_layout, set_persona_profile_for_layout};
+    use super::{
+        dark_expression_weakened, get_persona_profile_for_layout, set_persona_profile_for_layout,
+    };
     use crate::character::save_character_settings;
     use crate::chat::{default_llm_settings, save_llm_settings};
 
@@ -164,5 +186,57 @@ mod tests {
             get_persona_profile_for_layout(&test.layout, "beta").unwrap(),
             profile
         );
+    }
+
+    #[test]
+    fn lowering_any_dark_control_requires_stopping_the_old_snapshot() {
+        let mut previous = PersonaProfileDto::for_character("alpha");
+        previous.allow_intense_dark_expression = true;
+        previous.dark_expression_acknowledgement_version =
+            Some(pw_contracts::DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION);
+        previous.machiavellianism = 80;
+        previous.narcissism = 80;
+        previous.psychopathy = 80;
+        previous.sadism = 80;
+
+        for next in [
+            PersonaProfileDto {
+                allow_intense_dark_expression: false,
+                dark_expression_acknowledgement_version: None,
+                ..previous.clone()
+            },
+            PersonaProfileDto {
+                machiavellianism: 79,
+                ..previous.clone()
+            },
+            PersonaProfileDto {
+                narcissism: 79,
+                ..previous.clone()
+            },
+            PersonaProfileDto {
+                psychopathy: 79,
+                ..previous.clone()
+            },
+            PersonaProfileDto {
+                sadism: 79,
+                ..previous.clone()
+            },
+        ] {
+            assert!(dark_expression_weakened(&previous, &next));
+        }
+    }
+
+    #[test]
+    fn raising_dark_controls_does_not_interrupt_the_current_snapshot() {
+        let previous = PersonaProfileDto::for_character("alpha");
+        let next = PersonaProfileDto {
+            machiavellianism: 51,
+            narcissism: 51,
+            psychopathy: 51,
+            sadism: 51,
+            ..previous.clone()
+        };
+
+        assert!(!dark_expression_weakened(&previous, &next));
     }
 }

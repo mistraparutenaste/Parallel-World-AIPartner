@@ -19,6 +19,9 @@ fn apply_chat_placement(
     persist: impl FnOnce(&UiPreferencesDto) -> Result<(), String>,
 ) -> Result<UiPreferencesDto, String> {
     if current.chat_placement == placement {
+        if placement == ChatPlacementDto::Popped {
+            windows.show_chat()?;
+        }
         return Ok(current);
     }
     let mut next = current;
@@ -217,5 +220,29 @@ mod tests {
         });
         assert_eq!(result.unwrap_err(), "read only");
         assert_eq!(windows.actions, ["show_settings", "hide_chat", "show_chat"]);
+    }
+
+    #[test]
+    fn requesting_the_existing_popout_refocuses_chat_without_persisting() {
+        let current = UiPreferencesDto {
+            chat_placement: ChatPlacementDto::Popped,
+            ..UiPreferencesDto::default()
+        };
+        let mut windows = Windows::default();
+        let mut persisted = false;
+        let result = apply_chat_placement(
+            current.clone(),
+            ChatPlacementDto::Popped,
+            &mut windows,
+            |_| {
+                persisted = true;
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result, current);
+        assert_eq!(windows.actions, ["show_chat"]);
+        assert!(!persisted);
     }
 }

@@ -1,6 +1,8 @@
 import type {
   ChatMessageEventDto,
   ConversationStateEventDto,
+  DarkExpressionSafetyChangedEventDto,
+  SafewordTriggeredEventDto,
   TtsStateEventDto,
 } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -31,6 +33,18 @@ function fireMessage(payload: ChatMessageEventDto) {
   });
 }
 
+function fireSafetyChanged(payload: DarkExpressionSafetyChangedEventDto) {
+  act(() => {
+    listenHandlers.get('dark-expression-safety-changed')?.({ payload });
+  });
+}
+
+function fireSafewordTriggered(payload: SafewordTriggeredEventDto) {
+  act(() => {
+    listenHandlers.get('safeword-triggered')?.({ payload });
+  });
+}
+
 describe('ChatWindow', () => {
   it('clears displayed messages after durable history deletion', async () => {
     render(<ChatWindow />);
@@ -42,6 +56,7 @@ describe('ChatWindow', () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockResolvedValue(null);
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
   });
 
   it('shows user and streamed assistant messages', async () => {
@@ -102,38 +117,53 @@ describe('ChatWindow', () => {
     expect(screen.getByText('onetwo')).toBeInTheDocument();
   });
 
-  it('shows history load failure as a nonfatal alert', async () => {
+  it('shows history load failure without exposing technical detail', async () => {
     invokeMock.mockRejectedValueOnce(new Error('sqlite unavailable'));
     render(<ChatWindow />);
-    expect(await screen.findByRole('alert')).toHaveTextContent('sqlite unavailable');
+    expect(await screen.findByRole('alert')).toHaveTextContent('前の会話をうまく思い出せないみたい');
+    expect(screen.queryByText(/sqlite unavailable/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('メッセージ')).toBeEnabled();
   });
 
-  it('sends the draft through send_chat_message', async () => {
+  it('sends with Enter without rendering send or stop buttons', async () => {
     render(<ChatWindow />);
     await act(async () => {});
 
     fireEvent.change(screen.getByLabelText('メッセージ'), {
       target: { value: '今日の予定は?' },
     });
-    fireEvent.click(screen.getByRole('button', { name: '送信' }));
+    fireEvent.keyDown(screen.getByLabelText('メッセージ'), {
+      key: 'Enter',
+      shiftKey: false,
+    });
 
     expect(invokeMock).toHaveBeenCalledWith('send_chat_message', {
       text: '今日の予定は?',
     });
     expect(screen.getByLabelText('メッセージ')).toHaveValue('');
+    expect(screen.queryByRole('button', { name: '送信' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '停止' })).not.toBeInTheDocument();
   });
 
-  it('cancels generation with the stop button', async () => {
+  it('keeps Shift+Enter for line breaks', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+    const input = screen.getByLabelText('メッセージ');
+    fireEvent.change(input, { target: { value: '一行目' } });
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true });
+    expect(invokeMock).not.toHaveBeenCalledWith('send_chat_message', expect.anything());
+    expect(input).toHaveValue('一行目');
+  });
+
+  it('cancels generation with Escape', async () => {
     render(<ChatWindow />);
     await act(async () => {});
 
-    fireEvent.click(screen.getByRole('button', { name: '停止' }));
-
+    fireEvent.keyDown(screen.getByLabelText('メッセージ'), { key: 'Escape' });
     expect(invokeMock).toHaveBeenCalledWith('cancel_turn');
   });
 
-  it('shows thinking status from conversation-state events', async () => {
+  it('shows a quiet three-dot waiting state', async () => {
     render(<ChatWindow />);
     await act(async () => {});
 
@@ -146,10 +176,11 @@ describe('ChatWindow', () => {
       listenHandlers.get('conversation-state')?.({ payload });
     });
 
-    expect(screen.getByRole('status')).toHaveTextContent('考え中…');
+    expect(screen.getByRole('status')).toHaveAccessibleName('返答を待っています');
+    expect(screen.getByRole('status').querySelectorAll('[aria-hidden="true"]')).toHaveLength(3);
   });
 
-  it('surfaces tts degradation without touching the history', async () => {
+  it('surfaces tts degradation in natural language without touching the history', async () => {
     render(<ChatWindow />);
     await act(async () => {});
 
@@ -163,7 +194,114 @@ describe('ChatWindow', () => {
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      '音声合成に接続できません: tts request failed',
+      '声がうまく出ないみたい。文字では話せるよ',
     );
+    expect(screen.queryByText(/tts request failed/)).not.toBeInTheDocument();
+  });
+
+  it('shows a persistent safety pause independently from ordinary notices', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_conversation_history') return Promise.resolve([]);
+      if (command === 'get_dark_expression_safety_settings') {
+        return Promise.resolve({
+          schema_version: 1,
+          safe_word: 'ストップ',
+          dark_expression_paused: true,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<ChatWindow />);
+
+    expect(
+      await screen.findByText('セーフワードを受け付けました。ダーク表現を停止しています。'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'ダーク表現を再開' })).toBeEnabled();
+
+    act(() => {
+      listenHandlers.get('tts-state')?.({
+        payload: {
+          schema_version: 1,
+          available: false,
+          message: 'tts request failed',
+        } satisfies TtsStateEventDto,
+      });
+    });
+
+    expect(screen.getByText('声がうまく出ないみたい。文字では話せるよ')).toBeInTheDocument();
+    expect(
+      screen.getByText('セーフワードを受け付けました。ダーク表現を停止しています。'),
+    ).toBeInTheDocument();
+  });
+
+  it('stops the waiting state immediately and warns when the pause was not persisted', async () => {
+    render(<ChatWindow />);
+    await act(async () => {});
+
+    act(() => {
+      listenHandlers.get('conversation-state')?.({
+        payload: {
+          schema_version: 1,
+          state: 'thinking',
+          message: null,
+        } satisfies ConversationStateEventDto,
+      });
+    });
+    expect(screen.getByRole('status', { name: '返答を待っています' })).toBeInTheDocument();
+
+    fireSafewordTriggered({
+      schema_version: 1,
+      pause_persisted: false,
+    });
+
+    expect(screen.queryByRole('status', { name: '返答を待っています' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('セーフワードを受け付けました。ダーク表現を停止しています。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('停止状態を保存できませんでした。アプリを閉じるまでは停止を保ちます。'),
+    ).toBeInTheDocument();
+  });
+
+  it('resumes dark expression without sending a chat message or starting speech', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_conversation_history') return Promise.resolve([]);
+      if (command === 'get_dark_expression_safety_settings') {
+        return Promise.resolve({
+          schema_version: 1,
+          safe_word: 'ストップ',
+          dark_expression_paused: true,
+        });
+      }
+      if (command === 'resume_dark_expression') {
+        return Promise.resolve({
+          schema_version: 1,
+          safe_word: 'ストップ',
+          dark_expression_paused: false,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<ChatWindow />);
+    fireSafetyChanged({
+      schema_version: 1,
+      settings: {
+        schema_version: 1,
+        safe_word: 'ストップ',
+        dark_expression_paused: true,
+      },
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'ダーク表現を再開' }));
+
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('resume_dark_expression'));
+    await waitFor(() =>
+      expect(
+        screen.queryByText('セーフワードを受け付けました。ダーク表現を停止しています。'),
+      ).not.toBeInTheDocument(),
+    );
+    expect(invokeMock).not.toHaveBeenCalledWith('send_chat_message', expect.anything());
+    expect(invokeMock).not.toHaveBeenCalledWith('set_speech_playback', expect.anything());
   });
 });

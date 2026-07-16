@@ -77,7 +77,7 @@ fn character_capability_denies_shell_fs_and_settings_commands() {
 }
 
 #[test]
-fn chat_capability_exposes_status_and_chat_commands_only() {
+fn chat_capability_exposes_chat_surface_commands_only() {
     let (json, permissions) = capability_permissions("chat");
     assert_eq!(json["windows"], serde_json::json!(["chat"]));
     assert_eq!(
@@ -89,6 +89,8 @@ fn chat_capability_exposes_status_and_chat_commands_only() {
             "allow-send-chat-message",
             "allow-cancel-turn",
             "allow-list-conversation-history",
+            "allow-get-dark-expression-safety-settings",
+            "allow-resume-dark-expression",
             "allow-report-frontend-error"
         ]
     );
@@ -139,6 +141,11 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-set-llm-settings",
             "allow-get-persona-profile",
             "allow-set-persona-profile",
+            "allow-get-behavior-settings",
+            "allow-set-behavior-settings",
+            "allow-get-dark-expression-safety-settings",
+            "allow-set-safe-word",
+            "allow-resume-dark-expression",
             "allow-get-tts-settings",
             "allow-set-tts-settings",
             "allow-list-tts-speakers",
@@ -175,6 +182,52 @@ fn persona_profile_commands_are_settings_only() {
             "persona command leaked into {capability}"
         );
     }
+}
+
+#[test]
+fn behavior_settings_commands_are_settings_only() {
+    let expected = ["allow-get-behavior-settings", "allow-set-behavior-settings"];
+    let (_, settings) = capability_permissions("settings");
+    for permission in expected {
+        assert!(settings.iter().any(|item| item == permission));
+    }
+    for capability in ["character", "chat"] {
+        let (_, permissions) = capability_permissions(capability);
+        assert!(
+            expected
+                .iter()
+                .all(|permission| !permissions.iter().any(|item| item == permission)),
+            "behavior settings command leaked into {capability}"
+        );
+    }
+}
+
+#[test]
+fn dark_expression_safety_commands_follow_rendered_surface_boundaries() {
+    let settings_only = ["allow-set-safe-word"];
+    let shared_with_chat = [
+        "allow-get-dark-expression-safety-settings",
+        "allow-resume-dark-expression",
+    ];
+    let (_, settings) = capability_permissions("settings");
+    for permission in settings_only.into_iter().chain(shared_with_chat) {
+        assert!(settings.iter().any(|item| item == permission));
+    }
+
+    let (_, chat) = capability_permissions("chat");
+    for permission in shared_with_chat {
+        assert!(chat.iter().any(|item| item == permission));
+    }
+    assert!(!chat.iter().any(|item| item == "allow-set-safe-word"));
+
+    let (_, character) = capability_permissions("character");
+    assert!(
+        settings_only
+            .into_iter()
+            .chain(shared_with_chat)
+            .all(|permission| !character.iter().any(|item| item == permission)),
+        "dark expression safety command leaked into character"
+    );
 }
 
 #[test]

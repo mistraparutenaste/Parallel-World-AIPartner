@@ -211,6 +211,41 @@ fn behavior_settings_round_trip_atomically_without_temp_artifacts() {
     assert_eq!(entries, ["behavior.json"]);
 }
 
+#[test]
+fn behavior_checked_load_migrates_v1_in_memory_without_writing() {
+    let test = TestLayout::new("behavior-v1-checked");
+    let path = test.layout.config.join("behavior.json");
+    let mut value = serde_json::to_value(BehaviorSettingsDto::default()).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.insert("schema_version".to_owned(), serde_json::json!(1));
+    object.remove("proactive_master_enabled");
+    object.remove("quiet_hours");
+    object.remove("proactive_snoozed_until");
+    object.insert(
+        "frequency".to_owned(),
+        serde_json::json!({
+            "minimum_interval_minutes": 15,
+            "max_per_hour": 3,
+            "max_per_day": 16
+        }),
+    );
+    let triggers = object["triggers"].as_object_mut().unwrap();
+    triggers.remove("return_after_enabled");
+    triggers.remove("long_session_enabled");
+    triggers.remove("category_change_enabled");
+    std::fs::write(&path, value.to_string()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+
+    let loaded = load_behavior_settings_checked(&test.layout).expect("v1 is readable");
+
+    assert!(!loaded.proactive_master_enabled);
+    assert_eq!(loaded.frequency.minimum_interval_minutes, 15);
+    assert!(loaded.triggers.return_after_enabled);
+    assert!(loaded.quiet_hours.is_empty());
+    assert_eq!(loaded.proactive_snoozed_until, None);
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
 impl TestLayout {
     fn new(name: &str) -> Self {
         let sequence = NEXT_TEST_DIRECTORY.fetch_add(1, Ordering::Relaxed);

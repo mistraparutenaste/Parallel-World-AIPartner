@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-behavior-settings"
+description = "Enables the get_behavior_settings command without any pre-configured scope."
+commands.allow = ["get_behavior_settings"]
+
+[[permission]]
+identifier = "deny-get-behavior-settings"
+description = "Denies the get_behavior_settings command without any pre-configured scope."
+commands.deny = ["get_behavior_settings"]

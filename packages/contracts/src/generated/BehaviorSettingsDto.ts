@@ -5,7 +5,8 @@ import type { ExclusionRuleDto } from "./ExclusionRuleDto";
 import type { FrequencyPolicyDto } from "./FrequencyPolicyDto";
 import type { ModeActivationRulesDto } from "./ModeActivationRulesDto";
 import type { ModeProfilesDto } from "./ModeProfilesDto";
+import type { QuietHoursRuleDto } from "./QuietHoursRuleDto";
 import type { ShortcutSettingsDto } from "./ShortcutSettingsDto";
 import type { TriggerPolicyDto } from "./TriggerPolicyDto";
 
-export type BehaviorSettingsDto = { schema_version: number, consent: ConsentStateDto, consent_version: number, collection_enabled: boolean, retention_days: number, exclusions: Array<ExclusionRuleDto>, frequency: FrequencyPolicyDto, triggers: TriggerPolicyDto, evaluator_endpoint: string | null, evaluator_model: string | null, shortcuts: ShortcutSettingsDto, profiles: ModeProfilesDto, activation: ModeActivationRulesDto, manual_mode_override: CompanionModeDto | null, };
+export type BehaviorSettingsDto = { schema_version: number, proactive_master_enabled: boolean, consent: ConsentStateDto, consent_version: number, collection_enabled: boolean, retention_days: number, exclusions: Array<ExclusionRuleDto>, frequency: FrequencyPolicyDto, triggers: TriggerPolicyDto, quiet_hours: Array<QuietHoursRuleDto>, proactive_snoozed_until: number | null, evaluator_endpoint: string | null, evaluator_model: string | null, shortcuts: ShortcutSettingsDto, profiles: ModeProfilesDto, activation: ModeActivationRulesDto, manual_mode_override: CompanionModeDto | null, };

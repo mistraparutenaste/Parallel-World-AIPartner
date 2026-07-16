@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-safe-word"
+description = "Enables the set_safe_word command without any pre-configured scope."
+commands.allow = ["set_safe_word"]
+
+[[permission]]
+identifier = "deny-set-safe-word"
+description = "Denies the set_safe_word command without any pre-configured scope."
+commands.deny = ["set_safe_word"]

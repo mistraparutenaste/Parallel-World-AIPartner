@@ -29,6 +29,7 @@ const DEVICES: AudioDeviceDto[] = [
 describe('MicrophonePanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ = {};
     invokeMock.mockImplementation((command: string) => {
       if (command === 'list_microphones') {
         return Promise.resolve(DEVICES);
