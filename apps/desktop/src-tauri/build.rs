@@ -3,8 +3,16 @@ fn main() {
     // as installers unless their execution level is explicit.
     #[cfg(target_os = "windows")]
     {
+        let test_manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("windows-test.manifest");
+        println!("cargo:rerun-if-changed={}", test_manifest.display());
         println!("cargo:rustc-link-arg-tests=/MANIFEST:EMBED");
         println!("cargo:rustc-link-arg-tests=/MANIFESTUAC:level='asInvoker'");
+        println!(
+            "cargo:rustc-link-arg-tests=/MANIFESTINPUT:{}",
+            test_manifest.display()
+        );
     }
     // Register the full set of exposed commands with the app manifest so
     // the ACL can reject anything that is not explicitly listed here.
