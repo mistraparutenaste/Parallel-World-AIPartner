@@ -204,6 +204,14 @@ Phase 7では、次の信頼境界を分離して整備しています。
 
 Cargo workspaceは `UNLICENSED`・`publish = false` です。Live2D SDK、VAD、STT、LLM、TTS、およびキャラクター画像にはそれぞれ異なる利用条件があります。利用・改変・再配布の前に、[開発環境セットアップ](docs/development/getting-started.md)、`project-input/live2d/licenses/`、各manifestのlicense情報を確認してください。
 
+### フォントクレジット
+
+標準UIフォントに[ラノベPOPv2](https://flopdesign.booth.pm/)を使用しています。ライセンスはM+フォントのライセンスに準じます。配布物に同梱されていた説明は[こちら](apps/desktop/src/assets/fonts/lanobe-pop-v2/ReadMe.html)です。
+
+- Copyright (C) 2002-2019 M+ FONTS PROJECT
+- Copyright (C) 2020 flopdesign.com
+- Copyright (C) 2020 Kato Masashi
+
 ## リポジトリ構成
 
 ```text
