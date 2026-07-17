@@ -177,6 +177,55 @@ describe('control center', () => {
     }
   });
 
+  it('keeps the existing conversation layer beneath the settings entrance', async () => {
+    render(<SettingsWindow />);
+    const controlCenter = await screen.findByRole('main', { name: 'Parallel World' });
+    const conversationLayer = controlCenter.querySelector('.conversation-layer');
+    const navigation = screen.getByRole('tablist', { name: '画面メニュー' });
+
+    fireEvent.click(within(navigation).getByRole('tab', { name: '設定' }));
+
+    expect(controlCenter).toHaveAttribute('data-transition', 'settings');
+    expect(conversationLayer).toBeInTheDocument();
+    expect(conversationLayer).toHaveAttribute('aria-hidden', 'true');
+    const transitionNavigation = controlCenter.querySelector('.screen-navigation');
+    expect(transitionNavigation).toBeInTheDocument();
+    expect(transitionNavigation?.querySelector('[data-tab-id="settings"]')).toHaveAttribute(
+      'data-confirming',
+      'true',
+    );
+
+    const categories = screen.getByRole('tablist', { name: '設定カテゴリ' });
+    const entranceOrder = ['音声', '診断', 'AI', '表示', 'キャラクター', '更新', 'データ'];
+    entranceOrder.forEach((label, index) => {
+      expect(within(categories).getByRole('tab', { name: label })).toHaveAttribute(
+        'data-enter-order',
+        String(index),
+      );
+    });
+  });
+
+  it.each([
+    ['性格', 'personality', 'diamond'],
+    ['会話', 'conversation', 'circle'],
+  ] as const)('uses three %s transition outlines from the clicked diamond', async (label, target, shape) => {
+    render(<SettingsWindow />);
+    const controlCenter = await screen.findByRole('main', { name: 'Parallel World' });
+    const navigation = screen.getByRole('tablist', { name: '画面メニュー' });
+
+    fireEvent.click(within(navigation).getByRole('tab', { name: label }));
+
+    expect(controlCenter).toHaveAttribute('data-transition', target);
+    expect(screen.getByRole('dialog', { name: `${label}画面` })).toHaveAttribute(
+      'data-motion-shape',
+      shape,
+    );
+    expect(controlCenter.querySelectorAll(`[data-transition-ring="${shape}"]`)).toHaveLength(3);
+    expect(
+      controlCenter.querySelector(`.screen-navigation [data-tab-id="${target}"]`),
+    ).toHaveAttribute('data-confirming', 'true');
+  });
+
   it('uses the seven-category heart crown and keeps logs under data and diagnostics', async () => {
     render(<SettingsWindow />);
     const navigation = await screen.findByRole('tablist', { name: '画面メニュー' });

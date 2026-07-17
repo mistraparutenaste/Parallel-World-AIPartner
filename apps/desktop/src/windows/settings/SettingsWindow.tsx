@@ -22,6 +22,7 @@ import { TtsPanel } from './TtsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 
 type ScreenArea = 'settings' | 'personality' | 'conversation' | 'chat';
+type TransitionScreen = Exclude<ScreenArea, 'chat'>;
 type SettingsArea =
   | 'audio'
   | 'ai'
@@ -38,15 +39,28 @@ const SCREEN_ITEMS: Array<{ id: ScreenArea; label: string }> = [
   { id: 'chat', label: 'チャット' },
 ];
 
-const SETTINGS_ITEMS: Array<{ id: SettingsArea; label: string }> = [
-  { id: 'audio', label: '音声' },
-  { id: 'ai', label: 'AI' },
-  { id: 'character', label: 'キャラクター' },
-  { id: 'data', label: 'データ' },
-  { id: 'diagnostics', label: '診断' },
-  { id: 'display', label: '表示' },
-  { id: 'updates', label: '更新' },
+const SETTINGS_ITEMS: Array<{ id: SettingsArea; label: string; enterOrder: number }> = [
+  { id: 'audio', label: '音声', enterOrder: 0 },
+  { id: 'ai', label: 'AI', enterOrder: 2 },
+  { id: 'character', label: 'キャラクター', enterOrder: 4 },
+  { id: 'data', label: 'データ', enterOrder: 6 },
+  { id: 'diagnostics', label: '診断', enterOrder: 1 },
+  { id: 'display', label: '表示', enterOrder: 3 },
+  { id: 'updates', label: '更新', enterOrder: 5 },
 ];
+
+const SCREEN_TRANSITION_DURATION: Record<TransitionScreen, number> = {
+  settings: 750,
+  personality: 920,
+  conversation: 920,
+};
+
+type ScreenTransition = {
+  target: TransitionScreen;
+  originX: number;
+  originY: number;
+  originSize: number;
+};
 
 function TabList<T extends string>({
   idPrefix,
@@ -56,14 +70,16 @@ function TabList<T extends string>({
   onChange,
   className,
   autoFocusValue,
+  confirmingValue,
 }: {
   idPrefix: string;
   label: string;
-  items: Array<{ id: T; label: string }>;
+  items: Array<{ id: T; label: string; enterOrder?: number }>;
   value: T;
-  onChange: (value: T) => void;
+  onChange: (value: T, source?: HTMLButtonElement) => void;
   className: string;
   autoFocusValue?: T | undefined;
+  confirmingValue?: T | undefined;
 }) {
   const move = (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     let wanted = index;
@@ -79,10 +95,10 @@ function TabList<T extends string>({
       return;
     }
     event.preventDefault();
-    onChange(items[wanted]!.id);
-    event.currentTarget.parentElement
-      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[wanted]
-      ?.focus();
+    const wantedButton = event.currentTarget.parentElement
+      ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[wanted];
+    onChange(items[wanted]!.id, wantedButton);
+    wantedButton?.focus();
   };
 
   return (
@@ -97,9 +113,16 @@ function TabList<T extends string>({
           aria-controls={`${idPrefix}-${item.id}-panel`}
           aria-selected={value === item.id}
           data-tab-id={item.id}
+          data-enter-order={item.enterOrder}
+          data-confirming={confirmingValue === item.id || undefined}
+          style={
+            item.enterOrder === undefined
+              ? undefined
+              : ({ '--enter-delay': `${item.enterOrder * 33}ms` } as React.CSSProperties)
+          }
           tabIndex={value === item.id ? 0 : -1}
           autoFocus={autoFocusValue === item.id}
-          onClick={() => onChange(item.id)}
+          onClick={(event) => onChange(item.id, event.currentTarget)}
           onKeyDown={(event) => move(event, index)}
         >
           <span aria-hidden="true">
@@ -215,6 +238,7 @@ function SettingsContent({
 
 export function SettingsWindow() {
   const [screenArea, setScreenArea] = useState<ScreenArea>('chat');
+  const [screenTransition, setScreenTransition] = useState<ScreenTransition | null>(null);
   const [settingsArea, setSettingsArea] = useState<SettingsArea>('display');
   const [preferences, setPreferences] = useState<UiPreferencesDto>({
     schema_version: 1,
@@ -223,6 +247,30 @@ export function SettingsWindow() {
   });
   const [error, setError] = useState<string | null>(null);
   const restoreScreenMenuFocus = useRef(false);
+  const screenTransitionTimer = useRef<number | null>(null);
+  const screenNavigationRef = useRef<HTMLElement | null>(null);
+
+  const cancelScreenTransition = () => {
+    if (screenTransitionTimer.current !== null) {
+      window.clearTimeout(screenTransitionTimer.current);
+      screenTransitionTimer.current = null;
+    }
+    setScreenTransition(null);
+  };
+
+  useEffect(() => () => {
+    if (screenTransitionTimer.current !== null) {
+      window.clearTimeout(screenTransitionTimer.current);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (screenArea !== 'chat' || !restoreScreenMenuFocus.current) return;
+    screenNavigationRef.current
+      ?.querySelector<HTMLButtonElement>('[data-tab-id="chat"]')
+      ?.focus();
+    restoreScreenMenuFocus.current = false;
+  }, [screenArea]);
 
   useEffect(() => {
     let mounted = true;
@@ -241,7 +289,10 @@ export function SettingsWindow() {
       applyThemePreference(value.theme);
     });
     const stopNavigation = subscribeEvent<string>('control-center-navigate', (value) => {
-      if (value === 'conversation') setScreenArea('chat');
+      if (value === 'conversation') {
+        cancelScreenTransition();
+        setScreenArea('chat');
+      }
     });
     return () => {
       mounted = false;
@@ -284,8 +335,31 @@ export function SettingsWindow() {
     }
   };
 
-  const changeScreen = (next: ScreenArea) => {
+  const changeScreen = (next: ScreenArea, source?: HTMLButtonElement) => {
+    cancelScreenTransition();
     if (next !== 'chat') restoreScreenMenuFocus.current = false;
+
+    if (next !== 'chat') {
+      const rect = source?.getBoundingClientRect();
+      const transformedSize = Math.max(rect?.width ?? 0, rect?.height ?? 0);
+      const originSize = next === 'personality'
+        ? source?.offsetWidth || transformedSize / Math.SQRT2 || 104
+        : transformedSize || 104;
+      const transition: ScreenTransition = {
+        target: next,
+        originX: rect ? rect.left + rect.width / 2 : window.innerWidth / 2,
+        originY: rect ? rect.top + rect.height / 2 : window.innerHeight / 2,
+        originSize,
+      };
+      setScreenTransition(transition);
+      const reducedMotion = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      screenTransitionTimer.current = window.setTimeout(() => {
+        setScreenTransition(null);
+        screenTransitionTimer.current = null;
+      }, reducedMotion ? 0 : SCREEN_TRANSITION_DURATION[next]);
+    }
+
     setScreenArea(next);
     if (next === 'chat' && preferences.chat_placement === 'popped') {
       void setPlacement('popped');
@@ -300,6 +374,13 @@ export function SettingsWindow() {
   const showOverlay = screenArea !== 'chat';
   const chatDocked = preferences.chat_placement === 'docked';
   const activeScreenLabel = SCREEN_ITEMS.find((item) => item.id === screenArea)?.label ?? 'チャット';
+  const transitionStyle = screenTransition
+    ? ({
+        '--screen-origin-x': `${screenTransition.originX}px`,
+        '--screen-origin-y': `${screenTransition.originY}px`,
+        '--screen-origin-size': `${screenTransition.originSize}px`,
+      } as React.CSSProperties)
+    : undefined;
 
   return (
     <main
@@ -307,6 +388,8 @@ export function SettingsWindow() {
       className="control-center"
       data-ui-style="conversation-first"
       data-screen={screenArea}
+      data-transition={screenTransition?.target}
+      style={transitionStyle}
     >
       <section
         id="screen-chat-panel"
@@ -330,6 +413,13 @@ export function SettingsWindow() {
           role="dialog"
           aria-modal="true"
           aria-label={`${activeScreenLabel}画面`}
+          data-motion-shape={
+            screenArea === 'personality'
+              ? 'diamond'
+              : screenArea === 'conversation'
+                ? 'circle'
+                : 'gradient'
+          }
         >
           <button
             type="button"
@@ -350,7 +440,7 @@ export function SettingsWindow() {
                 label="設定カテゴリ"
                 items={SETTINGS_ITEMS}
                 value={settingsArea}
-                onChange={setSettingsArea}
+                onChange={(value) => setSettingsArea(value)}
                 className="category-crown"
               />
               <div
@@ -383,8 +473,29 @@ export function SettingsWindow() {
         </section>
       ) : null}
 
-      {!showOverlay ? (
-        <nav className="screen-navigation" aria-label="画面">
+      {screenTransition?.target === 'personality' || screenTransition?.target === 'conversation' ? (
+        <div
+          className={`screen-transition-rings screen-transition-rings--${screenTransition.target}`}
+          aria-hidden="true"
+        >
+          {(['blue', 'highlight', 'purple'] as const).map((tone) => (
+            <span
+              key={tone}
+              className={`screen-transition-ring screen-transition-ring--${tone}`}
+              data-transition-ring={screenTransition.target === 'personality' ? 'diamond' : 'circle'}
+            />
+          ))}
+        </div>
+      ) : null}
+
+      {!showOverlay || screenTransition ? (
+        <nav
+          ref={screenNavigationRef}
+          className="screen-navigation"
+          aria-label="画面"
+          aria-hidden={showOverlay || undefined}
+          inert={showOverlay || undefined}
+        >
           <TabList
             idPrefix="screen"
             label="画面メニュー"
@@ -393,6 +504,7 @@ export function SettingsWindow() {
             onChange={changeScreen}
             className="screen-tabs"
             autoFocusValue={restoreScreenMenuFocus.current ? 'chat' : undefined}
+            confirmingValue={screenTransition?.target}
           />
         </nav>
       ) : null}
