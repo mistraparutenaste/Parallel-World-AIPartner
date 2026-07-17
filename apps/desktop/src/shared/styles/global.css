@@ -2,9 +2,17 @@
    モック準拠: ポップシアン基調 / 白サーフェス / ダイヤ型(45°回転)タブ /
    しっぽ付き吹き出し(ユーザー=シアン塗り・左, AI=白+シアン輪郭・右) / ピル型ボタン。 */
 
+@font-face {
+  font-family: 'Lanobe POP v2';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../../assets/fonts/lanobe-pop-v2/LightNovelPOPv2.otf') format('opentype');
+}
+
 :root {
   color-scheme: light;
-  font-family: 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', system-ui, sans-serif;
+  font-family: 'Lanobe POP v2', 'Hiragino Sans', 'Yu Gothic UI', 'Noto Sans JP', system-ui, sans-serif;
   --accent: #23c4d8;
   --accent-strong: #0c92a6;
   --accent-soft: #e0f9fc;
