@@ -15,7 +15,7 @@
   --line: #c5e9ef;
   --text: #12333c;
   --muted: #58787f;
-  --danger: #cf4b62;
+  --danger: #c33d57;
   --success: #128a5e;
   --radius: 12px;
   --radius-lg: 18px;
@@ -365,6 +365,157 @@ input[type='radio'] {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.data-export-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.data-export-row label {
+  margin: 0;
+}
+
+.data-export-row input {
+  width: 100%;
+}
+
+.panel-stack > section.danger-zone::before {
+  border-color: var(--danger);
+  background: transparent;
+}
+
+.panel-stack > section.danger-zone h2:first-child {
+  border-bottom-color: var(--danger);
+}
+
+.danger-zone__intro,
+.danger-zone__usage-status,
+.danger-zone__usage-error,
+.danger-zone__feedback {
+  margin: 0 30px 18px;
+  line-height: 1.7;
+}
+
+.danger-zone__intro {
+  color: var(--muted);
+}
+
+.danger-zone__usage-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.danger-zone__usage-error p {
+  flex: 1 1 320px;
+  margin: 0;
+}
+
+.danger-action-list {
+  display: grid;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 38%, var(--line));
+}
+
+.danger-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px 24px;
+  align-items: center;
+  padding: 22px 4px 22px 30px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 24%, var(--line));
+}
+
+.danger-action h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.danger-action p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.danger-action .danger-action__usage {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+button.danger-button {
+  border-color: var(--danger);
+  background: transparent;
+  color: var(--danger);
+}
+
+button.danger-button:hover:not(:disabled),
+button.danger-button--confirm {
+  background: var(--danger);
+  color: var(--page);
+}
+
+.danger-confirmation {
+  grid-column: 1 / -1;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--danger) 58%, var(--line));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+}
+
+.danger-confirmation p {
+  margin-top: 0;
+  color: var(--text);
+}
+
+.danger-confirmation strong {
+  margin-inline: 0.35em;
+  color: var(--danger);
+}
+
+.danger-confirmation label {
+  margin-block: 14px;
+}
+
+.danger-confirmation input {
+  width: min(100%, 360px);
+}
+
+.danger-confirmation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 800px) {
+  .data-export-row,
+  .danger-action {
+    grid-template-columns: 1fr;
+  }
+
+  .danger-action {
+    padding-inline: 18px;
+  }
+
+  .danger-action > .danger-button {
+    justify-self: start;
+  }
+
+  .danger-confirmation__actions {
+    justify-content: flex-start;
+  }
+
+  .danger-zone__intro,
+  .danger-zone__usage-status,
+  .danger-zone__usage-error,
+  .danger-zone__feedback {
+    margin-inline: 18px;
+  }
 }
 
 .chat-surface {

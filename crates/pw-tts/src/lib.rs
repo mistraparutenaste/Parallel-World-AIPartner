@@ -8,5 +8,5 @@ pub use aivis::{
     AivisSpeechClient, Speaker, SpeakerStyle, SynthesisParams, TtsClientConfig, TtsError,
     UserDictWord,
 };
-pub use cache::{DEFAULT_MAX_ENTRIES, WavCache, cache_key};
+pub use cache::{DEFAULT_MAX_ENTRIES, WavCache, WavCacheClearError, WavCacheStats, cache_key};
 pub use synthesizer::CachedSpeechSynthesizer;

@@ -19,7 +19,8 @@ use pw_application::memory::{
     DEFAULT_MEMORY_LIMIT, EvidenceSource, HybridConsolidator, JapanesePersistentFactGenerator,
     LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, PersistentFactGenerator,
     ProposedAction, RollingSummaryGenerator, SummaryGenerator, has_explicit_pin_intent,
-    is_safe_persistent_content, redact_persistent_content,
+    is_role_preserving_summary, is_safe_persistent_content, merge_rolling_summaries,
+    redact_persistent_content,
 };
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
@@ -88,10 +89,21 @@ fn load_memory_context<M: MemoryStore>(
             tracing::warn!(%error, "summary restore failed; continuing without summary");
             None
         });
+    let summary = summary.and_then(|item| {
+        if is_role_preserving_summary(&item.content) {
+            Some(item.content)
+        } else {
+            tracing::warn!(
+                through_message_id = item.through_message_id,
+                "legacy untyped summary excluded from prompt; stored history will rebuild it"
+            );
+            None
+        }
+    });
     let context = MemoryContext {
         user_settings: None,
         memories: candidates.iter().map(|item| item.content.clone()).collect(),
-        summary: summary.map(|item| item.content),
+        summary,
     }
     .bounded();
     let recalled_ids = candidates
@@ -113,18 +125,20 @@ fn load_memory_context<M: MemoryStore>(
     context
 }
 
-const SUMMARY_RECENT_MESSAGES: usize = 4;
+const SUMMARY_RECENT_MESSAGES: usize = MAX_HISTORY_MESSAGES;
 const SUMMARY_BATCH_MESSAGES: usize = 8;
+const SUMMARY_DRAIN_BATCHES_PER_PASS: usize = 4;
 const SUMMARY_MAX_CHARS: usize = 2_000;
+const SUMMARY_DRAIN_TIME_BUDGET: std::time::Duration = std::time::Duration::from_millis(50);
+const ENRICHMENT_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
+const ENRICHMENT_FOLLOWUP_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
+const ENRICHMENT_JOBS_PER_SLICE: usize = 4;
 
-fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
+fn process_enrichment_actions<C: MemoryClassifier>(
     database_path: &Path,
     job: &EnrichmentJob,
     consolidator: &mut HybridConsolidator<C>,
 ) -> Result<(), String> {
-    let history = SqliteConversationHistory::new(
-        Database::open(database_path).map_err(|error| error.to_string())?,
-    );
     let mut memory =
         SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
     let mut facts = JapanesePersistentFactGenerator;
@@ -156,28 +170,68 @@ fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
             tracing::warn!(%error, "memory action rejected; summary enrichment continues");
         }
     }
-    update_rolling_summary(&history, &mut memory)
+    Ok(())
 }
 
+#[cfg(test)]
+fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
+    database_path: &Path,
+    job: &EnrichmentJob,
+    consolidator: &mut HybridConsolidator<C>,
+) -> Result<bool, String> {
+    let history = SqliteConversationHistory::new(
+        Database::open(database_path).map_err(|error| error.to_string())?,
+    );
+    let mut memory =
+        SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
+    process_enrichment_actions(database_path, job, consolidator)?;
+    drain_rolling_summary_pass(&history, &mut memory)
+}
+
+#[cfg(test)]
 fn update_rolling_summary(
     history: &SqliteConversationHistory,
     memory: &mut SqliteMemoryStore,
-) -> Result<(), String> {
-    let messages = history
-        .list_messages(DEFAULT_CONVERSATION_ID)
-        .map_err(|error| error.to_string())?;
-    let stable_len = messages.len().saturating_sub(SUMMARY_RECENT_MESSAGES);
+) -> Result<bool, String> {
+    update_rolling_summary_until(history, memory, None)
+}
+
+fn update_rolling_summary_until(
+    history: &SqliteConversationHistory,
+    memory: &mut SqliteMemoryStore,
+    cancel: Option<&AtomicBool>,
+) -> Result<bool, String> {
+    let Some(stable_through) = history
+        .summary_stable_through_id(DEFAULT_CONVERSATION_ID, SUMMARY_RECENT_MESSAGES)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
     let existing = memory
         .load_summary(DEFAULT_CONVERSATION_ID)
         .map_err(|error| error.to_string())?;
-    let through = existing.as_ref().map_or(0, |item| item.through_message_id);
-    let pending = messages[..stable_len]
-        .iter()
-        .filter(|item| item.id.is_some_and(|id| id > through))
-        .take(SUMMARY_BATCH_MESSAGES)
-        .collect::<Vec<_>>();
+    let existing_is_role_preserving = existing
+        .as_ref()
+        .is_some_and(|item| is_role_preserving_summary(&item.content));
+    if existing.is_some() && !existing_is_role_preserving {
+        tracing::warn!("legacy untyped summary will be rebuilt from stored role messages");
+    }
+    let through = existing
+        .as_ref()
+        .filter(|_| existing_is_role_preserving)
+        .map_or(0, |item| item.through_message_id);
+    let mut pending = history
+        .list_messages_by_id_page(
+            DEFAULT_CONVERSATION_ID,
+            through,
+            stable_through,
+            SUMMARY_BATCH_MESSAGES.saturating_add(1),
+        )
+        .map_err(|error| error.to_string())?;
+    let remaining = pending.len() > SUMMARY_BATCH_MESSAGES;
+    pending.truncate(SUMMARY_BATCH_MESSAGES);
     if pending.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let prompt_messages = pending
         .iter()
@@ -195,30 +249,66 @@ fn update_rolling_summary(
     let delta = RollingSummaryGenerator
         .summarize(&prompt_messages)
         .map_err(|error| error.to_string())?;
-    let merged = [
-        existing.map(|item| item.content),
-        (!delta.is_empty()).then_some(delta),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(" / ");
-    let bounded = merged
-        .chars()
-        .rev()
-        .take(SUMMARY_MAX_CHARS)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
+    let bounded = merge_rolling_summaries(
+        existing
+            .as_ref()
+            .filter(|_| existing_is_role_preserving)
+            .map(|item| item.content.as_str()),
+        &delta,
+        SUMMARY_MAX_CHARS,
+    )
+    .map_err(|error| error.to_string())?;
     let through = pending
         .last()
         .and_then(|item| item.id)
         .ok_or_else(|| "pending summary message lacks id".to_owned())?;
+    if cancel.is_some_and(|cancel| cancel.load(Ordering::Acquire)) {
+        return Ok(true);
+    }
     memory
         .upsert_summary(DEFAULT_CONVERSATION_ID, &bounded, through, unix_timestamp())
         .map_err(|error| error.to_string())?;
-    Ok(())
+    Ok(remaining)
+}
+
+#[cfg(test)]
+fn drain_rolling_summary_pass(
+    history: &SqliteConversationHistory,
+    memory: &mut SqliteMemoryStore,
+) -> Result<bool, String> {
+    drain_rolling_summary_pass_until(history, memory, None)
+}
+
+fn drain_rolling_summary_pass_until(
+    history: &SqliteConversationHistory,
+    memory: &mut SqliteMemoryStore,
+    cancel: Option<&AtomicBool>,
+) -> Result<bool, String> {
+    let started = std::time::Instant::now();
+    for batch in 0..SUMMARY_DRAIN_BATCHES_PER_PASS {
+        if cancel.is_some_and(|cancel| cancel.load(Ordering::Acquire)) {
+            return Ok(true);
+        }
+        if batch > 0 && started.elapsed() >= SUMMARY_DRAIN_TIME_BUDGET {
+            return Ok(true);
+        }
+        if !update_rolling_summary_until(history, memory, cancel)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn drain_rolling_summary_at_path(
+    database_path: &Path,
+    cancel: Option<&AtomicBool>,
+) -> Result<bool, String> {
+    let history = SqliteConversationHistory::new(
+        Database::open(database_path).map_err(|error| error.to_string())?,
+    );
+    let mut memory =
+        SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
+    drain_rolling_summary_pass_until(&history, &mut memory, cancel)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -231,7 +321,7 @@ struct EnrichmentJob {
 #[allow(clippy::needless_pass_by_value)]
 #[derive(Clone)]
 struct EnrichmentSender {
-    wake: SyncSender<()>,
+    wake: Arc<SyncSender<()>>,
     pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
 }
@@ -278,28 +368,97 @@ impl EnrichmentSender {
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[cfg(test)]
 fn run_enrichment(
     database_path: &Path,
     rx: Receiver<()>,
+    wake: Arc<SyncSender<()>>,
+    pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
+    metrics: Arc<QueueMetrics>,
+    consolidator: HybridConsolidator<Box<dyn MemoryClassifier>>,
+) {
+    run_enrichment_until_cancelled(
+        database_path,
+        rx,
+        wake,
+        pending,
+        metrics,
+        consolidator,
+        Arc::new(AtomicBool::new(false)),
+    );
+}
+
+#[allow(clippy::needless_pass_by_value)]
+fn run_enrichment_until_cancelled(
+    database_path: &Path,
+    rx: Receiver<()>,
+    wake: Arc<SyncSender<()>>,
     pending: Arc<Mutex<Option<Vec<EnrichmentJob>>>>,
     metrics: Arc<QueueMetrics>,
     mut consolidator: HybridConsolidator<Box<dyn MemoryClassifier>>,
+    cancel: Arc<AtomicBool>,
 ) {
-    while rx.recv().is_ok() {
-        let Some(jobs) = pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        else {
-            continue;
+    let mut follow_up_due = None;
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let timeout = follow_up_due.map_or(ENRICHMENT_IDLE_POLL, |deadline: std::time::Instant| {
+            deadline
+                .saturating_duration_since(std::time::Instant::now())
+                .min(ENRICHMENT_IDLE_POLL)
+        });
+        match rx.recv_timeout(timeout) {
+            Ok(()) => {}
+            Err(RecvTimeoutError::Timeout) => {
+                let follow_up_ready =
+                    follow_up_due.is_some_and(|deadline| std::time::Instant::now() >= deadline);
+                if !follow_up_ready {
+                    if Arc::strong_count(&wake) == 1 && follow_up_due.is_none() {
+                        break;
+                    }
+                    continue;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+        if cancel.load(Ordering::Acquire) {
+            break;
+        }
+        let (jobs, jobs_remaining) = {
+            let mut pending = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut jobs = pending.take().unwrap_or_default();
+            let remaining = (jobs.len() > ENRICHMENT_JOBS_PER_SLICE)
+                .then(|| jobs.split_off(ENRICHMENT_JOBS_PER_SLICE));
+            let jobs_remaining = remaining.as_ref().is_some_and(|jobs| !jobs.is_empty());
+            *pending = remaining;
+            (jobs, jobs_remaining)
         };
         for job in jobs {
             metrics.dequeued();
-            if let Err(error) =
-                process_enrichment_job_with_consolidator(database_path, &job, &mut consolidator)
-            {
+            if let Err(error) = process_enrichment_actions(database_path, &job, &mut consolidator) {
                 tracing::warn!(%error, "memory enrichment job failed; worker remains available");
             }
+        }
+        let summary_remaining = if cancel.load(Ordering::Acquire) {
+            false
+        } else {
+            match drain_rolling_summary_at_path(database_path, Some(cancel.as_ref())) {
+                Ok(remaining) => remaining,
+                Err(error) => {
+                    tracing::warn!(%error, "rolling summary follow-up failed; worker remains available");
+                    false
+                }
+            }
+        };
+        if (jobs_remaining || summary_remaining) && !cancel.load(Ordering::Acquire) {
+            follow_up_due = Some(std::time::Instant::now() + ENRICHMENT_FOLLOWUP_DELAY);
+        } else if Arc::strong_count(&wake) == 1 {
+            break;
+        } else {
+            follow_up_due = None;
         }
     }
 }
@@ -374,7 +533,16 @@ fn run_context_worker_loop<M: MemoryStore>(
         match command {
             Command::Submit(text, turn_id, lease) => {
                 context_metrics.enqueued();
+                let context_started = std::time::Instant::now();
+                tracing::info!(turn_id, "chat memory context load started");
                 let context = load_memory_context(&mut memory, &text, turn_id, unix_timestamp());
+                tracing::info!(
+                    turn_id,
+                    elapsed_ms = context_started.elapsed().as_millis(),
+                    memory_count = context.memories.len(),
+                    has_summary = context.summary.is_some(),
+                    "chat memory context ready"
+                );
                 context_metrics.dequeued();
                 // Account for the distinct prepared-conversation queue.
                 // Increment before send so a fast consumer cannot underflow depth.
@@ -437,14 +605,9 @@ fn load_recent_history<H: ConversationHistory>(
     conversation_id: &str,
     limit: usize,
 ) -> Result<Vec<ChatMessage>, pw_application::PortError> {
-    let messages = history.list_messages(conversation_id)?;
+    let messages = history.list_recent_messages_by_id(conversation_id, limit)?;
     Ok(messages
         .into_iter()
-        .rev()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
         .map(|message| {
             ChatMessage::new(
                 match message.role {
@@ -947,6 +1110,7 @@ impl ChatService {
         };
         let database_path = layout.data.join("parallel-world.sqlite3");
         let turn_id = self.reserve_turn_id(&database_path);
+        tracing::info!(turn_id, "chat turn accepted");
         enqueue_submit(&worker.tx, &self.submit_metrics, text, turn_id, lease)
     }
 
@@ -982,10 +1146,11 @@ impl ChatService {
         let (tx, context_rx) = sync_channel::<Command>(SUBMIT_QUEUE_CAPACITY);
         let (conversation_tx, rx) = sync_channel::<Command>(CONVERSATION_QUEUE_CAPACITY);
         let (enrichment_wake, enrichment_rx) = sync_channel::<()>(ENRICHMENT_QUEUE_CAPACITY);
+        let enrichment_wake = Arc::new(enrichment_wake);
         let enrichment_pending = Arc::new(Mutex::new(None));
         let enrichment_cancel = Arc::new(AtomicBool::new(false));
         let enrichment_tx = EnrichmentSender {
-            wake: enrichment_wake,
+            wake: Arc::clone(&enrichment_wake),
             pending: Arc::clone(&enrichment_pending),
             metrics: Arc::clone(&self.enrichment_metrics),
         };
@@ -1044,11 +1209,13 @@ impl ChatService {
             .map_err(|error| format!("failed to spawn memory context worker: {error}"))?;
 
         let enrichment_path = database_path.clone();
+        let enrichment_worker_wake = Arc::clone(&enrichment_wake);
         let enrichment_thread = std::thread::Builder::new()
             .name("pw-memory-enrichment".into())
             .spawn({
                 let metrics = Arc::clone(&self.enrichment_metrics);
                 let classifier_cancel = Arc::clone(&enrichment_cancel);
+                let worker_cancel = Arc::clone(&enrichment_cancel);
                 move || {
                     let enrichment_classifier: Box<dyn MemoryClassifier> =
                         match OpenAiCompatClient::new(llm_config) {
@@ -1061,12 +1228,14 @@ impl ChatService {
                                 Box::new(UnavailableMemoryClassifier)
                             }
                         };
-                    run_enrichment(
+                    run_enrichment_until_cancelled(
                         &enrichment_path,
                         enrichment_rx,
+                        enrichment_worker_wake,
                         enrichment_pending,
                         metrics,
                         HybridConsolidator::new(enrichment_classifier),
+                        worker_cancel,
                     );
                 }
             })
@@ -1087,6 +1256,7 @@ impl ChatService {
                 while let Ok(command) = rx.recv() {
                     conversation_metrics_for_worker.dequeued();
                     let _ = run_prepared_command(command, |text, turn_id, context| {
+                        tracing::info!(turn_id, "chat generation started");
                         orchestrator.recover();
                         orchestrator.submit_user_text_with_context(text, turn_id, context);
                     });
@@ -1288,6 +1458,11 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
     }
 
     fn on_user_message(&self, turn: TurnId, text: &str) {
+        tracing::info!(
+            turn_id = turn.value(),
+            user_chars = text.chars().count(),
+            "chat user message emitted"
+        );
         self.emit_message(turn, ChatRoleDto::User, text);
     }
 
@@ -1330,13 +1505,19 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
     }
 
     fn on_sentence(&self, turn: TurnId, sentence: &str) {
-        self.emit_message(turn, ChatRoleDto::Assistant, sentence);
+        let sentence = redact_persistent_content(sentence);
+        self.emit_message(turn, ChatRoleDto::Assistant, &sentence);
         // Sentence-level read-ahead: synthesis of this sentence runs
         // while earlier ones are still playing (基本設計 8章).
-        self.runtime.enqueue_speech(turn, sentence);
+        self.runtime.enqueue_speech(turn, &sentence);
     }
 
-    fn on_reply_complete(&self, _turn: TurnId, _speech_text: &str) {
+    fn on_reply_complete(&self, turn: TurnId, speech_text: &str) {
+        tracing::info!(
+            turn_id = turn.value(),
+            assistant_chars = speech_text.chars().count(),
+            "chat reply completed"
+        );
         self.emit_health(true);
     }
 
@@ -1564,6 +1745,7 @@ mod tests {
         character_context: Option<crate::commands::character::CharacterControlContext>,
         attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
         fail_emit: bool,
+        messages: Arc<Mutex<Vec<ChatMessageEventDto>>>,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
     }
 
@@ -1590,7 +1772,9 @@ mod tests {
             }
         }
 
-        fn emit_chat_message(&self, _payload: ChatMessageEventDto) {}
+        fn emit_chat_message(&self, payload: ChatMessageEventDto) {
+            self.messages.lock().unwrap().push(payload);
+        }
 
         fn emit_conversation_state(&self, _payload: ConversationStateEventDto) {}
 
@@ -1669,10 +1853,45 @@ mod tests {
                 character_context,
                 attempts,
                 fail_emit,
+                messages: Arc::new(Mutex::new(Vec::new())),
                 speech,
             },
             health: test_health(),
         }
+    }
+
+    #[test]
+    fn assistant_sentence_uses_one_redacted_value_for_ui_and_tts_without_changing_user_echo() {
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let speech = Arc::new(Mutex::new(Vec::new()));
+        let events = TauriConversationEvents {
+            runtime: RecordingConversationRuntime {
+                character_context: None,
+                attempts: Arc::new(Mutex::new(Vec::new())),
+                fail_emit: false,
+                messages: Arc::clone(&messages),
+                speech: Arc::clone(&speech),
+            },
+            health: test_health(),
+        };
+        let turn = TurnTracker::new().begin_turn();
+        let user = "password is hunter2";
+        let assistant = "password is hunter2; opaque=`ABCDEF234567ABCDEF234567`";
+
+        events.on_user_message(turn, user);
+        events.on_sentence(turn, assistant);
+
+        let messages = messages.lock().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, ChatRoleDto::User);
+        assert_eq!(messages[0].text, user);
+        assert_eq!(messages[1].role, ChatRoleDto::Assistant);
+        assert_eq!(
+            messages[1].text,
+            "password is [REDACTED]; opaque=`[REDACTED]`"
+        );
+        let speech = speech.lock().unwrap();
+        assert_eq!(speech.as_slice(), [(turn, messages[1].text.clone())]);
     }
 
     #[test]
@@ -2175,6 +2394,27 @@ mod tests {
         }
     }
 
+    struct SummaryCursorRecordingClassifier {
+        database_path: PathBuf,
+        seen: Arc<Mutex<Vec<Option<i64>>>>,
+    }
+
+    impl MemoryClassifier for SummaryCursorRecordingClassifier {
+        fn classify(
+            &mut self,
+            _: &str,
+            _: &[MemoryCandidate],
+        ) -> Result<ProposedAction, pw_application::PortError> {
+            let store = SqliteMemoryStore::new(Database::open(&self.database_path).unwrap());
+            let through = store
+                .load_summary(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .map(|summary| summary.through_message_id);
+            self.seen.lock().unwrap().push(through);
+            Ok(ProposedAction::Ignore)
+        }
+    }
+
     #[test]
     fn unavailable_classifier_uses_only_exact_match_fallback() {
         let candidate = MemoryCandidate {
@@ -2424,6 +2664,478 @@ mod tests {
     }
 
     #[test]
+    fn legacy_summary_is_retained_in_storage_but_excluded_from_prompt_context() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-legacy-summary-context-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        persist_completed_turn(
+            &mut history,
+            DEFAULT_CONVERSATION_ID,
+            TurnTracker::new().begin_turn(),
+            "stored user message",
+            "stored assistant message",
+        )
+        .unwrap();
+        drop(history);
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        memory
+            .upsert_summary(DEFAULT_CONVERSATION_ID, "legacy / flat", 2, 1)
+            .unwrap();
+
+        let context = load_memory_context(&mut memory, "query", 1, 100);
+
+        assert!(context.summary.is_none());
+        let stored = memory
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.content, "legacy / flat");
+        assert_eq!(stored.through_message_id, 2);
+        drop(memory);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn oversized_summary_entry_keeps_its_role_and_content_when_cursor_advances() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-oversized-summary-entry-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        persist_completed_turn(
+            &mut history,
+            DEFAULT_CONVERSATION_ID,
+            tracker.begin_turn(),
+            "short user message",
+            &"long assistant response ".repeat(200),
+        )
+        .unwrap();
+        for index in 0..10 {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                &format!("recent-user-{index}"),
+                &format!("recent-assistant-{index}"),
+            )
+            .unwrap();
+        }
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+
+        update_rolling_summary(&history, &mut memory).unwrap();
+
+        let summary = memory
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.through_message_id, 2);
+        assert!(summary.content.chars().count() <= SUMMARY_MAX_CHARS);
+        let document: serde_json::Value = serde_json::from_str(&summary.content).unwrap();
+        let entries = document["entries"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["role"], "assistant");
+        assert!(
+            entries[0]["content"]
+                .as_str()
+                .is_some_and(|content| !content.is_empty())
+        );
+
+        drop(memory);
+        drop(history);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_live_sized_summary_rebuilds_by_role_without_overlapping_recent_history() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-legacy-summary-rebuild-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        for index in 0..33 {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                &format!("user-{index}"),
+                &format!("assistant-{index}"),
+            )
+            .unwrap();
+        }
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        memory
+            .upsert_summary(
+                DEFAULT_CONVERSATION_ID,
+                "legacy flat summary with wrong answer 10, 4",
+                62,
+                1,
+            )
+            .unwrap();
+        assert!(
+            load_memory_context(&mut memory, "query", 34, 100)
+                .summary
+                .is_none()
+        );
+        drop(memory);
+        drop(history);
+
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let wake = Arc::new(wake);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake: Arc::clone(&wake),
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let worker_wake = wake;
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                worker_wake,
+                pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(
+                    Box::new(UnavailableMemoryClassifier) as Box<dyn MemoryClassifier>
+                ),
+            );
+        });
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "ordinary query".into(),
+                turn_id: 34,
+            })
+            .unwrap();
+        drop(sender);
+        worker.join().unwrap();
+
+        let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let rebuilt = memory
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(rebuilt.through_message_id, 46);
+        assert!(is_role_preserving_summary(&rebuilt.content));
+        assert!(!rebuilt.content.contains("legacy flat summary"));
+        let document: serde_json::Value = serde_json::from_str(&rebuilt.content).unwrap();
+        assert!(
+            document["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|entry| { matches!(entry["role"].as_str(), Some("user" | "assistant")) })
+        );
+        let messages = history.list_messages(DEFAULT_CONVERSATION_ID).unwrap();
+        let first_recent_id = messages[messages.len() - MAX_HISTORY_MESSAGES].id.unwrap();
+        assert_eq!(first_recent_id, 47);
+        assert_eq!(rebuilt.through_message_id, first_recent_id - 1);
+        drop(memory);
+        drop(history);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn summary_cursor_uses_id_order_when_created_at_moves_backwards() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-summary-id-order-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        history
+            .upsert_conversation(&StoredConversation {
+                id: DEFAULT_CONVERSATION_ID.into(),
+                created_at: 1,
+                updated_at: 200,
+            })
+            .unwrap();
+        for (prefix, count, created_at) in [
+            ("older", 2, 100),
+            ("clock-rollback", 8, 50),
+            ("recent", SUMMARY_RECENT_MESSAGES, 200),
+        ] {
+            for index in 0..count {
+                history
+                    .append_message(&StoredMessage {
+                        id: None,
+                        conversation_id: DEFAULT_CONVERSATION_ID.into(),
+                        turn_id: None,
+                        role: MessageRole::User,
+                        content: format!("{prefix}-{index}"),
+                        created_at,
+                    })
+                    .unwrap();
+            }
+        }
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+
+        assert!(!drain_rolling_summary_pass(&history, &mut memory).unwrap());
+
+        let summary = memory
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.through_message_id, 10);
+        assert!(summary.content.contains("older-0"));
+        assert!(summary.content.contains("clock-rollback-0"));
+        assert!(!summary.content.contains("recent-0"));
+        let recent =
+            load_recent_history(&history, DEFAULT_CONVERSATION_ID, SUMMARY_RECENT_MESSAGES)
+                .unwrap();
+        assert_eq!(recent.len(), SUMMARY_RECENT_MESSAGES);
+        assert!(
+            recent
+                .iter()
+                .all(|message| message.content.starts_with("recent-"))
+        );
+        drop(memory);
+        drop(history);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_summary_pass_processes_at_most_the_configured_batch_budget() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-summary-pass-budget-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        history
+            .upsert_conversation(&StoredConversation {
+                id: DEFAULT_CONVERSATION_ID.into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        let total =
+            SUMMARY_BATCH_MESSAGES * (SUMMARY_DRAIN_BATCHES_PER_PASS + 8) + SUMMARY_RECENT_MESSAGES;
+        for index in 0..total {
+            history
+                .append_message(&StoredMessage {
+                    id: None,
+                    conversation_id: DEFAULT_CONVERSATION_ID.into(),
+                    turn_id: None,
+                    role: MessageRole::User,
+                    content: format!("message-{index}"),
+                    created_at: i64::try_from(index).unwrap(),
+                })
+                .unwrap();
+        }
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+
+        assert!(drain_rolling_summary_pass(&history, &mut memory).unwrap());
+
+        let summary = memory
+            .load_summary(DEFAULT_CONVERSATION_ID)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            summary.through_message_id,
+            i64::try_from(SUMMARY_BATCH_MESSAGES * SUMMARY_DRAIN_BATCHES_PER_PASS).unwrap()
+        );
+        drop(memory);
+        drop(history);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn cancellation_before_summary_upsert_leaves_the_cursor_unchanged() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-summary-cancel-before-upsert-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let mut tracker = TurnTracker::new();
+        for index in 0..11 {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                &format!("user-{index}"),
+                &format!("assistant-{index}"),
+            )
+            .unwrap();
+        }
+        let mut memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        let cancel = AtomicBool::new(true);
+
+        assert!(update_rolling_summary_until(&history, &mut memory, Some(&cancel)).unwrap());
+        assert!(
+            memory
+                .load_summary(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .is_none()
+        );
+
+        drop(memory);
+        drop(history);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn one_external_wake_finishes_a_large_finite_summary_backlog() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-summary-finite-backlog-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        history
+            .upsert_conversation(&StoredConversation {
+                id: DEFAULT_CONVERSATION_ID.into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        let stable_messages = 100;
+        for index in 0..(stable_messages + SUMMARY_RECENT_MESSAGES) {
+            history
+                .append_message(&StoredMessage {
+                    id: None,
+                    conversation_id: DEFAULT_CONVERSATION_ID.into(),
+                    turn_id: None,
+                    role: MessageRole::User,
+                    content: format!("backlog-{index}"),
+                    created_at: i64::try_from(index).unwrap(),
+                })
+                .unwrap();
+        }
+        drop(history);
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let wake = Arc::new(wake);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake: Arc::clone(&wake),
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        let worker_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                wake,
+                pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(
+                    Box::new(UnavailableMemoryClassifier) as Box<dyn MemoryClassifier>
+                ),
+            );
+        });
+
+        sender
+            .replace_latest(EnrichmentJob {
+                user_text: "ordinary query".into(),
+                turn_id: 1,
+            })
+            .unwrap();
+        drop(sender);
+        worker.join().unwrap();
+
+        let memory = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        assert_eq!(
+            memory
+                .load_summary(DEFAULT_CONVERSATION_ID)
+                .unwrap()
+                .unwrap()
+                .through_message_id,
+            i64::try_from(stable_messages).unwrap()
+        );
+        drop(memory);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn pending_jobs_run_before_each_delayed_summary_follow_up() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-summary-job-priority-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        history
+            .upsert_conversation(&StoredConversation {
+                id: DEFAULT_CONVERSATION_ID.into(),
+                created_at: 1,
+                updated_at: 1,
+            })
+            .unwrap();
+        let stable_messages = 100;
+        for index in 0..(stable_messages + SUMMARY_RECENT_MESSAGES) {
+            history
+                .append_message(&StoredMessage {
+                    id: None,
+                    conversation_id: DEFAULT_CONVERSATION_ID.into(),
+                    turn_id: None,
+                    role: MessageRole::User,
+                    content: format!("history-{index}"),
+                    created_at: i64::try_from(index).unwrap(),
+                })
+                .unwrap();
+        }
+        drop(history);
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let wake = Arc::new(wake);
+        let pending = Arc::new(Mutex::new(None));
+        let sender = EnrichmentSender {
+            wake: Arc::clone(&wake),
+            pending: Arc::clone(&pending),
+            metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
+        };
+        for index in 0..5 {
+            sender
+                .replace_latest(EnrichmentJob {
+                    user_text: format!("私は猫{index}が好きです"),
+                    turn_id: u64::try_from(index + 1).unwrap(),
+                })
+                .unwrap();
+        }
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let worker_seen = Arc::clone(&seen);
+        let worker_path = path.clone();
+        let classifier_path = path.clone();
+        let worker = std::thread::spawn(move || {
+            run_enrichment(
+                &worker_path,
+                rx,
+                wake,
+                pending,
+                Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                HybridConsolidator::new(Box::new(SummaryCursorRecordingClassifier {
+                    database_path: classifier_path,
+                    seen: worker_seen,
+                }) as Box<dyn MemoryClassifier>),
+            );
+        });
+        drop(sender);
+        worker.join().unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 5);
+        assert!(
+            seen[..ENRICHMENT_JOBS_PER_SLICE]
+                .iter()
+                .all(Option::is_none)
+        );
+        assert!(seen[ENRICHMENT_JOBS_PER_SLICE].is_some_and(
+            |through| through > 0 && through < i64::try_from(stable_messages).unwrap()
+        ));
+        drop(seen);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn memory_context_prompt_context_excludes_dormant_and_records_only_included_active_memory() {
         let path = std::env::temp_dir().join(format!(
             "pw-context-lifecycle-{}.sqlite3",
@@ -2545,12 +3257,14 @@ mod tests {
             std::env::temp_dir().join(format!("pw-enrichment-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let wake = Arc::new(wake);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::clone(&wake),
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
         };
+        let worker_wake = wake;
         let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let events = PersistentConversationEvents::new_with_enrichment(
             NoopEvents::default(),
@@ -2570,6 +3284,7 @@ mod tests {
             run_enrichment(
                 &worker_path,
                 rx,
+                worker_wake,
                 pending,
                 Arc::new(QueueMetrics::new("test_enrichment", 8)),
                 HybridConsolidator::new(Box::new(ExactFakeClassifier) as Box<dyn MemoryClassifier>),
@@ -2836,7 +3551,7 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let mut tracker = TurnTracker::new();
-        for i in 0..7 {
+        for i in 0..12 {
             persist_completed_turn(
                 &mut history,
                 DEFAULT_CONVERSATION_ID,
@@ -2885,11 +3600,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let mut tracker = TurnTracker::new();
-        for (user, assistant) in [
-            ("APIキー=abc", "token=xyz"),
-            ("安全な質問", "安全な回答"),
-            ("最近1", "最近1回答"),
-        ] {
+        for (user, assistant) in [("APIキー=abc", "token=xyz"), ("安全な質問", "安全な回答")]
+        {
             persist_completed_turn(
                 &mut history,
                 DEFAULT_CONVERSATION_ID,
@@ -2899,19 +3611,32 @@ mod tests {
             )
             .unwrap();
         }
+        for index in 0..9 {
+            persist_completed_turn(
+                &mut history,
+                DEFAULT_CONVERSATION_ID,
+                tracker.begin_turn(),
+                &format!("最近{index}"),
+                &format!("最近{index}回答"),
+            )
+            .unwrap();
+        }
         drop(history);
         let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let wake = Arc::new(wake);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::clone(&wake),
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
         };
+        let worker_wake = wake;
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
             run_enrichment(
                 &worker_path,
                 rx,
+                worker_wake,
                 pending,
                 Arc::new(QueueMetrics::new("test_enrichment", 8)),
                 HybridConsolidator::new(
@@ -2939,6 +3664,7 @@ mod tests {
         assert!(first.content.contains("[REDACTED]"));
         assert!(!first.content.contains("abc"));
         assert!(!first.content.contains("xyz"));
+        assert!(is_role_preserving_summary(&first.content));
         let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         for (user, assistant) in [("追加1", "追加1回答"), ("追加2", "追加2回答")] {
             persist_completed_turn(
@@ -3124,7 +3850,7 @@ mod tests {
         let (wake, rx) = sync_channel(1);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::new(wake),
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
@@ -3171,8 +3897,8 @@ mod tests {
             &mut history,
             DEFAULT_CONVERSATION_ID,
             tracker.begin_turn(),
-            "keep token=\"raw Secret123\", secret value rawValue789; APIキーは japaneseRaw123, next",
-            "Authorization: Basic rawAssistant456;",
+            "keep token=\"raw Secret123\", secret value rawValue789; APIキーは japaneseRaw123, password is hunter2, token abc123, credential=AbCdEf0123456789AbCdEf012345, opaque=[ABCDEF234567ABCDEF234567], next",
+            "Authorization: Basic rawAssistant456; API key my-secret; wrapped=`ZYXWVU765432ZYXWVU765432`",
         )
         .unwrap();
         drop(history);
@@ -3192,6 +3918,12 @@ mod tests {
             assert!(!joined.contains("rawValue789"));
             assert!(!joined.contains("japaneseRaw123"));
             assert!(!joined.contains("rawAssistant456"));
+            assert!(!joined.contains("hunter2"));
+            assert!(!joined.contains("abc123"));
+            assert!(!joined.contains("my-secret"));
+            assert!(!joined.contains("AbCdEf0123456789AbCdEf012345"));
+            assert!(!joined.contains("ABCDEF234567ABCDEF234567"));
+            assert!(!joined.contains("ZYXWVU765432ZYXWVU765432"));
         }
         let _ = std::fs::remove_dir_all(root);
     }
@@ -3321,7 +4053,7 @@ mod tests {
         let (wake, rx) = sync_channel(1);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::new(wake),
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
@@ -3362,7 +4094,7 @@ mod tests {
         let (wake, rx) = sync_channel(1);
         let pending = Arc::new(Mutex::new(None));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::new(wake),
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 1)),
         };
@@ -3390,7 +4122,7 @@ mod tests {
             ENRICHMENT_PENDING_CAPACITY,
         ));
         let sender = EnrichmentSender {
-            wake,
+            wake: Arc::new(wake),
             pending: Arc::new(Mutex::new(None)),
             metrics: Arc::clone(&metrics),
         };

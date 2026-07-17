@@ -33,6 +33,9 @@ impl QueueMetrics {
             })
             .ok();
     }
+    pub fn reset_depth(&self) {
+        self.depth.store(0, Ordering::Relaxed);
+    }
     pub fn dropped(&self) {
         self.dropped.fetch_add(1, Ordering::Relaxed);
     }
@@ -45,7 +48,7 @@ impl QueueMetrics {
     pub fn snapshot(&self) -> QueueMetricsDto {
         QueueMetricsDto {
             name: self.name.to_owned(),
-            depth: self.depth.load(Ordering::Relaxed),
+            depth: self.depth.load(Ordering::Relaxed).min(self.capacity),
             capacity: self.capacity,
             dropped: self.dropped.load(Ordering::Relaxed),
             busy: self.busy.load(Ordering::Relaxed),
@@ -75,5 +78,18 @@ mod tests {
         assert_eq!(snapshot.busy, 1);
         assert_eq!(snapshot.dropped, 1);
         assert_eq!(snapshot.coalesced, 1);
+    }
+
+    #[test]
+    fn queue_depth_is_bounded_in_snapshots_and_can_be_reset_after_worker_loss() {
+        let metrics = QueueMetrics::new("test", 2);
+        metrics.enqueued();
+        metrics.enqueued();
+        metrics.enqueued();
+        assert_eq!(metrics.snapshot().depth, 2);
+
+        metrics.reset_depth();
+
+        assert_eq!(metrics.snapshot().depth, 0);
     }
 }

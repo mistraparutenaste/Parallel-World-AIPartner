@@ -184,15 +184,47 @@ pub fn redact_credentials(input: &str) -> String {
     static JAPANESE: OnceLock<regex::Regex> = OnceLock::new();
     static AUTH: OnceLock<regex::Regex> = OnceLock::new();
     static JSON: OnceLock<regex::Regex> = OnceLock::new();
+    static LABELED: OnceLock<regex::Regex> = OnceLock::new();
     static SPOKEN: OnceLock<regex::Regex> = OnceLock::new();
     let credential = CREDENTIAL.get_or_init(|| regex::Regex::new(r#"(?ix)(api[_ ]?key|token|password|passwd|secret(?:\s+value)?)(\s*[:=]\s*)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("credential regex is constant and valid"));
-    let japanese = JAPANESE.get_or_init(|| regex::Regex::new(r#"(APIキー|トークン|パスワード(?:の値)?|秘密(?:の?値)?|認証(?:情報)?)(\s*(?:[:=：]|は|が)\s*)(?:\"(?:\\.|[^\"])*\"|“[^”]*”|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("Japanese credential regex is constant and valid"));
-    let auth = AUTH.get_or_init(|| regex::Regex::new(r#"(?ix)(authorization\s*[:=]?\s*(?:bearer|basic|digest)?\s*)(?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)"#).expect("authorization regex is constant and valid"));
+    let japanese = JAPANESE.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?x)
+        (?P<label>APIキー|トークン|パスワード(?:の値)?|秘密(?:の?値)?|認証(?:情報)?)
+        (?P<separator>\s*(?:[:=：]|は|が)\s*)
+        (?P<value>\"(?:\\.|[^\"])*\"|“[^”]*”|'(?:\\.|[^'])*'|[^\s,;&}]+)
+    "#,
+        )
+        .expect("Japanese credential regex is constant and valid")
+    });
+    let auth = AUTH.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?ix)
+        (\bauthorization
+            (?:(?:\s*[:=]\s*(?:(?:bearer|basic|digest)\s+)?)
+            |(?:\s+(?:bearer|basic|digest)\s+))
+        )
+        (?:\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)
+    "#,
+        )
+        .expect("authorization regex is constant and valid")
+    });
     let json = JSON.get_or_init(|| {
         regex::Regex::new(
             r#"(?ix)(\"(?:api[_ ]?key|token|password|passwd|secret)\"\s*:\s*\")[^\"]*"#,
         )
         .expect("json credential regex is constant and valid")
+    });
+    let labeled = LABELED.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?ix)
+            (?P<label>\b(?:api(?:_|\s)?key|token|password|passwd|secret(?:\s+value)?)\b)
+            (?P<separator>\s+)
+            (?:(?P<connector>is)(?P<connector_space>\s+))?
+            (?P<value>\"(?:\\.|[^\"])*\"|'(?:\\.|[^'])*'|[^\s,;&}]+)
+            "#,
+        )
+        .expect("labeled credential regex is constant and valid")
     });
     let spoken = SPOKEN.get_or_init(|| {
         regex::Regex::new(
@@ -202,11 +234,65 @@ pub fn redact_credentials(input: &str) -> String {
     });
     let redacted = json.replace_all(input, "$1[REDACTED]");
     let redacted = auth.replace_all(&redacted, "$1[REDACTED]");
-    let redacted = japanese.replace_all(&redacted, "$1$2[REDACTED]");
+    let redacted = japanese.replace_all(&redacted, |captures: &regex::Captures<'_>| {
+        let separator = captures
+            .name("separator")
+            .expect("Japanese credential separator is required")
+            .as_str();
+        let value = captures
+            .name("value")
+            .expect("Japanese credential value is required")
+            .as_str();
+        let explicit_separator = separator
+            .chars()
+            .any(|character| matches!(character, ':' | '=' | '：'));
+        if explicit_separator || is_labeled_credential_value(value) {
+            format!("{}{}[REDACTED]", &captures["label"], separator)
+        } else {
+            captures[0].to_owned()
+        }
+    });
+    let redacted = labeled.replace_all(&redacted, |captures: &regex::Captures<'_>| {
+        let value = captures
+            .name("value")
+            .expect("labeled credential value is required")
+            .as_str();
+        if is_labeled_credential_value(value) {
+            let mut replacement = format!("{}{}", &captures["label"], &captures["separator"]);
+            if let Some(connector) = captures.name("connector") {
+                replacement.push_str(connector.as_str());
+                replacement.push_str(
+                    captures
+                        .name("connector_space")
+                        .expect("connector whitespace is required")
+                        .as_str(),
+                );
+            }
+            replacement.push_str("[REDACTED]");
+            replacement
+        } else {
+            captures[0].to_owned()
+        }
+    });
     let redacted = spoken.replace_all(&redacted, "$1[REDACTED]");
     credential
         .replace_all(&redacted, "$1$2[REDACTED]")
         .into_owned()
+}
+
+fn is_labeled_credential_value(value: &str) -> bool {
+    let quoted = (value.starts_with('"') && value.ends_with('"'))
+        || (value.starts_with('\'') && value.ends_with('\''));
+    let candidate = value.trim_matches(|character: char| {
+        matches!(character, '"' | '\'' | ',' | ';' | ':' | '.' | '!' | '?')
+    });
+    quoted
+        || candidate
+            .chars()
+            .any(|character| character.is_ascii_digit())
+        || candidate
+            .chars()
+            .any(|character| matches!(character, '-' | '_' | '.' | '/'))
 }
 
 /// Diagnostic-only redaction additionally bounds emitted text.
@@ -219,24 +305,71 @@ pub fn redact_diagnostic(input: &str) -> String {
 #[must_use]
 pub fn redact_persistent_content(input: &str) -> String {
     let redacted = redact_credentials(input);
-    redacted
-        .split_whitespace()
-        .map(|part| {
-            let candidate = part.trim_matches(|c: char| matches!(c, ',' | ';' | '"' | '\''));
-            if candidate.chars().count() >= 24
-                && candidate
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-                && candidate.chars().any(|c| c.is_ascii_lowercase())
-                && candidate
-                    .chars()
-                    .any(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-            {
-                "[REDACTED]"
-            } else {
-                part
-            }
+    let mut output = String::with_capacity(redacted.len());
+    let mut part_start = 0;
+    for (index, character) in redacted.char_indices() {
+        if character.is_whitespace() || matches!(character, '=' | ':' | ',' | ';') {
+            push_redacted_persistent_part(&mut output, &redacted[part_start..index]);
+            output.push(character);
+            part_start = index + character.len_utf8();
+        }
+    }
+    push_redacted_persistent_part(&mut output, &redacted[part_start..]);
+    output
+}
+
+fn push_redacted_persistent_part(output: &mut String, part: &str) {
+    let without_prefix = part.trim_start_matches(is_persistent_secret_wrapper);
+    let candidate = without_prefix.trim_end_matches(is_persistent_secret_wrapper);
+    let candidate_start = part.len() - without_prefix.len();
+    let candidate_end = candidate_start + candidate.len();
+    let class_count = u8::from(
+        candidate
+            .chars()
+            .any(|character| character.is_ascii_lowercase()),
+    ) + u8::from(
+        candidate
+            .chars()
+            .any(|character| character.is_ascii_uppercase()),
+    ) + u8::from(
+        candidate
+            .chars()
+            .any(|character| character.is_ascii_digit()),
+    );
+    if candidate.chars().count() >= 24
+        && candidate.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/')
         })
-        .collect::<Vec<_>>()
-        .join(" ")
+        && class_count >= 2
+    {
+        output.push_str(&part[..candidate_start]);
+        output.push_str("[REDACTED]");
+        output.push_str(&part[candidate_end..]);
+    } else {
+        output.push_str(part);
+    }
+}
+
+fn is_persistent_secret_wrapper(character: char) -> bool {
+    matches!(
+        character,
+        '(' | ')'
+            | '['
+            | ']'
+            | '{'
+            | '}'
+            | '<'
+            | '>'
+            | '`'
+            | '"'
+            | '\''
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+    )
 }

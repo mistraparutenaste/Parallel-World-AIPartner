@@ -47,6 +47,8 @@ export type { ChatRoleDto } from './generated/ChatRoleDto';
 export type { ConversationMessageDto } from './generated/ConversationMessageDto';
 export type { ConversationLogPageDto } from './generated/ConversationLogPageDto';
 export type { ConversationHistoryDeletedEventDto } from './generated/ConversationHistoryDeletedEventDto';
+export type { DataUsageDto } from './generated/DataUsageDto';
+export type { DataDeletionResultDto } from './generated/DataDeletionResultDto';
 export type { ConversationStateDto } from './generated/ConversationStateDto';
 export type { ConversationStateEventDto } from './generated/ConversationStateEventDto';
 export type { LlmSettingsDto } from './generated/LlmSettingsDto';

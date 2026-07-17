@@ -75,6 +75,62 @@ fn persistent_redaction_scans_mixed_harmless_text_without_truncating() {
 }
 
 #[test]
+fn persistent_redaction_covers_spoken_credentials_without_redacting_policy_terms() {
+    for (input, expected) in [
+        ("password is hunter2", "password is [REDACTED]"),
+        ("token abc123", "token [REDACTED]"),
+        ("API key my-secret", "API key [REDACTED]"),
+        (
+            "Authorization: Bearer abc",
+            "Authorization: Bearer [REDACTED]",
+        ),
+        ("APIキー: plainsecret", "APIキー: [REDACTED]"),
+        (
+            "credential=AbCdEf0123456789AbCdEf012345",
+            "credential=[REDACTED]",
+        ),
+    ] {
+        assert_eq!(
+            pw_domain::runtime_health::redact_persistent_content(input),
+            expected,
+            "{input}"
+        );
+    }
+
+    for ordinary in [
+        "token budget",
+        "token budget.",
+        "password policy",
+        "authorization policy",
+        "password is required",
+        "パスワードは必須です",
+    ] {
+        assert_eq!(
+            pw_domain::runtime_health::redact_persistent_content(ordinary),
+            ordinary
+        );
+    }
+}
+
+#[test]
+fn persistent_redaction_covers_two_class_opaque_tokens_inside_wrappers() {
+    const SECRET: &str = "ABCDEF234567ABCDEF234567";
+    for input in [
+        "(ABCDEF234567ABCDEF234567)",
+        "[ABCDEF234567ABCDEF234567]",
+        "{ABCDEF234567ABCDEF234567}",
+        "<ABCDEF234567ABCDEF234567>",
+        "`ABCDEF234567ABCDEF234567`",
+        "\"ABCDEF234567ABCDEF234567\"",
+        "'ABCDEF234567ABCDEF234567'",
+    ] {
+        let safe = pw_domain::runtime_health::redact_persistent_content(input);
+        assert!(safe.contains("[REDACTED]"), "{input} => {safe}");
+        assert!(!safe.contains(SECRET), "{input} => {safe}");
+    }
+}
+
+#[test]
 fn stop_is_not_a_failure_class() {
     let failures = [FailureClass::Transient, FailureClass::Permanent];
     assert_eq!(failures.len(), 2);

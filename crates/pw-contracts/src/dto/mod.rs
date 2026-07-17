@@ -7,6 +7,7 @@ mod behavior;
 mod character_cursor;
 mod character_manifest;
 mod chat;
+mod data;
 mod diagnostics;
 mod persona;
 mod runtime_health;
@@ -43,6 +44,7 @@ pub use chat::{
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
     ConversationMessageDto, ConversationStateEventDto, LlmSettingsDto,
 };
+pub use data::{DataDeletionResultDto, DataUsageDto};
 pub use diagnostics::{
     DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto,

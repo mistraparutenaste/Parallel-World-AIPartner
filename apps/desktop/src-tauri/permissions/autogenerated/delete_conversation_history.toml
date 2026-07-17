@@ -1,9 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
 [[permission]]
 identifier = "allow-delete-conversation-history"
-description = "Enables the delete_conversation_history command."
+description = "Enables the delete_conversation_history command without any pre-configured scope."
 commands.allow = ["delete_conversation_history"]
 
 [[permission]]
 identifier = "deny-delete-conversation-history"
-description = "Denies the delete_conversation_history command."
+description = "Denies the delete_conversation_history command without any pre-configured scope."
 commands.deny = ["delete_conversation_history"]

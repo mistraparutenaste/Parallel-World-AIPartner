@@ -195,16 +195,22 @@
           "markdownDescription": "Enables the check_for_updates command without any pre-configured scope."
         },
         {
-          "description": "Enables the delete_conversation_history command.",
+          "description": "Enables the clear_tts_audio_cache command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-delete-conversation-history",
-          "markdownDescription": "Enables the delete_conversation_history command."
+          "const": "allow-clear-tts-audio-cache",
+          "markdownDescription": "Enables the clear_tts_audio_cache command without any pre-configured scope."
         },
         {
-          "description": "Enables the delete_memories command.",
+          "description": "Enables the delete_conversation_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-conversation-history",
+          "markdownDescription": "Enables the delete_conversation_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_memories command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-memories",
-          "markdownDescription": "Enables the delete_memories command."
+          "markdownDescription": "Enables the delete_memories command without any pre-configured scope."
         },
         {
           "description": "Enables the delete_user_dict_word command without any pre-configured scope.",
@@ -219,10 +225,10 @@
           "markdownDescription": "Enables the export_diagnostic_reports command without any pre-configured scope."
         },
         {
-          "description": "Enables the export_user_data command.",
+          "description": "Enables the export_user_data command without any pre-configured scope.",
           "type": "string",
           "const": "allow-export-user-data",
-          "markdownDescription": "Enables the export_user_data command."
+          "markdownDescription": "Enables the export_user_data command without any pre-configured scope."
         },
         {
           "description": "Enables the get_app_status command without any pre-configured scope.",
@@ -265,6 +271,12 @@
           "type": "string",
           "const": "allow-get-dark-expression-safety-settings",
           "markdownDescription": "Enables the get_dark_expression_safety_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_data_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-data-usage",
+          "markdownDescription": "Enables the get_data_usage command without any pre-configured scope."
         },
         {
           "description": "Enables the get_llm_settings command without any pre-configured scope.",
@@ -315,10 +327,10 @@
           "markdownDescription": "Enables the install_update command without any pre-configured scope."
         },
         {
-          "description": "Enables the list_conversation_history command.",
+          "description": "Enables the list_conversation_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-conversation-history",
-          "markdownDescription": "Enables the list_conversation_history command."
+          "markdownDescription": "Enables the list_conversation_history command without any pre-configured scope."
         },
         {
           "description": "Enables the list_conversation_log command without any pre-configured scope.",
@@ -519,16 +531,22 @@
           "markdownDescription": "Denies the check_for_updates command without any pre-configured scope."
         },
         {
-          "description": "Denies the delete_conversation_history command.",
+          "description": "Denies the clear_tts_audio_cache command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-delete-conversation-history",
-          "markdownDescription": "Denies the delete_conversation_history command."
+          "const": "deny-clear-tts-audio-cache",
+          "markdownDescription": "Denies the clear_tts_audio_cache command without any pre-configured scope."
         },
         {
-          "description": "Denies the delete_memories command.",
+          "description": "Denies the delete_conversation_history command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-conversation-history",
+          "markdownDescription": "Denies the delete_conversation_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_memories command without any pre-configured scope.",
           "type": "string",
           "const": "deny-delete-memories",
-          "markdownDescription": "Denies the delete_memories command."
+          "markdownDescription": "Denies the delete_memories command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_user_dict_word command without any pre-configured scope.",
@@ -543,10 +561,10 @@
           "markdownDescription": "Denies the export_diagnostic_reports command without any pre-configured scope."
         },
         {
-          "description": "Denies the export_user_data command.",
+          "description": "Denies the export_user_data command without any pre-configured scope.",
           "type": "string",
           "const": "deny-export-user-data",
-          "markdownDescription": "Denies the export_user_data command."
+          "markdownDescription": "Denies the export_user_data command without any pre-configured scope."
         },
         {
           "description": "Denies the get_app_status command without any pre-configured scope.",
@@ -589,6 +607,12 @@
           "type": "string",
           "const": "deny-get-dark-expression-safety-settings",
           "markdownDescription": "Denies the get_dark_expression_safety_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_data_usage command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-data-usage",
+          "markdownDescription": "Denies the get_data_usage command without any pre-configured scope."
         },
         {
           "description": "Denies the get_llm_settings command without any pre-configured scope.",
@@ -639,10 +663,10 @@
           "markdownDescription": "Denies the install_update command without any pre-configured scope."
         },
         {
-          "description": "Denies the list_conversation_history command.",
+          "description": "Denies the list_conversation_history command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-conversation-history",
-          "markdownDescription": "Denies the list_conversation_history command."
+          "markdownDescription": "Denies the list_conversation_history command without any pre-configured scope."
         },
         {
           "description": "Denies the list_conversation_log command without any pre-configured scope.",

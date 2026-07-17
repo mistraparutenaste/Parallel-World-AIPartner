@@ -121,6 +121,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-cancel-turn",
             "allow-list-conversation-history",
             "allow-list-conversation-log",
+            "allow-get-data-usage",
             "allow-read-technical-log",
             "allow-get-character-manifest",
             "allow-get-character-settings",
@@ -155,6 +156,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-export-user-data",
             "allow-delete-conversation-history",
             "allow-delete-memories",
+            "allow-clear-tts-audio-cache",
             "allow-rearm-runtime-feature",
             "allow-report-frontend-error",
             "allow-list-diagnostic-reports",
@@ -307,6 +309,8 @@ fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
         "allow-set-theme-preference",
         "allow-set-chat-placement",
         "allow-list-conversation-log",
+        "allow-get-data-usage",
+        "allow-clear-tts-audio-cache",
         "allow-read-technical-log",
         "allow-send-chat-message",
         "allow-cancel-turn",
@@ -323,7 +327,10 @@ fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
     }
     assert!(
         chat.iter().all(|permission| {
-            !permission.contains("conversation-log") && !permission.contains("technical-log")
+            !permission.contains("conversation-log")
+                && !permission.contains("technical-log")
+                && !permission.contains("data-usage")
+                && !permission.contains("tts-audio-cache")
         }),
         "read-only log commands leaked into chat"
     );
@@ -334,6 +341,33 @@ fn control_center_commands_are_scoped_to_the_windows_that_use_them() {
             && !permission.contains("conversation-log")
             && !permission.contains("technical-log")
     }));
+}
+
+#[test]
+fn data_export_and_destructive_commands_are_settings_only() {
+    let settings_only = [
+        "allow-export-user-data",
+        "allow-delete-conversation-history",
+        "allow-delete-memories",
+        "allow-clear-tts-audio-cache",
+    ];
+    let (_, settings) = capability_permissions("settings");
+    for permission in settings_only {
+        assert!(
+            settings.iter().any(|item| item == permission),
+            "{permission} missing from settings"
+        );
+    }
+
+    for capability in ["chat", "character"] {
+        let (_, permissions) = capability_permissions(capability);
+        for permission in settings_only {
+            assert!(
+                permissions.iter().all(|item| item != permission),
+                "{permission} leaked into {capability}"
+            );
+        }
+    }
 }
 
 #[test]

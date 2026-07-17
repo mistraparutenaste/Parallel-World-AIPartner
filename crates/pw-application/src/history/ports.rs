@@ -118,6 +118,23 @@ pub trait ConversationHistory: Send {
     /// Returns an adapter error when persistence fails.
     fn list_messages(&self, conversation_id: &str) -> Result<Vec<StoredMessage>, PortError>;
 
+    /// Lists the newest messages by durable message id, returned oldest first.
+    /// The id order matches rolling-summary cursors and is not affected by
+    /// wall-clock rollback.
+    ///
+    /// # Errors
+    /// Returns an adapter error when persistence fails.
+    fn list_recent_messages_by_id(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, PortError> {
+        let mut messages = self.list_messages(conversation_id)?;
+        messages.sort_by_key(|message| message.id.unwrap_or(i64::MAX));
+        let keep_from = messages.len().saturating_sub(limit);
+        Ok(messages.split_off(keep_from))
+    }
+
     /// Deletes a conversation and its dependent history atomically.
     ///
     /// # Errors

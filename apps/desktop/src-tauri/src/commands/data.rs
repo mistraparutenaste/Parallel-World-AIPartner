@@ -1,16 +1,65 @@
-use crate::chat::ChatService;
+use crate::{chat::ChatService, tts::TtsService};
 use pw_application::history::{ConversationHistory, MessageRole};
 use pw_contracts::{
     ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
-    ConversationMessageDto, SCHEMA_VERSION,
+    ConversationMessageDto, DataDeletionResultDto, DataUsageDto, SCHEMA_VERSION,
 };
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{Database, SqliteConversationHistory};
+use pw_tts::{DEFAULT_MAX_ENTRIES, WavCache};
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 const CONVERSATION: &str = "default";
 fn path(layout: &AppDataLayout) -> PathBuf {
     layout.data.join("parallel-world.sqlite3")
+}
+
+fn tts_cache_path(layout: &AppDataLayout) -> PathBuf {
+    layout.cache.join("tts")
+}
+
+fn data_usage_at(
+    database_path: &std::path::Path,
+    cache_path: &std::path::Path,
+) -> Result<DataUsageDto, String> {
+    let database = Database::open(database_path).map_err(|error| error.to_string())?;
+    let (messages, summaries, memories): (i64, i64, i64) = database
+        .connection()
+        .query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM messages),
+               (SELECT COUNT(*) FROM conversation_summaries),
+               (SELECT COUNT(*) FROM memories)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    let cache = WavCache::new(cache_path.to_path_buf(), DEFAULT_MAX_ENTRIES)
+        .stats()
+        .map_err(|error| error.to_string())?;
+    Ok(DataUsageDto {
+        schema_version: SCHEMA_VERSION,
+        conversation_messages: u64::try_from(messages).map_err(|error| error.to_string())?,
+        conversation_summaries: u64::try_from(summaries).map_err(|error| error.to_string())?,
+        long_term_memories: u64::try_from(memories).map_err(|error| error.to_string())?,
+        tts_audio_files: cache.files,
+        tts_audio_bytes: cache.bytes,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Returns current record counts and synthesized audio cache size.
+///
+/// # Errors
+///
+/// Returns an error when `SQLite` or the cache directory cannot be read.
+pub async fn get_data_usage(layout: State<'_, AppDataLayout>) -> Result<DataUsageDto, String> {
+    let database_path = path(&layout);
+    let cache_path = tts_cache_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || data_usage_at(&database_path, &cache_path))
+        .await
+        .map_err(|error| error.to_string())?
 }
 fn validated_export_path(
     source: &std::path::Path,
@@ -186,21 +235,26 @@ pub async fn list_conversation_log(
 ///
 /// # Errors
 /// Returns an error for an empty destination or failed `SQLite` backup.
-pub fn export_user_data(
-    layout: State<'_, AppDataLayout>,
+pub async fn export_user_data<R: Runtime>(
+    app: AppHandle<R>,
     destination: String,
     allow_overwrite: bool,
 ) -> Result<(), String> {
-    if destination.trim().is_empty() {
+    let destination = destination.trim().to_owned();
+    if destination.is_empty() {
         return Err("保存先を指定してください".into());
     }
-    let source = path(&layout);
-    let destination = validated_export_path(
-        &source,
-        std::path::Path::new(destination.trim()),
-        allow_overwrite,
-    )?;
-    export_database(&source, &destination)
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = {
+            let layout = app.state::<AppDataLayout>();
+            path(&layout)
+        };
+        let destination =
+            validated_export_path(&source, std::path::Path::new(&destination), allow_overwrite)?;
+        export_database(&source, &destination)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 fn export_database(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     Database::open(source)
@@ -216,7 +270,7 @@ fn delete_history_core(
         .connection_mut()
         .transaction()
         .map_err(|e| e.to_string())?;
-    tx.execute("DELETE FROM conversations WHERE id=?1", [CONVERSATION])
+    tx.execute("DELETE FROM conversations", [])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(ConversationHistoryDeletedEventDto {
@@ -242,19 +296,24 @@ fn execute_delete_history(
 ///
 /// # Errors
 /// Returns an error when shutdown or the transaction fails.
-pub fn delete_conversation_history<R: Runtime>(
-    app: AppHandle<R>,
-    layout: State<'_, AppDataLayout>,
-    chat: State<'_, ChatService>,
-) -> Result<(), String> {
-    execute_delete_history(
-        |operation| chat.with_exclusive_reset(operation),
-        || delete_history_core(&path(&layout)),
-        |payload| {
-            app.emit("conversation-history-deleted", payload)
-                .map_err(|e| e.to_string())
-        },
-    )
+pub async fn delete_conversation_history<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let database_path = {
+            let layout = app.state::<AppDataLayout>();
+            path(&layout)
+        };
+        let chat = app.state::<ChatService>();
+        execute_delete_history(
+            |operation| chat.with_exclusive_reset(operation),
+            || delete_history_core(&database_path),
+            |payload| {
+                app.emit("conversation-history-deleted", payload)
+                    .map_err(|e| e.to_string())
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
@@ -262,29 +321,83 @@ pub fn delete_conversation_history<R: Runtime>(
 ///
 /// # Errors
 /// Returns an error when shutdown or the transaction fails.
-pub fn delete_memories(
-    layout: State<'_, AppDataLayout>,
-    chat: State<'_, ChatService>,
-) -> Result<(), String> {
-    chat.with_exclusive_reset(|| {
-        let mut db = Database::open(path(&layout)).map_err(|e| e.to_string())?;
-        let tx = db
-            .connection_mut()
-            .transaction()
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM conversation_summaries", [])
-            .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM memories", [])
-            .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())
+pub async fn delete_memories<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<DataDeletionResultDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let database_path = {
+            let layout = app.state::<AppDataLayout>();
+            path(&layout)
+        };
+        let chat = app.state::<ChatService>();
+        chat.with_exclusive_reset(|| delete_memories_core(&database_path))
     })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn delete_memories_core(database_path: &std::path::Path) -> Result<DataDeletionResultDto, String> {
+    let mut database = Database::open(database_path).map_err(|error| error.to_string())?;
+    let transaction = database
+        .connection_mut()
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    let summaries = transaction
+        .execute("DELETE FROM conversation_summaries", [])
+        .map_err(|error| error.to_string())?;
+    let memories = transaction
+        .execute("DELETE FROM memories", [])
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(DataDeletionResultDto {
+        schema_version: SCHEMA_VERSION,
+        deleted_records: (summaries as u64).saturating_add(memories as u64),
+        deleted_files: 0,
+        freed_bytes: 0,
+    })
+}
+
+fn clear_tts_audio_cache_core(
+    cache_path: &std::path::Path,
+) -> Result<DataDeletionResultDto, String> {
+    let deleted = WavCache::new(cache_path.to_path_buf(), DEFAULT_MAX_ENTRIES)
+        .clear()
+        .map_err(|error| error.to_string())?;
+    Ok(DataDeletionResultDto {
+        schema_version: SCHEMA_VERSION,
+        deleted_records: 0,
+        deleted_files: deleted.files,
+        freed_bytes: deleted.bytes,
+    })
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Stops current TTS playback and removes application-owned synthesized WAV files.
+///
+/// # Errors
+///
+/// Returns an error when the worker cannot quiesce or a cache file cannot be deleted.
+pub async fn clear_tts_audio_cache<R: Runtime>(
+    app: AppHandle<R>,
+    layout: State<'_, AppDataLayout>,
+) -> Result<DataDeletionResultDto, String> {
+    let cache_path = tts_cache_path(&layout);
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let tts = worker_app.state::<TtsService>();
+        tts.stop(&worker_app);
+        tts.with_exclusive_reset(|| clear_tts_audio_cache_core(&cache_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        delete_history_core, execute_delete_history, export_database, list_conversation_log_at,
-        validated_export_path,
+        clear_tts_audio_cache_core, data_usage_at, delete_history_core, delete_memories_core,
+        execute_delete_history, export_database, list_conversation_log_at, validated_export_path,
     };
     use pw_application::history::{ConversationHistory, StoredConversation};
     use pw_contracts::{ConversationHistoryDeletedEventDto, SCHEMA_VERSION};
@@ -410,6 +523,177 @@ mod tests {
                 .unwrap(),
             0
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_and_destructive_cores_report_exact_scopes() {
+        let root = std::env::temp_dir().join(format!("pw-data-usage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("data.sqlite3");
+        let cache_path = root.join("tts");
+        std::fs::create_dir_all(&cache_path).unwrap();
+        let database = Database::open(&database_path).unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES('default',1,1)",
+                [],
+            )
+            .unwrap();
+        for (turn, content) in [(1, "user"), (2, "assistant")] {
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO messages(conversation_id,turn_id,role,content,created_at)
+                     VALUES('default',?1,'user',?2,?1)",
+                    (turn, content),
+                )
+                .unwrap();
+        }
+        let through_message_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversation_summaries(conversation_id,content,through_message_id,updated_at)
+                 VALUES('default','summary',?1,2)",
+                [through_message_id],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES('other',1,1)",
+                [],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO messages(conversation_id,turn_id,role,content,created_at)
+                 VALUES('other',1,'user','other',1)",
+                [],
+            )
+            .unwrap();
+        let other_message_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversation_summaries(conversation_id,content,through_message_id,updated_at)
+                 VALUES('other','other summary',?1,2)",
+                [other_message_id],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memories(content,created_at,updated_at) VALUES('memory',1,1)",
+                [],
+            )
+            .unwrap();
+        drop(database);
+        std::fs::write(cache_path.join("one.wav"), b"1234").unwrap();
+        std::fs::write(cache_path.join("two.wav"), b"123456").unwrap();
+        std::fs::write(cache_path.join("keep.txt"), b"keep").unwrap();
+
+        let usage = data_usage_at(&database_path, &cache_path).unwrap();
+        assert_eq!(usage.conversation_messages, 3);
+        assert_eq!(usage.conversation_summaries, 2);
+        assert_eq!(usage.long_term_memories, 1);
+        assert_eq!(usage.tts_audio_files, 2);
+        assert_eq!(usage.tts_audio_bytes, 10);
+
+        let deleted_memory = delete_memories_core(&database_path).unwrap();
+        assert_eq!(deleted_memory.deleted_records, 3);
+        let after_memory = data_usage_at(&database_path, &cache_path).unwrap();
+        assert_eq!(after_memory.conversation_messages, 3);
+        assert_eq!(after_memory.conversation_summaries, 0);
+        assert_eq!(after_memory.long_term_memories, 0);
+
+        let deleted_audio = clear_tts_audio_cache_core(&cache_path).unwrap();
+        assert_eq!(deleted_audio.deleted_files, 2);
+        assert_eq!(deleted_audio.freed_bytes, 10);
+        assert!(cache_path.join("keep.txt").exists());
+        assert_eq!(
+            data_usage_at(&database_path, &cache_path)
+                .unwrap()
+                .tts_audio_files,
+            0
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn usage_and_history_deletion_cover_every_conversation() {
+        let root = std::env::temp_dir().join(format!("pw-data-scope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("data.sqlite3");
+        let database = Database::open(&database_path).unwrap();
+        for conversation in ["default", "other"] {
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO conversations(id,created_at,updated_at) VALUES(?1,1,1)",
+                    [conversation],
+                )
+                .unwrap();
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO messages(conversation_id,turn_id,role,content,created_at)
+                     VALUES(?1,1,'user',?1,1)",
+                    [conversation],
+                )
+                .unwrap();
+            let message_id = database.connection().last_insert_rowid();
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO conversation_summaries(conversation_id,content,through_message_id,updated_at)
+                     VALUES(?1,?1,?2,1)",
+                    rusqlite::params![conversation, message_id],
+                )
+                .unwrap();
+        }
+        drop(database);
+
+        let before = data_usage_at(&database_path, &root.join("missing-tts")).unwrap();
+        assert_eq!(before.conversation_messages, 2);
+        assert_eq!(before.conversation_summaries, 2);
+        delete_history_core(&database_path).unwrap();
+        let after = data_usage_at(&database_path, &root.join("missing-tts")).unwrap();
+        assert_eq!(after.conversation_messages, 0);
+        assert_eq!(after.conversation_summaries, 0);
+        let database = Database::open(&database_path).unwrap();
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM conversations", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        drop(database);
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]

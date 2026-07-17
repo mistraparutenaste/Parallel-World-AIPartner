@@ -12,7 +12,9 @@ const DETACHED_TURN_SEQUENCE_MIGRATION: &str =
 const MEMORY_FTS_MIGRATION: &str = include_str!("../migrations/0005_memory_fts.sql");
 const MEMORY_UNIQUE_MIGRATION: &str = include_str!("../migrations/0006_memory_content_unique.sql");
 const MEMORY_LIFECYCLE_MIGRATION: &str = include_str!("../migrations/0007_memory_lifecycle.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 7;
+const MESSAGES_ID_CURSOR_MIGRATION: &str =
+    include_str!("../migrations/0008_messages_id_cursor.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -126,6 +128,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 7)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 8 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MESSAGES_ID_CURSOR_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 8)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -198,7 +207,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
 
         for table in [
@@ -222,13 +231,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 8).unwrap();
+        connection.pragma_update(None, "user_version", 9).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 8,
-                supported: 7
+                found: 9,
+                supported: 8
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -256,7 +265,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
 
         drop(reopened);
@@ -297,7 +306,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -421,9 +430,47 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            7
+            8
         );
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn v8_upgrade_adds_the_message_id_cursor_index() {
+        let path =
+            std::env::temp_dir().join(format!("pw-v8-id-cursor-{}.sqlite3", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        drop(Database::open(&path).unwrap());
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "DROP INDEX messages_conversation_id_cursor;
+                     PRAGMA user_version=7;",
+                )
+                .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let index_exists: bool = database
+            .connection()
+            .query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM sqlite_master
+                    WHERE type='index' AND name='messages_conversation_id_cursor'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let version: i64 = database
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert!(index_exists);
+        assert_eq!(version, 8);
+        drop(database);
         let _ = std::fs::remove_file(path);
     }
 }

@@ -197,3 +197,82 @@ fn malformed_sse_chunks_are_skipped() {
 
     assert_eq!(output, "有効なデルタ。");
 }
+
+#[test]
+fn eof_after_a_delta_without_done_marker_is_an_error() {
+    let chunk = serde_json::json!({
+        "choices": [{ "delta": { "content": "partial" } }]
+    });
+    let server = spawn_server(200, format!("data: {chunk}\n\n"));
+    let mut client = client_for(server.port);
+    let mut output = String::new();
+
+    let error = client
+        .stream_chat(&messages(), &AtomicBool::new(false), &mut |delta| {
+            output.push_str(delta);
+        })
+        .unwrap_err();
+
+    assert_eq!(output, "partial");
+    assert!(error.to_string().contains("[DONE]"), "{error}");
+}
+
+#[test]
+fn done_marker_finishes_without_waiting_for_transport_eof() {
+    use std::io::{Read, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (done_sent_tx, done_sent_rx) = std::sync::mpsc::channel();
+    let (release_eof_tx, release_eof_rx) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0_u8; 8_192];
+        let _ = stream.read(&mut request);
+
+        let event = sse_body(&["完了。"]);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n{:X}\r\n{}\r\n",
+            event.len(),
+            event
+        )
+        .unwrap();
+        stream.flush().unwrap();
+        done_sent_tx.send(()).unwrap();
+
+        // LM Studio can keep the HTTP stream alive briefly after [DONE].
+        // The client must treat the protocol marker as completion instead
+        // of waiting for the transport-level EOF.
+        let _ = release_eof_rx.recv_timeout(Duration::from_secs(3));
+        let _ = stream.write_all(b"0\r\n\r\n");
+    });
+
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let client_thread = std::thread::spawn(move || {
+        let mut client = client_for(port);
+        let mut output = String::new();
+        let result = client.stream_chat(&messages(), &AtomicBool::new(false), &mut |delta| {
+            output.push_str(delta);
+        });
+        result_tx.send((result, output)).unwrap();
+    });
+    done_sent_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let early_result = result_rx.recv_timeout(Duration::from_secs(1));
+    let returned_before_eof = early_result.is_ok();
+    release_eof_tx.send(()).unwrap();
+    let (result, output) = early_result.unwrap_or_else(|_| {
+        result_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("client did not return after transport EOF")
+    });
+    result.unwrap();
+    client_thread.join().unwrap();
+    server.join().unwrap();
+
+    assert_eq!(output, "完了。");
+    assert!(returned_before_eof, "client waited for transport EOF");
+}

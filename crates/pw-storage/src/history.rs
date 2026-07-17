@@ -26,10 +26,114 @@ impl SqliteConversationHistory {
     pub const fn database(&self) -> &Database {
         &self.database
     }
+
+    /// Returns the greatest message id outside the newest `recent_messages` rows.
+    /// Summary cursors use this id-order boundary so wall-clock rollback cannot
+    /// reorder or skip persisted messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the limit cannot be represented by `SQLite` or the
+    /// boundary query fails.
+    pub fn summary_stable_through_id(
+        &self,
+        conversation_id: &str,
+        recent_messages: usize,
+    ) -> Result<Option<i64>, PortError> {
+        let offset = i64::try_from(recent_messages).map_err(adapter_error)?;
+        self.database
+            .connection()
+            .query_row(
+                "SELECT id FROM messages
+                 WHERE conversation_id = ?1
+                 ORDER BY id DESC LIMIT 1 OFFSET ?2",
+                params![conversation_id, offset],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(adapter_error)
+    }
+
+    /// Loads a bounded id-ordered page for rolling-summary catch-up.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the limit cannot be represented by `SQLite` or the
+    /// page query fails.
+    pub fn list_messages_by_id_page(
+        &self,
+        conversation_id: &str,
+        after_id: i64,
+        through_id: i64,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, PortError> {
+        if limit == 0 || through_id <= after_id {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit).map_err(adapter_error)?;
+        let mut statement = self
+            .database
+            .connection()
+            .prepare(
+                "SELECT id, conversation_id, turn_id, role, content, created_at
+                 FROM messages
+                 WHERE conversation_id = ?1 AND id > ?2 AND id <= ?3
+                 ORDER BY id LIMIT ?4",
+            )
+            .map_err(adapter_error)?;
+        let rows = statement
+            .query_map(
+                params![conversation_id, after_id, through_id, limit],
+                stored_message_from_row,
+            )
+            .map_err(adapter_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(adapter_error)
+    }
 }
 
 fn adapter_error(error: impl std::fmt::Display) -> PortError {
     PortError(format!("conversation history storage failed: {error}"))
+}
+
+fn stored_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredMessage> {
+    let role: String = row.get(3)?;
+    let role = match role.as_str() {
+        "user" => MessageRole::User,
+        "assistant" => MessageRole::Assistant,
+        unknown => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("unknown role: {unknown}"),
+                )),
+            ));
+        }
+    };
+    let turn_id: Option<i64> = row.get(2)?;
+    let turn_id = turn_id
+        .map(|value| {
+            u64::try_from(value).map_err(|_| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Integer,
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!("negative turn_id: {value}"),
+                    )),
+                )
+            })
+        })
+        .transpose()?;
+    Ok(StoredMessage {
+        id: Some(row.get(0)?),
+        conversation_id: row.get(1)?,
+        turn_id,
+        role,
+        content: row.get(4)?,
+        created_at: row.get(5)?,
+    })
 }
 
 impl ConversationHistory for SqliteConversationHistory {
@@ -198,46 +302,36 @@ impl ConversationHistory for SqliteConversationHistory {
             )
             .map_err(adapter_error)?;
         let rows = statement
-            .query_map([conversation_id], |row| {
-                let role: String = row.get(3)?;
-                let role = match role.as_str() {
-                    "user" => MessageRole::User,
-                    "assistant" => MessageRole::Assistant,
-                    unknown => {
-                        return Err(rusqlite::Error::FromSqlConversionFailure(
-                            3,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("unknown role: {unknown}"),
-                            )),
-                        ));
-                    }
-                };
-                let turn_id: Option<i64> = row.get(2)?;
-                let turn_id = turn_id
-                    .map(|value| {
-                        u64::try_from(value).map_err(|_| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                2,
-                                rusqlite::types::Type::Integer,
-                                Box::new(std::io::Error::new(
-                                    std::io::ErrorKind::InvalidData,
-                                    format!("negative turn_id: {value}"),
-                                )),
-                            )
-                        })
-                    })
-                    .transpose()?;
-                Ok(StoredMessage {
-                    id: Some(row.get(0)?),
-                    conversation_id: row.get(1)?,
-                    turn_id,
-                    role,
-                    content: row.get(4)?,
-                    created_at: row.get(5)?,
-                })
-            })
+            .query_map([conversation_id], stored_message_from_row)
+            .map_err(adapter_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(adapter_error)
+    }
+
+    fn list_recent_messages_by_id(
+        &self,
+        conversation_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>, PortError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = i64::try_from(limit).map_err(adapter_error)?;
+        let mut statement = self
+            .database
+            .connection()
+            .prepare(
+                "SELECT id, conversation_id, turn_id, role, content, created_at
+                 FROM (
+                    SELECT id, conversation_id, turn_id, role, content, created_at
+                    FROM messages
+                    WHERE conversation_id = ?1
+                    ORDER BY id DESC LIMIT ?2
+                 )
+                 ORDER BY id",
+            )
+            .map_err(adapter_error)?;
+        let rows = statement
+            .query_map(params![conversation_id, limit], stored_message_from_row)
             .map_err(adapter_error)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(adapter_error)
     }

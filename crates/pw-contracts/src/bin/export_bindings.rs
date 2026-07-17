@@ -16,14 +16,14 @@ use pw_contracts::{
     CharacterSourceStatusDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto, CompanionModeDto,
     ConsentStateDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
     ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DarkExpressionSafetyChangedEventDto, DarkExpressionSafetySettingsDto, DeviceFallbackEventDto,
-    DiagnosticReportDto, ExclusionRuleDto, FailureClassDto, FrequencyPolicyDto,
-    FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto, HealthStatusDto,
-    LlmSettingsDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto, MotionGroupDto,
-    PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto, QuietHoursRuleDto,
-    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SafewordTriggeredEventDto,
-    ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto,
-    StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
+    DarkExpressionSafetyChangedEventDto, DarkExpressionSafetySettingsDto, DataDeletionResultDto,
+    DataUsageDto, DeviceFallbackEventDto, DiagnosticReportDto, ExclusionRuleDto, FailureClassDto,
+    FrequencyPolicyDto, FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto,
+    HealthStatusDto, LlmSettingsDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto,
+    MotionGroupDto, PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto,
+    QuietHoursRuleDto, RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
+    SafewordTriggeredEventDto, ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto,
+    SpeechStopEventDto, StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto,
     TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, UiPreferencesDto, UpdateStateDto,
     UpdateStatusDto, UserDictWordDto,
@@ -99,6 +99,8 @@ fn main() {
     ConversationLogPageDto::export_all(&config).expect("export ConversationLogPageDto bindings");
     ConversationHistoryDeletedEventDto::export_all(&config)
         .expect("export deletion event bindings");
+    DataUsageDto::export_all(&config).expect("export DataUsageDto bindings");
+    DataDeletionResultDto::export_all(&config).expect("export DataDeletionResultDto bindings");
     ConversationStateEventDto::export_all(&config)
         .expect("export ConversationStateEventDto bindings");
     LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");

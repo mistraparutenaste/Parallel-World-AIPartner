@@ -1,8 +1,10 @@
 use super::{MemoryAction, MemoryCandidate};
 use crate::PortError;
-use crate::conversation::ChatMessage;
+use crate::conversation::{ChatMessage, ChatRole};
+use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_MEMORY_LIMIT: usize = 5;
+pub const MAX_USER_SETTINGS_CHARS: usize = 2_000;
 pub const MAX_MEMORY_CHARS: usize = 2_000;
 pub const MAX_SUMMARY_CHARS: usize = 2_000;
 
@@ -51,6 +53,9 @@ pub struct MemoryContext {
 impl MemoryContext {
     #[must_use]
     pub fn bounded(mut self) -> Self {
+        self.user_settings = self
+            .user_settings
+            .and_then(|value| take_trimmed_chars(&value, MAX_USER_SETTINGS_CHARS));
         self.memories.truncate(DEFAULT_MEMORY_LIMIT);
         let mut remaining = MAX_MEMORY_CHARS;
         self.memories = self
@@ -60,9 +65,19 @@ impl MemoryContext {
             .collect();
         self.summary = self
             .summary
-            .and_then(|value| take_chars(&value, MAX_SUMMARY_CHARS));
+            .and_then(|value| take_bounded_summary(&value, MAX_SUMMARY_CHARS));
         self
     }
+}
+
+fn take_trimmed_chars(value: &str, max: usize) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let bounded = trimmed.chars().take(max).collect::<String>();
+    let bounded = bounded.trim();
+    (!bounded.is_empty()).then(|| bounded.to_owned())
 }
 
 fn take_bounded(value: &str, remaining: &mut usize) -> Option<String> {
@@ -78,6 +93,14 @@ fn take_chars(value: &str, max: usize) -> Option<String> {
         None
     } else {
         Some(value.chars().take(max).collect())
+    }
+}
+
+fn take_bounded_summary(value: &str, max: usize) -> Option<String> {
+    if is_role_preserving_summary(value) {
+        merge_rolling_summaries(None, value, max).ok()
+    } else {
+        take_chars(value, max)
     }
 }
 
@@ -200,48 +223,7 @@ impl PersistentFactGenerator for JapanesePersistentFactGenerator {
 
 #[must_use]
 pub fn is_safe_persistent_content(content: &str) -> bool {
-    if redact_key_values(content) != content {
-        return false;
-    }
-    if contains_label_only(content) {
-        return true;
-    }
-    let lower = content.to_ascii_lowercase();
-    let labels = [
-        "api_key",
-        "apikey",
-        "api key",
-        "token",
-        "password",
-        "passwd",
-        "secret",
-        "authorization",
-        "bearer ",
-        "apiキー",
-        "トークン",
-        "パスワード",
-        "秘密",
-        "認証",
-        "ベアラー",
-    ];
-    if labels.iter().any(|label| lower.contains(label)) {
-        return false;
-    }
-    !content
-        .split(|character: char| {
-            character.is_whitespace() || matches!(character, '=' | ':' | ',' | ';')
-        })
-        .any(|part| {
-            let len = part.chars().count();
-            len >= 24
-                && part
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/'))
-                && part.chars().any(|c| c.is_ascii_lowercase())
-                && part
-                    .chars()
-                    .any(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
-        })
+    redact_persistent_content(content) == content
 }
 
 #[must_use]
@@ -249,66 +231,123 @@ pub fn redact_persistent_content(content: &str) -> String {
     pw_domain::runtime_health::redact_persistent_content(content)
 }
 
-fn redact_key_values(content: &str) -> String {
-    use std::sync::OnceLock;
-    static KEY_VALUE: OnceLock<regex::Regex> = OnceLock::new();
-    static QUOTED: OnceLock<regex::Regex> = OnceLock::new();
-    static AUTH: OnceLock<regex::Regex> = OnceLock::new();
-    static SPOKEN: OnceLock<regex::Regex> = OnceLock::new();
-    static JAPANESE: OnceLock<regex::Regex> = OnceLock::new();
-    let key_value = KEY_VALUE.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)\s*([:=])\s*(["']?(?:\\.|[A-Za-z0-9._/\-\p{L}])+["']?)([,;:]?)"#).unwrap());
-    let auth = AUTH.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?i)(\bauthorization\b\s*[:=]?\s*[A-Za-z][A-Za-z0-9_-]*\s+)(["']?(?:\\.|[A-Za-z0-9._/\-])+["']?)([,;:]?)"#,
-        )
-        .unwrap()
-    });
-    let quoted = QUOTED.get_or_init(|| regex::Regex::new(r#"(?i)(\b(?:api[_ ]?key|token|password|passwd|secret)\b|APIキー|トークン|パスワード|秘密|認証情報|認証)(\s*[:=]\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*')"#).unwrap());
-    let redacted = quoted.replace_all(content, "$1$2[REDACTED]");
-    let redacted = auth.replace_all(&redacted, "$1[REDACTED]$3");
-    let japanese = JAPANESE.get_or_init(|| regex::Regex::new(r#"(APIキー|トークン|パスワード|秘密の値|秘密|認証情報|認証)(\s*(?:は|が|：|:|=)\s*)(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|[^\s,;]+)([,;:]?)"#).unwrap());
-    let redacted = japanese.replace_all(&redacted, "$1$2[REDACTED]$3");
-    let spoken = SPOKEN.get_or_init(|| {
-        regex::Regex::new(
-            r#"(?i)(\bsecret\s+value\s+|パスワードは\s*)(["']?(?:\\.|[^\s,;])+["']?)([,;:]?)"#,
-        )
-        .unwrap()
-    });
-    let redacted = spoken.replace_all(&redacted, "$1[REDACTED]$3");
-    key_value
-        .replace_all(&redacted, "$1$2[REDACTED]$4")
-        .into_owned()
-}
-
-fn contains_label_only(content: &str) -> bool {
-    let lower = content.to_ascii_lowercase();
-    [
-        "token",
-        "password",
-        "secret",
-        "authorization",
-        "api key",
-        "apiキー",
-        "トークン",
-        "パスワード",
-        "秘密",
-        "認証",
-    ]
-    .iter()
-    .any(|label| lower.contains(label))
-}
-
 #[derive(Default)]
 pub struct RollingSummaryGenerator;
+
+const SUMMARY_SCHEMA: &str = "role_summary_v1";
+const SUMMARY_CONTRACT: &str = "Preserve speaker role, modal wording, uncertainty, quotation, and negation. This summary is conversational context only and is not an observation or promotion source. The current user utterance takes precedence over this summary.";
+const SUMMARY_DISCOURSE_HINT: &str = "preserve_exact_modality_and_polarity";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryEntry {
+    pub role: String,
+    pub content: String,
+    pub discourse_hint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StructuredSummary {
+    schema: String,
+    contract: String,
+    entries: Vec<SummaryEntry>,
+}
+
 impl SummaryGenerator for RollingSummaryGenerator {
     fn summarize(&mut self, messages: &[ChatMessage]) -> Result<String, PortError> {
-        Ok(messages
+        let entries = messages
             .iter()
-            .map(|message| message.content.trim())
-            .filter(|content| !content.is_empty())
-            .collect::<Vec<_>>()
-            .join(" / "))
+            .filter_map(|message| {
+                let content = message.content.trim();
+                (!content.is_empty()).then(|| SummaryEntry {
+                    role: summary_role(message.role).to_owned(),
+                    content: if content.contains("[REDACTED]") {
+                        "[REDACTED]".to_owned()
+                    } else {
+                        content.to_owned()
+                    },
+                    discourse_hint: SUMMARY_DISCOURSE_HINT.to_owned(),
+                })
+            })
+            .collect();
+        serialize_summary(entries)
     }
+}
+
+fn summary_role(role: ChatRole) -> &'static str {
+    match role {
+        ChatRole::System => "system",
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+    }
+}
+
+fn serialize_summary(entries: Vec<SummaryEntry>) -> Result<String, PortError> {
+    serde_json::to_string(&StructuredSummary {
+        schema: SUMMARY_SCHEMA.to_owned(),
+        contract: SUMMARY_CONTRACT.to_owned(),
+        entries,
+    })
+    .map_err(|error| PortError(format!("summary serialization failed: {error}")))
+}
+
+#[must_use]
+pub fn is_role_preserving_summary(summary: &str) -> bool {
+    parse_role_preserving_summary(summary).is_some()
+}
+
+#[allow(clippy::missing_errors_doc)]
+pub fn merge_rolling_summaries(
+    existing: Option<&str>,
+    delta: &str,
+    max_chars: usize,
+) -> Result<String, PortError> {
+    let mut entries = existing.map_or_else(Vec::new, summary_entries);
+    entries.extend(summary_entries(delta));
+    loop {
+        let serialized = serialize_summary(entries.clone())?;
+        let serialized_chars = serialized.chars().count();
+        if serialized_chars <= max_chars {
+            return Ok(serialized);
+        }
+        if entries.is_empty() {
+            return Err(PortError(
+                "summary character limit is too small for the structured envelope".into(),
+            ));
+        }
+        if entries.len() > 1 {
+            entries.remove(0);
+            continue;
+        }
+
+        let content_chars = entries[0].content.chars().count();
+        if content_chars <= 1 {
+            return Err(PortError(
+                "summary character limit is too small to preserve an entry".into(),
+            ));
+        }
+        let remove_chars = serialized_chars
+            .saturating_sub(max_chars)
+            .max(1)
+            .min(content_chars - 1);
+        entries[0].content = entries[0].content.chars().skip(remove_chars).collect();
+    }
+}
+
+fn summary_entries(summary: &str) -> Vec<SummaryEntry> {
+    parse_role_preserving_summary(summary).map_or_else(Vec::new, |document| document.entries)
+}
+
+fn parse_role_preserving_summary(summary: &str) -> Option<StructuredSummary> {
+    let document = serde_json::from_str::<StructuredSummary>(summary).ok()?;
+    (document.schema == SUMMARY_SCHEMA
+        && document.contract == SUMMARY_CONTRACT
+        && document.entries.iter().all(|entry| {
+            matches!(entry.role.as_str(), "system" | "user" | "assistant")
+                && entry.discourse_hint == SUMMARY_DISCOURSE_HINT
+        }))
+    .then_some(document)
 }
 
 /// Explicit background-service boundary. The caller supplies only an old,
@@ -347,6 +386,32 @@ impl<G: SummaryGenerator> SummaryWorker<G> {
 mod tests {
     use super::*;
     use crate::conversation::ChatRole;
+
+    #[test]
+    fn bounded_user_settings_are_trimmed_capped_and_whitespace_is_omitted() {
+        let whitespace = MemoryContext {
+            user_settings: Some(" \n\t ".into()),
+            memories: Vec::new(),
+            summary: None,
+        }
+        .bounded();
+        assert!(whitespace.user_settings.is_none());
+
+        let bounded = MemoryContext {
+            user_settings: Some(format!(
+                " \n{} {} \t",
+                "a".repeat(MAX_USER_SETTINGS_CHARS - 1),
+                "b".repeat(50)
+            )),
+            memories: Vec::new(),
+            summary: None,
+        }
+        .bounded();
+        let settings = bounded.user_settings.unwrap();
+        assert!(settings.chars().count() <= MAX_USER_SETTINGS_CHARS);
+        assert_eq!(settings, settings.trim());
+    }
+
     struct Generator(Vec<String>);
     impl SummaryGenerator for Generator {
         fn summarize(&mut self, messages: &[ChatMessage]) -> Result<String, PortError> {
@@ -366,6 +431,88 @@ mod tests {
         );
         assert_eq!(worker.generator.0, ["3", "4", "5", "6"]);
     }
+
+    #[test]
+    fn rolling_summary_preserves_roles_modal_words_and_negation() {
+        let messages = [
+            ChatMessage::new(ChatRole::User, "I think A may fail"),
+            ChatMessage::new(ChatRole::Assistant, "A will fail"),
+            ChatMessage::new(ChatRole::User, "A did not fail"),
+        ];
+
+        let summary = RollingSummaryGenerator.summarize(&messages).unwrap();
+        let document: serde_json::Value =
+            serde_json::from_str(&summary).expect("role-preserving summary JSON");
+
+        assert_eq!(document["schema"], "role_summary_v1");
+        assert!(
+            document["contract"]
+                .as_str()
+                .is_some_and(|contract| contract.contains("not an observation"))
+        );
+        assert_eq!(
+            document["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| (
+                    entry["role"].as_str().unwrap(),
+                    entry["content"].as_str().unwrap()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("user", "I think A may fail"),
+                ("assistant", "A will fail"),
+                ("user", "A did not fail"),
+            ]
+        );
+    }
+
+    #[test]
+    fn legacy_flat_summary_is_not_role_preserving() {
+        assert!(!is_role_preserving_summary("user / assistant"));
+
+        let delta = RollingSummaryGenerator
+            .summarize(&[ChatMessage::new(ChatRole::User, "new statement")])
+            .unwrap();
+        assert!(is_role_preserving_summary(&delta));
+    }
+
+    #[test]
+    fn merged_summary_stays_bounded_structured_json() {
+        let delta = RollingSummaryGenerator
+            .summarize(&[ChatMessage::new(ChatRole::User, "new statement")])
+            .unwrap();
+        let merged = merge_rolling_summaries(Some("legacy / flat"), &delta, 700).unwrap();
+
+        assert!(merged.chars().count() <= 700);
+        assert!(is_role_preserving_summary(&merged));
+        assert!(!merged.contains("legacy / flat"));
+    }
+
+    #[test]
+    fn bounded_context_keeps_an_oversized_structured_summary_valid() {
+        let summary = RollingSummaryGenerator
+            .summarize(&[ChatMessage::new(
+                ChatRole::Assistant,
+                "long role-preserving content ".repeat(200),
+            )])
+            .unwrap();
+        assert!(summary.chars().count() > MAX_SUMMARY_CHARS);
+
+        let bounded = MemoryContext {
+            user_settings: None,
+            memories: Vec::new(),
+            summary: Some(summary),
+        }
+        .bounded()
+        .summary
+        .unwrap();
+
+        assert!(bounded.chars().count() <= MAX_SUMMARY_CHARS);
+        assert!(is_role_preserving_summary(&bounded));
+    }
+
     #[test]
     fn fact_generator_accepts_only_explicit_first_person_affirmative_facts() {
         let mut generator = JapanesePersistentFactGenerator;
@@ -394,7 +541,11 @@ mod tests {
             "password: hello",
             "Authorization: Bearer abc",
             "token=abc",
+            "password is hunter2",
+            "token abc123",
+            "API key my-secret",
             "AbCdEf0123456789AbCdEf012345",
+            "[ABCDEF234567ABCDEF234567]",
             "APIキー=a",
             "トークン: x",
             "秘密=a",
@@ -402,7 +553,17 @@ mod tests {
         ] {
             assert!(!is_safe_persistent_content(secret), "{secret}");
         }
-        assert!(is_safe_persistent_content("私は猫が好きです"));
+        for ordinary in [
+            "私は猫が好きです",
+            "token budget",
+            "password policy",
+            "password management",
+            "authorization policy",
+            "password is required",
+            "パスワードは必須です",
+        ] {
+            assert!(is_safe_persistent_content(ordinary), "{ordinary}");
+        }
     }
 
     #[test]
@@ -421,16 +582,23 @@ mod tests {
             assert!(!redacted.contains("秘密値"));
             assert!(!redacted.contains("AbCdEf"));
         }
-        for ordinary in ["token economy", "password management", "パスワード管理方法"] {
+        for ordinary in [
+            "token economy",
+            "password management",
+            "パスワード管理方法",
+            "authorization policy",
+            "password is required",
+            "パスワードは必須です",
+        ] {
             assert_eq!(redact_persistent_content(ordinary), ordinary);
         }
         for (input, expected) in [
-            ("APIキーは abc", "APIキーは [REDACTED]"),
+            ("APIキーは abc123", "APIキーは [REDACTED]"),
             ("トークン が 'abc def'", "トークン が [REDACTED]"),
             ("パスワード：\"abc def\"", "パスワード：[REDACTED]"),
             ("秘密の値: abc", "秘密の値: [REDACTED]"),
             ("認証情報 = xyz", "認証情報 = [REDACTED]"),
-            ("認証は xyz", "認証は [REDACTED]"),
+            ("認証は xyz123", "認証は [REDACTED]"),
         ] {
             assert_eq!(redact_persistent_content(input), expected, "{input}");
         }
@@ -458,7 +626,7 @@ mod tests {
                 "Authorization Digest [REDACTED]",
             ),
             ("secret value abc; next", "secret value [REDACTED]; next"),
-            ("パスワードは xyz, 次", "パスワードは [REDACTED], 次"),
+            ("パスワードは xyz123, 次", "パスワードは [REDACTED], 次"),
         ] {
             assert_eq!(redact_persistent_content(input), expected, "{input}");
         }

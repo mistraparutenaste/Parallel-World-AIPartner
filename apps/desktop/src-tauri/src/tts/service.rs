@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::diagnostics::QueueMetrics;
 use pw_application::recovery::{
@@ -34,10 +34,92 @@ pub const STATE_EVENT: &str = "tts-state";
 
 const CHARACTER_WINDOW: &str = "character";
 const TTS_QUEUE_CAPACITY: usize = 8;
-const ADAPTER_TIMEOUT: Duration = Duration::from_secs(5);
+// AivisSpeech can take more than five seconds for a long unsplit sentence,
+// especially during model warm-up. Keep synthesis finite without mistaking a
+// slow but healthy inference for an adapter failure.
+const ADAPTER_TIMEOUT: Duration = Duration::from_secs(30);
+// Queue admission has a separate, shorter bound so one stalled adapter cannot
+// hold the conversation producer for the full synthesis timeout.
+const BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(5);
+const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 enum Command {
     Sentence { turn: TurnId, text: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QueueAdmission {
+    Immediate,
+    Backpressured,
+    Cancelled,
+}
+
+fn enqueue_command(
+    tx: &SyncSender<Command>,
+    command: Command,
+    invalid_up_to: &AtomicU64,
+    timeout: Duration,
+) -> Result<QueueAdmission, TrySendError<Command>> {
+    enqueue_command_with_backpressure_observer(tx, command, invalid_up_to, timeout, || {})
+}
+
+fn enqueue_command_with_backpressure_observer(
+    tx: &SyncSender<Command>,
+    mut command: Command,
+    invalid_up_to: &AtomicU64,
+    timeout: Duration,
+    mut on_backpressure: impl FnMut(),
+) -> Result<QueueAdmission, TrySendError<Command>> {
+    let started = Instant::now();
+    let mut backpressured = false;
+    loop {
+        let turn = match &command {
+            Command::Sentence { turn, .. } => *turn,
+        };
+        if turn.value() <= invalid_up_to.load(Ordering::SeqCst) {
+            return Ok(QueueAdmission::Cancelled);
+        }
+        match tx.try_send(command) {
+            Ok(()) => {
+                return Ok(if backpressured {
+                    QueueAdmission::Backpressured
+                } else {
+                    QueueAdmission::Immediate
+                });
+            }
+            Err(TrySendError::Full(returned)) => {
+                command = returned;
+                if !backpressured {
+                    backpressured = true;
+                    on_backpressure();
+                }
+                let remaining = timeout.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    return Err(TrySendError::Full(command));
+                }
+                std::thread::sleep(remaining.min(BACKPRESSURE_POLL_INTERVAL));
+            }
+            Err(TrySendError::Disconnected(returned)) => {
+                return Err(TrySendError::Disconnected(returned));
+            }
+        }
+    }
+}
+
+fn emit_audio_if_current(
+    event_gate: &Mutex<()>,
+    invalid_up_to: &AtomicU64,
+    turn: TurnId,
+    emit: impl FnOnce(),
+) -> bool {
+    let _guard = event_gate
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if turn.value() <= invalid_up_to.load(Ordering::SeqCst) {
+        return false;
+    }
+    emit();
+    true
 }
 
 struct Worker {
@@ -52,7 +134,7 @@ impl Worker {
         self.cancel.store(true, Ordering::SeqCst);
         drop(self.tx);
         if let Some(thread) = self.thread.take() {
-            // The adapter has a finite total timeout. Never detach a stale
+            // Each adapter request has a finite timeout. Never detach a stale
             // synthesis worker that could emit audio after its replacement.
             let _ = thread.join();
         }
@@ -61,14 +143,15 @@ impl Worker {
 
 /// Managed state: at most one synthesis worker.
 ///
-/// Stop must not wait behind queued synthesis, so the invalidation
-/// watermark is shared with the worker: `stop()` raises it and emits
-/// `speech-stop` from the calling thread; the worker drops queued
-/// sentences at or below the watermark before synthesizing them.
+/// Latest-turn registration is atomic. Stop invalidation never waits for the
+/// worker lock, so a full producer queue can be cancelled immediately. The
+/// invalidation watermark is shared with the worker, which drops queued
+/// sentences at or below it before synthesizing them.
 pub struct TtsService {
     worker: Mutex<Option<Worker>>,
     latest_turn: AtomicU64,
     invalid_up_to: Arc<AtomicU64>,
+    event_gate: Arc<Mutex<()>>,
     dropped_sentences: AtomicU64,
     text_only_turn: AtomicU64,
     health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
@@ -81,6 +164,7 @@ impl Default for TtsService {
             worker: Mutex::new(None),
             latest_turn: AtomicU64::new(0),
             invalid_up_to: Arc::new(AtomicU64::new(0)),
+            event_gate: Arc::new(Mutex::new(())),
             dropped_sentences: AtomicU64::new(0),
             text_only_turn: AtomicU64::new(0),
             health: Arc::new(Mutex::new(FeatureHealthSupervisor::new(
@@ -130,6 +214,71 @@ impl TtsService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    #[cfg(test)]
+    fn register_turn_locked(&self, guard: &MutexGuard<'_, Option<Worker>>, turn: TurnId) -> bool {
+        self.register_turn_locked_with(guard, turn, || {})
+    }
+
+    fn register_turn_locked_with(
+        &self,
+        _guard: &MutexGuard<'_, Option<Worker>>,
+        turn: TurnId,
+        emit_stop: impl FnOnce(),
+    ) -> bool {
+        let _event_guard = self
+            .event_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous_turn = self.latest_turn.fetch_max(turn.value(), Ordering::SeqCst);
+        if previous_turn != 0 && previous_turn < turn.value() {
+            self.invalid_up_to
+                .fetch_max(previous_turn, Ordering::SeqCst);
+            emit_stop();
+            return true;
+        }
+        false
+    }
+
+    fn stop_core(&self) {
+        // This load is stop's linearization point. Turns registered before it
+        // are invalidated; a newer turn registered after it is subsequent work.
+        let latest = self.latest_turn.load(Ordering::SeqCst);
+        self.invalid_up_to.fetch_max(latest, Ordering::SeqCst);
+    }
+
+    fn stop_with(&self, emit_stop: impl FnOnce()) {
+        let _guard = self
+            .event_gate
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.stop_core();
+        emit_stop();
+    }
+
+    /// Stops the worker and runs one destructive cache operation while new
+    /// synthesis submissions are excluded by the worker lock.
+    ///
+    /// # Errors
+    ///
+    /// Returns the operation's error.
+    pub(crate) fn with_exclusive_reset<T>(
+        &self,
+        operation: impl FnOnce() -> Result<T, String>,
+    ) -> Result<T, String> {
+        // Cancel a producer waiting on a full queue before waiting for the lock
+        // that producer currently owns.
+        self.stop_core();
+        let mut guard = self.lock();
+        // Include any registration that won the worker lock immediately before
+        // this reset acquired it.
+        self.stop_core();
+        if let Some(worker) = guard.take() {
+            worker.shutdown();
+        }
+        self.queue_metrics.reset_depth();
+        operation()
+    }
+
     /// Queues one sentence for synthesis. No-op while TTS is disabled;
     /// engine failures degrade to text-only via `tts-state`.
     pub fn enqueue<R: Runtime>(&self, app: &AppHandle<R>, turn: TurnId, text: &str) {
@@ -152,7 +301,12 @@ impl TtsService {
             );
             return;
         }
-        self.latest_turn.store(turn.value(), Ordering::Relaxed);
+        let wanted = fingerprint(&settings);
+        let mut guard = self.lock();
+        self.register_turn_locked_with(&guard, turn, || emit_stop(app));
+        if turn.value() <= self.invalid_up_to.load(Ordering::SeqCst) {
+            return;
+        }
         let text_only = self.text_only_turn.load(Ordering::Relaxed);
         if text_only == turn.value() {
             return;
@@ -166,8 +320,6 @@ impl TtsService {
             );
         }
 
-        let wanted = fingerprint(&settings);
-        let mut guard = self.lock();
         let restart = match guard.as_ref() {
             Some(worker) => worker.settings_fingerprint != wanted,
             None => true,
@@ -175,6 +327,7 @@ impl TtsService {
         if restart {
             if let Some(worker) = guard.take() {
                 worker.shutdown();
+                self.queue_metrics.reset_depth();
             }
             match self.start_worker(app.clone(), &settings) {
                 Ok(worker) => *guard = Some(worker),
@@ -185,40 +338,67 @@ impl TtsService {
                 }
             }
         }
-        if let Some(worker) = guard.as_ref() {
+        let disconnected = guard.as_ref().is_some_and(|worker| {
             self.queue_metrics.enqueued();
-            if let Err(error) = worker.tx.try_send(Command::Sentence {
-                turn,
-                text: text.to_owned(),
-            }) {
+            let admission = enqueue_command(
+                &worker.tx,
+                Command::Sentence {
+                    turn,
+                    text: text.to_owned(),
+                },
+                &self.invalid_up_to,
+                BACKPRESSURE_TIMEOUT,
+            );
+            self.handle_queue_admission(app, turn, admission)
+        });
+        if disconnected {
+            if let Some(worker) = guard.take() {
+                worker.shutdown();
+            }
+            self.queue_metrics.reset_depth();
+        }
+    }
+
+    fn handle_queue_admission<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        turn: TurnId,
+        admission: Result<QueueAdmission, TrySendError<Command>>,
+    ) -> bool {
+        match admission {
+            Ok(QueueAdmission::Immediate) => false,
+            Ok(QueueAdmission::Backpressured) => {
+                self.queue_metrics.busy();
+                false
+            }
+            Ok(QueueAdmission::Cancelled) => {
+                self.queue_metrics.dequeued();
+                false
+            }
+            Err(error) => {
                 let adapter_failure = enqueue_error_is_adapter_failure(&error);
                 self.queue_metrics.dequeued();
-                match error {
+                let disconnected = match error {
                     TrySendError::Full(_) => {
                         self.queue_metrics.busy();
                         self.queue_metrics.dropped();
                         self.dropped_sentences.fetch_add(1, Ordering::Relaxed);
-                        self.invalid_up_to
-                            .fetch_max(turn.value(), Ordering::Relaxed);
-                        if self.text_only_turn.swap(turn.value(), Ordering::Relaxed) != turn.value()
-                        {
-                            emit_state(
-                                app,
-                                false,
-                                Some(
-                                    "tts queue is busy; continuing this turn text-only".to_owned(),
-                                ),
-                            );
-                        }
+                        tracing::warn!(
+                            turn = turn.value(),
+                            "tts queue remained full; skipped one sentence without invalidating the turn"
+                        );
+                        false
                     }
                     TrySendError::Disconnected(_) => {
                         self.queue_metrics.dropped();
                         emit_state(app, false, Some("tts worker is not available".to_owned()));
+                        true
                     }
-                }
+                };
                 if adapter_failure {
                     emit_tts_health(app, &self.health, false);
                 }
+                disconnected
             }
         }
     }
@@ -226,9 +406,7 @@ impl TtsService {
     /// Stops playback immediately: invalidates every queued sentence
     /// up to the latest turn and tells the character window to halt.
     pub fn stop<R: Runtime>(&self, app: &AppHandle<R>) {
-        let latest = self.latest_turn.load(Ordering::Relaxed);
-        self.invalid_up_to.fetch_max(latest, Ordering::Relaxed);
-        emit_stop(app);
+        self.stop_with(|| emit_stop(app));
     }
 
     fn start_worker<R: Runtime>(
@@ -253,6 +431,7 @@ impl TtsService {
             },
         );
         let invalid = Arc::clone(&self.invalid_up_to);
+        let event_gate = Arc::clone(&self.event_gate);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
         let (tx, rx) = sync_channel::<Command>(TTS_QUEUE_CAPACITY);
@@ -260,6 +439,7 @@ impl TtsService {
             app,
             health: Arc::clone(&self.health),
             invalid: Arc::clone(&invalid),
+            event_gate,
         };
         let queue_metrics = Arc::clone(&self.queue_metrics);
 
@@ -274,7 +454,7 @@ impl TtsService {
                     }
                     match command {
                         Command::Sentence { turn, text } => {
-                            if turn.value() <= invalid.load(Ordering::Relaxed) {
+                            if turn.value() <= invalid.load(Ordering::SeqCst) {
                                 continue;
                             }
                             queue.push_sentence(turn, &text);
@@ -348,27 +528,27 @@ struct TauriSpeechAudioSink<R: Runtime> {
     app: AppHandle<R>,
     health: Arc<Mutex<FeatureHealthSupervisor<SystemClock, TimeJitter>>>,
     invalid: Arc<AtomicU64>,
+    event_gate: Arc<Mutex<()>>,
 }
 
 impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
     fn on_audio(&self, turn: TurnId, seq: u32, wav_path: &Path, text: &str) {
-        if turn.value() <= self.invalid.load(Ordering::Relaxed) {
-            return;
-        }
-        emit_state(&self.app, true, None);
-        emit_tts_health(&self.app, &self.health, true);
-        let payload = SpeechAudioEventDto {
-            schema_version: SCHEMA_VERSION,
-            turn_id: turn.value(),
-            seq,
-            wav_path: wav_path.to_string_lossy().into_owned(),
-            text: text.to_owned(),
-        };
-        let _ = self.app.emit_to(
-            EventTarget::webview_window(CHARACTER_WINDOW),
-            AUDIO_EVENT,
-            payload,
-        );
+        emit_audio_if_current(&self.event_gate, &self.invalid, turn, || {
+            emit_state(&self.app, true, None);
+            emit_tts_health(&self.app, &self.health, true);
+            let payload = SpeechAudioEventDto {
+                schema_version: SCHEMA_VERSION,
+                turn_id: turn.value(),
+                seq,
+                wav_path: wav_path.to_string_lossy().into_owned(),
+                text: text.to_owned(),
+            };
+            let _ = self.app.emit_to(
+                EventTarget::webview_window(CHARACTER_WINDOW),
+                AUDIO_EVENT,
+                payload,
+            );
+        });
     }
 
     fn on_stop(&self) {
@@ -387,8 +567,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_tts_timeout_allows_local_synthesis() {
-        assert!(ADAPTER_TIMEOUT >= Duration::from_secs(5));
+    fn production_tts_timeout_covers_slow_local_synthesis_without_extending_backpressure() {
+        assert!(ADAPTER_TIMEOUT >= Duration::from_secs(30));
+        assert_eq!(BACKPRESSURE_TIMEOUT, Duration::from_secs(5));
     }
 
     #[test]
@@ -398,6 +579,383 @@ mod tests {
             text: "busy".into(),
         });
         assert!(!enqueue_error_is_adapter_failure(&full));
+    }
+
+    #[test]
+    fn full_queue_waits_for_capacity_without_invalidating_the_turn() {
+        let (tx, rx) = sync_channel(TTS_QUEUE_CAPACITY);
+        let turn = pw_domain::reply::TurnTracker::new().begin_turn();
+        let invalid_up_to = AtomicU64::new(0);
+        for index in 0..TTS_QUEUE_CAPACITY {
+            tx.try_send(Command::Sentence {
+                turn,
+                text: format!("queued-{index}"),
+            })
+            .unwrap();
+        }
+        let receiver = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            (0..=TTS_QUEUE_CAPACITY)
+                .map(|_| match rx.recv().unwrap() {
+                    Command::Sentence { text, .. } => text,
+                })
+                .collect::<Vec<_>>()
+        });
+
+        let started = std::time::Instant::now();
+        let admission = enqueue_command(
+            &tx,
+            Command::Sentence {
+                turn,
+                text: "backpressured".into(),
+            },
+            &invalid_up_to,
+            Duration::from_secs(1),
+        );
+        let elapsed = started.elapsed();
+        let delivered = receiver.join().unwrap();
+
+        assert_eq!(admission.unwrap(), QueueAdmission::Backpressured);
+        assert_eq!(
+            delivered,
+            [
+                "queued-0",
+                "queued-1",
+                "queued-2",
+                "queued-3",
+                "queued-4",
+                "queued-5",
+                "queued-6",
+                "queued-7",
+                "backpressured",
+            ]
+        );
+        assert_eq!(invalid_up_to.load(Ordering::Relaxed), 0);
+        assert!(
+            elapsed >= Duration::from_millis(50),
+            "queue admission did not apply backpressure: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn exclusive_reset_clears_queue_depth_and_propagates_the_operation_result() {
+        let service = TtsService::default();
+        service.queue_metrics.enqueued();
+        assert_eq!(service.queue_metrics().depth, 1);
+
+        let value = service
+            .with_exclusive_reset(|| Ok::<_, String>(42))
+            .unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(service.queue_metrics().depth, 0);
+        assert_eq!(
+            service.with_exclusive_reset(|| Err::<(), _>("cleanup failed".to_owned())),
+            Err("cleanup failed".to_owned())
+        );
+    }
+
+    #[test]
+    fn exclusive_reset_invalidates_a_racing_turn_and_blocks_same_turn_restart() {
+        let service = Arc::new(TtsService::default());
+        let mut tracker = pw_domain::reply::TurnTracker::new();
+        let old_turn = tracker.begin_turn();
+        let racing_turn = tracker.begin_turn();
+        {
+            let guard = service.lock();
+            service.register_turn_locked(&guard, old_turn);
+        }
+
+        let (registered_tx, registered_rx) = std::sync::mpsc::channel();
+        let (release_registration_tx, release_registration_rx) = std::sync::mpsc::channel();
+        let registering_service = Arc::clone(&service);
+        let registration = std::thread::spawn(move || {
+            let guard = registering_service.lock();
+            registering_service.register_turn_locked(&guard, racing_turn);
+            registered_tx.send(()).unwrap();
+            release_registration_rx.recv().unwrap();
+        });
+        registered_rx.recv().unwrap();
+
+        let (reset_entered_tx, reset_entered_rx) = std::sync::mpsc::channel();
+        let (release_reset_tx, release_reset_rx) = std::sync::mpsc::channel();
+        let resetting_service = Arc::clone(&service);
+        let reset = std::thread::spawn(move || {
+            resetting_service
+                .with_exclusive_reset(|| {
+                    reset_entered_tx.send(()).unwrap();
+                    release_reset_rx.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        assert!(
+            reset_entered_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "reset entered while latest-turn registration held the worker lock"
+        );
+        release_registration_tx.send(()).unwrap();
+        registration.join().unwrap();
+        reset_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert_eq!(
+            service.invalid_up_to.load(Ordering::Relaxed),
+            racing_turn.value()
+        );
+
+        let (admission_tx, admission_rx) = std::sync::mpsc::channel();
+        let later_service = Arc::clone(&service);
+        let later_sentence = std::thread::spawn(move || {
+            let guard = later_service.lock();
+            later_service.register_turn_locked(&guard, racing_turn);
+            let (tx, _rx) = sync_channel(1);
+            let admission = enqueue_command(
+                &tx,
+                Command::Sentence {
+                    turn: racing_turn,
+                    text: "must remain stopped".into(),
+                },
+                &later_service.invalid_up_to,
+                Duration::ZERO,
+            );
+            admission_tx.send(admission).unwrap();
+        });
+        assert!(
+            admission_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "same-turn sentence bypassed the exclusive reset lock"
+        );
+        release_reset_tx.send(()).unwrap();
+        reset.join().unwrap();
+        assert!(matches!(
+            admission_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Ok(QueueAdmission::Cancelled)
+        ));
+        later_sentence.join().unwrap();
+    }
+
+    #[test]
+    fn delayed_older_turn_cannot_move_the_latest_turn_watermark_backwards() {
+        let service = TtsService::default();
+        let mut tracker = pw_domain::reply::TurnTracker::new();
+        let first = tracker.begin_turn();
+        let delayed = tracker.begin_turn();
+        let latest = tracker.begin_turn();
+        {
+            let guard = service.lock();
+            service.register_turn_locked(&guard, first);
+            service.register_turn_locked(&guard, latest);
+            service.register_turn_locked(&guard, delayed);
+        }
+
+        assert_eq!(service.latest_turn.load(Ordering::Relaxed), latest.value());
+        service.with_exclusive_reset(|| Ok(())).unwrap();
+        assert_eq!(
+            service.invalid_up_to.load(Ordering::Relaxed),
+            latest.value()
+        );
+    }
+
+    #[test]
+    fn stop_path_ignores_the_worker_lock_and_unblocks_reset_after_backpressure() {
+        let service = Arc::new(TtsService::default());
+        let (tx, _rx) = sync_channel(TTS_QUEUE_CAPACITY);
+        let turn = pw_domain::reply::TurnTracker::new().begin_turn();
+        for index in 0..TTS_QUEUE_CAPACITY {
+            tx.try_send(Command::Sentence {
+                turn,
+                text: format!("queued-{index}"),
+            })
+            .unwrap();
+        }
+        let (backpressured_tx, backpressured_rx) = std::sync::mpsc::channel();
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        let producer_service = Arc::clone(&service);
+        let producer = std::thread::spawn(move || {
+            let guard = producer_service.lock();
+            producer_service.register_turn_locked(&guard, turn);
+            let result = enqueue_command_with_backpressure_observer(
+                &tx,
+                Command::Sentence {
+                    turn,
+                    text: "cancelled".into(),
+                },
+                &producer_service.invalid_up_to,
+                Duration::from_secs(1),
+                || backpressured_tx.send(()).unwrap(),
+            );
+            drop(guard);
+            result_tx.send(result).unwrap();
+        });
+        backpressured_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+        let (reset_tx, reset_rx) = std::sync::mpsc::channel();
+        let reset_service = Arc::clone(&service);
+        let reset = std::thread::spawn(move || {
+            reset_service.stop_with(|| {});
+            stopped_tx.send(()).unwrap();
+            let result = reset_service.with_exclusive_reset(|| Ok::<_, String>(()));
+            reset_tx.send(result).unwrap();
+        });
+
+        let stopped_promptly = stopped_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+        let admission = result_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let reset_promptly = reset_rx.recv_timeout(Duration::from_millis(250)).is_ok();
+        producer.join().unwrap();
+        reset.join().unwrap();
+
+        assert!(
+            stopped_promptly,
+            "stop core waited for the producer-held worker lock"
+        );
+        assert!(matches!(admission, Ok(QueueAdmission::Cancelled)));
+        assert!(
+            reset_promptly,
+            "exclusive reset did not progress after stop cancelled backpressure"
+        );
+    }
+
+    #[test]
+    fn explicit_stop_prevents_a_racing_old_turn_audio_event() {
+        let service = Arc::new(TtsService::default());
+        let turn = pw_domain::reply::TurnTracker::new().begin_turn();
+        service.latest_turn.store(turn.value(), Ordering::SeqCst);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (stop_emitting_tx, stop_emitting_rx) = std::sync::mpsc::channel();
+        let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+        let (stop_returned_tx, stop_returned_rx) = std::sync::mpsc::channel();
+        let stopping_service = Arc::clone(&service);
+        let stop_events = Arc::clone(&events);
+        let stopper = std::thread::spawn(move || {
+            stopping_service.stop_with(|| {
+                stop_events.lock().unwrap().push("stop");
+                stop_emitting_tx.send(()).unwrap();
+                release_stop_rx.recv().unwrap();
+            });
+            stop_returned_tx.send(()).unwrap();
+        });
+        stop_emitting_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (audio_result_tx, audio_result_rx) = std::sync::mpsc::channel();
+        let audio_gate = Arc::clone(&service.event_gate);
+        let invalid = Arc::clone(&service.invalid_up_to);
+        let audio_events = Arc::clone(&events);
+        let audio = std::thread::spawn(move || {
+            let emitted = emit_audio_if_current(&audio_gate, &invalid, turn, || {
+                audio_events.lock().unwrap().push("audio");
+            });
+            audio_result_tx.send(emitted).unwrap();
+        });
+        assert!(
+            audio_result_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "audio event bypassed the in-flight stop event"
+        );
+
+        release_stop_tx.send(()).unwrap();
+        stop_returned_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        assert!(
+            !audio_result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+        );
+        stopper.join().unwrap();
+        audio.join().unwrap();
+        assert_eq!(*events.lock().unwrap(), ["stop"]);
+    }
+
+    #[test]
+    fn newer_turn_stop_prevents_a_racing_old_turn_audio_event() {
+        let service = Arc::new(TtsService::default());
+        let mut tracker = pw_domain::reply::TurnTracker::new();
+        let old_turn = tracker.begin_turn();
+        let new_turn = tracker.begin_turn();
+        {
+            let guard = service.lock();
+            assert!(!service.register_turn_locked(&guard, old_turn));
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let (stop_emitting_tx, stop_emitting_rx) = std::sync::mpsc::channel();
+        let (release_stop_tx, release_stop_rx) = std::sync::mpsc::channel();
+        let switching_service = Arc::clone(&service);
+        let stop_events = Arc::clone(&events);
+        let switcher = std::thread::spawn(move || {
+            let guard = switching_service.lock();
+            switching_service.register_turn_locked_with(&guard, new_turn, || {
+                stop_events.lock().unwrap().push("stop");
+                stop_emitting_tx.send(()).unwrap();
+                release_stop_rx.recv().unwrap();
+            });
+        });
+        stop_emitting_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let (audio_result_tx, audio_result_rx) = std::sync::mpsc::channel();
+        let audio_gate = Arc::clone(&service.event_gate);
+        let invalid = Arc::clone(&service.invalid_up_to);
+        let audio_events = Arc::clone(&events);
+        let audio = std::thread::spawn(move || {
+            let emitted = emit_audio_if_current(&audio_gate, &invalid, old_turn, || {
+                audio_events.lock().unwrap().push("audio");
+            });
+            audio_result_tx.send(emitted).unwrap();
+        });
+        assert!(
+            audio_result_rx
+                .recv_timeout(Duration::from_millis(50))
+                .is_err(),
+            "old audio event bypassed the in-flight newer-turn stop event"
+        );
+
+        release_stop_tx.send(()).unwrap();
+        switcher.join().unwrap();
+        assert!(
+            !audio_result_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+        );
+        audio.join().unwrap();
+        assert_eq!(*events.lock().unwrap(), ["stop"]);
+    }
+
+    #[test]
+    fn stalled_queue_times_out_without_invalidating_the_turn() {
+        let (tx, _rx) = sync_channel(TTS_QUEUE_CAPACITY);
+        let turn = pw_domain::reply::TurnTracker::new().begin_turn();
+        let invalid_up_to = AtomicU64::new(0);
+        for index in 0..TTS_QUEUE_CAPACITY {
+            tx.try_send(Command::Sentence {
+                turn,
+                text: format!("queued-{index}"),
+            })
+            .unwrap();
+        }
+
+        let started = Instant::now();
+        let result = enqueue_command(
+            &tx,
+            Command::Sentence {
+                turn,
+                text: "timed-out".into(),
+            },
+            &invalid_up_to,
+            Duration::from_millis(30),
+        );
+
+        assert!(matches!(result, Err(TrySendError::Full(_))));
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(invalid_up_to.load(Ordering::Relaxed), 0);
     }
 
     struct ActiveGuard(Arc<AtomicU64>);

@@ -1,9 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
 [[permission]]
 identifier = "allow-delete-memories"
-description = "Enables the delete_memories command."
+description = "Enables the delete_memories command without any pre-configured scope."
 commands.allow = ["delete_memories"]
 
 [[permission]]
 identifier = "deny-delete-memories"
-description = "Denies the delete_memories command."
+description = "Denies the delete_memories command without any pre-configured scope."
 commands.deny = ["delete_memories"]

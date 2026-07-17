@@ -11,8 +11,8 @@ pub use consolidation::{
 pub use context::{
     DEFAULT_MEMORY_LIMIT, EvidenceSource, JapanesePersistentFactGenerator, MaintenanceReport,
     MemoryContext, MemoryRecord, MemoryStore, PersistentFactGenerator, RollingSummaryGenerator,
-    StoredSummary, SummaryGenerator, SummaryWorker, is_safe_persistent_content,
-    redact_persistent_content,
+    StoredSummary, SummaryEntry, SummaryGenerator, SummaryWorker, is_role_preserving_summary,
+    is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
 };
 pub use lifecycle::{
     DORMANT_DELETE_AFTER_SECONDS, EvidenceKind, MemoryAction, MemoryCandidate, MemoryEvidence,
