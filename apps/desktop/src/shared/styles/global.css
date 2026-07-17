@@ -25,6 +25,11 @@
   --muted: #58787f;
   --danger: #c33d57;
   --success: #128a5e;
+  --motion-reflection-blue: rgb(46 177 255 / 92%);
+  --motion-reflection-highlight: rgb(242 253 255 / 98%);
+  --motion-reflection-purple: rgb(180 124 255 / 92%);
+  --motion-reflection-halo: rgb(105 196 255 / 28%);
+  --settings-gradient-top: rgb(255 255 255 / 94%);
   --radius: 12px;
   --radius-lg: 18px;
   --radius-bubble: 22px;
@@ -46,6 +51,11 @@
   --muted: #8cb2ba;
   --danger: #ff8598;
   --success: #57d69f;
+  --motion-reflection-blue: rgb(78 202 255 / 92%);
+  --motion-reflection-highlight: rgb(255 255 255 / 98%);
+  --motion-reflection-purple: rgb(203 156 255 / 94%);
+  --motion-reflection-halo: rgb(137 211 255 / 30%);
+  --settings-gradient-top: rgb(0 0 0 / 90%);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -63,6 +73,11 @@
     --muted: #8cb2ba;
     --danger: #ff8598;
     --success: #57d69f;
+    --motion-reflection-blue: rgb(78 202 255 / 92%);
+    --motion-reflection-highlight: rgb(255 255 255 / 98%);
+    --motion-reflection-purple: rgb(203 156 255 / 94%);
+    --motion-reflection-halo: rgb(137 211 255 / 30%);
+    --settings-gradient-top: rgb(0 0 0 / 90%);
   }
 }
 
@@ -1371,6 +1386,10 @@ body:not(.transparent) #root {
 }
 
 .control-center[data-ui-style='conversation-first'] {
+  --screen-origin-x: 50vw;
+  --screen-origin-y: 50vh;
+  --screen-origin-size: 104px;
+
   position: relative;
   isolation: isolate;
   display: block;
@@ -1400,6 +1419,11 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .conversation-layer[aria-hidden='true'] {
   pointer-events: none;
+}
+
+.control-center[data-ui-style='conversation-first'][data-screen='settings'] .conversation-layer {
+  opacity: 0.13;
+  transition-duration: 750ms;
 }
 
 .control-center[data-ui-style='conversation-first'] .conversation-footprints {
@@ -1683,6 +1707,27 @@ body:not(.transparent) #root {
   animation: screen-content-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
+.control-center[data-ui-style='conversation-first'] .screen-overlay--settings {
+  background: transparent;
+  animation: none;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay--settings::before {
+  position: absolute;
+  z-index: 0;
+  inset: 0 0 50%;
+  background: linear-gradient(to bottom, var(--settings-gradient-top) 0%, transparent 100%);
+  content: '';
+  opacity: 1;
+  pointer-events: none;
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition='settings']
+  .screen-overlay--settings::before {
+  opacity: 0;
+  animation: settings-gradient-in 750ms ease-out forwards;
+}
+
 .control-center[data-ui-style='conversation-first'] .screen-close-button {
   position: absolute;
   z-index: 5;
@@ -1719,9 +1764,21 @@ body:not(.transparent) #root {
   background: rgb(6 26 32 / 86%);
 }
 
+:root[data-theme='dark']
+  .control-center[data-ui-style='conversation-first']
+  .screen-overlay--settings {
+  background: transparent;
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .control-center[data-ui-style='conversation-first'] .screen-overlay {
     background: rgb(6 26 32 / 86%);
+  }
+
+  :root:not([data-theme='light'])
+    .control-center[data-ui-style='conversation-first']
+    .screen-overlay--settings {
+    background: transparent;
   }
 }
 
@@ -1739,6 +1796,8 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .settings-screen,
 .control-center[data-ui-style='conversation-first'] .screen-body {
+  position: relative;
+  z-index: 1;
   width: min(100%, 1000px);
   margin-inline: auto;
 }
@@ -1757,6 +1816,8 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .category-crown button,
 .control-center[data-ui-style='conversation-first'] .screen-tabs button {
+  isolation: isolate;
+  position: relative;
   display: grid;
   place-items: center;
   min-height: 0;
@@ -1767,6 +1828,7 @@ body:not(.transparent) #root {
   color: var(--accent-strong);
   font-weight: 800;
   letter-spacing: 0.08em;
+  overflow: hidden;
   transition:
     background-color 140ms ease,
     border-color 140ms ease,
@@ -1776,7 +1838,7 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .category-crown button {
   position: absolute;
-  width: 17.678%;
+  width: 15.91%;
   aspect-ratio: 1;
   font-size: clamp(11px, 1.45vw, 18px);
   transform: translate(-50%, -50%) rotate(45deg);
@@ -1784,10 +1846,42 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .category-crown button > span,
 .control-center[data-ui-style='conversation-first'] .screen-tabs button > span {
+  position: relative;
+  z-index: 2;
   max-width: 72%;
   line-height: 1.3;
   text-align: center;
   transform: rotate(-45deg);
+}
+
+.control-center[data-ui-style='conversation-first'] .category-crown button::after,
+.control-center[data-ui-style='conversation-first'] .screen-tabs button::after {
+  position: absolute;
+  z-index: 1;
+  top: -42%;
+  left: 112%;
+  width: 38%;
+  height: 184%;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--motion-reflection-blue) 26%, transparent) 10%,
+    var(--motion-reflection-blue) 31%,
+    var(--motion-reflection-highlight) 50%,
+    var(--motion-reflection-purple) 69%,
+    color-mix(in srgb, var(--motion-reflection-purple) 28%, transparent) 88%,
+    transparent 100%
+  );
+  box-shadow: 0 0 12px var(--motion-reflection-halo);
+  content: '';
+  filter: blur(2px) saturate(1.06);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control-center[data-ui-style='conversation-first'] .category-crown button:hover::after,
+.control-center[data-ui-style='conversation-first'] .screen-tabs button:hover::after {
+  animation: glass-reflection 167ms cubic-bezier(0.22, 0.7, 0.4, 1) 1;
 }
 
 .control-center[data-ui-style='conversation-first'] .category-crown button[data-tab-id='audio'] {
@@ -1837,6 +1931,13 @@ body:not(.transparent) #root {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition='settings']
+  .category-crown button {
+  opacity: 0;
+  animation: settings-category-in 552ms ease-out forwards;
+  animation-delay: var(--enter-delay);
 }
 
 .control-center[data-ui-style='conversation-first'] .category-crown button:active {
@@ -1942,14 +2043,13 @@ body:not(.transparent) #root {
   position: absolute;
   z-index: 4;
   inset: auto clamp(30px, 4vw, 64px) clamp(20px, 3vh, 34px);
-  height: clamp(190px, 22vh, 232px);
+  height: clamp(111px, 10.5vw, 156px);
   pointer-events: none;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs {
   --screen-diamond: clamp(74px, 7vw, 104px);
-  --screen-step: clamp(104px, 9.8vw, 146px);
-  --screen-half-step: clamp(52px, 4.9vw, 73px);
+  --screen-half-diamond: calc(var(--screen-diamond) / 2);
 
   position: relative;
   width: 100%;
@@ -1966,27 +2066,264 @@ body:not(.transparent) #root {
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs button[data-tab-id='settings'] {
-  top: 0;
-  left: 0;
+  top: var(--screen-half-diamond);
+  left: var(--screen-half-diamond);
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs button[data-tab-id='personality'] {
   top: 0;
-  left: var(--screen-step);
+  left: var(--screen-diamond);
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs button[data-tab-id='conversation'] {
-  top: var(--screen-half-step);
-  left: var(--screen-half-step);
+  top: 0;
+  left: 0;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs button[data-tab-id='chat'] {
-  top: var(--screen-half-step);
+  top: var(--screen-half-diamond);
   right: 0;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-tabs button:active {
   transform: rotate(45deg) scale(0.97);
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition]
+  .screen-navigation {
+  z-index: 8;
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition]
+  .screen-tabs button:not([data-confirming='true']) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.control-center[data-ui-style='conversation-first']
+  .screen-tabs button[data-confirming='true'] {
+  z-index: 2;
+  pointer-events: none;
+  animation: main-diamond-confirm 500ms cubic-bezier(0.18, 0.78, 0.24, 1) forwards;
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition='personality']
+  .screen-overlay--personality {
+  animation: personality-view-in 800ms cubic-bezier(0.2, 0.72, 0.24, 1) forwards;
+}
+
+.control-center[data-ui-style='conversation-first'][data-transition='conversation']
+  .screen-overlay--conversation {
+  animation: conversation-view-in 800ms cubic-bezier(0.2, 0.72, 0.24, 1) forwards;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-transition-rings {
+  position: absolute;
+  z-index: 7;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-transition-ring {
+  position: absolute;
+  top: var(--screen-origin-y);
+  left: var(--screen-origin-x);
+  width: var(--screen-origin-size);
+  height: var(--screen-origin-size);
+  border: 1.5px solid currentcolor;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+}
+
+.control-center[data-ui-style='conversation-first']
+  .screen-transition-rings--personality
+  .screen-transition-ring {
+  transform: translate(-50%, -50%) rotate(45deg);
+  animation: personality-ring-expand 760ms cubic-bezier(0.18, 0.7, 0.2, 1)
+    var(--ring-delay) forwards;
+}
+
+.control-center[data-ui-style='conversation-first']
+  .screen-transition-rings--conversation
+  .screen-transition-ring {
+  border-radius: 50%;
+  animation: conversation-ring-expand 760ms cubic-bezier(0.18, 0.7, 0.2, 1)
+    var(--ring-delay) forwards;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-transition-ring--blue {
+  --ring-delay: 0ms;
+
+  color: var(--motion-reflection-blue);
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-transition-ring--highlight {
+  --ring-delay: 70ms;
+
+  color: color-mix(
+    in srgb,
+    var(--motion-reflection-highlight) 62%,
+    var(--motion-reflection-blue)
+  );
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-transition-ring--purple {
+  --ring-delay: 140ms;
+
+  color: var(--motion-reflection-purple);
+}
+
+@keyframes glass-reflection {
+  0% {
+    opacity: 0;
+    transform: translateX(20%);
+  }
+
+  18% {
+    opacity: 1;
+  }
+
+  82% {
+    opacity: 0.94;
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateX(-410%);
+  }
+}
+
+@keyframes settings-gradient-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes settings-category-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes main-diamond-confirm {
+  0% {
+    opacity: 1;
+    filter:
+      drop-shadow(0 0 0 rgb(35 196 216 / 0%))
+      drop-shadow(0 0 0 rgb(133 111 236 / 0%));
+    transform: rotate(45deg) scale(0.97);
+  }
+
+  14% {
+    opacity: 1;
+    filter:
+      drop-shadow(0 0 14px rgb(35 196 216 / 88%))
+      drop-shadow(0 0 32px rgb(133 111 236 / 46%));
+    transform: rotate(45deg) scale(1.025);
+  }
+
+  26% {
+    opacity: 0.94;
+    filter:
+      drop-shadow(0 0 18px rgb(35 196 216 / 72%))
+      drop-shadow(0 0 38px rgb(158 135 246 / 42%));
+    transform: rotate(45deg) scale(1.04);
+  }
+
+  100% {
+    opacity: 0;
+    filter:
+      drop-shadow(0 0 24px rgb(35 196 216 / 0%))
+      drop-shadow(0 0 46px rgb(180 156 255 / 0%));
+    transform: rotate(45deg) scale(1.055);
+  }
+}
+
+@keyframes personality-ring-expand {
+  0% {
+    width: var(--screen-origin-size);
+    height: var(--screen-origin-size);
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 0.9;
+  }
+
+  72% {
+    opacity: 0.5;
+  }
+
+  100% {
+    width: 160vmax;
+    height: 160vmax;
+    opacity: 0;
+  }
+}
+
+@keyframes personality-view-in {
+  0% {
+    opacity: 0.12;
+    clip-path: polygon(
+      var(--screen-origin-x) var(--screen-origin-y),
+      var(--screen-origin-x) var(--screen-origin-y),
+      var(--screen-origin-x) var(--screen-origin-y),
+      var(--screen-origin-x) var(--screen-origin-y)
+    );
+  }
+
+  100% {
+    opacity: 1;
+    clip-path: polygon(
+      var(--screen-origin-x) calc(var(--screen-origin-y) - 160vmax),
+      calc(var(--screen-origin-x) + 160vmax) var(--screen-origin-y),
+      var(--screen-origin-x) calc(var(--screen-origin-y) + 160vmax),
+      calc(var(--screen-origin-x) - 160vmax) var(--screen-origin-y)
+    );
+  }
+}
+
+@keyframes conversation-ring-expand {
+  0% {
+    width: var(--screen-origin-size);
+    height: var(--screen-origin-size);
+    opacity: 0;
+  }
+
+  12% {
+    opacity: 0.9;
+  }
+
+  72% {
+    opacity: 0.5;
+  }
+
+  100% {
+    width: 160vmax;
+    height: 160vmax;
+    opacity: 0;
+  }
+}
+
+@keyframes conversation-view-in {
+  0% {
+    opacity: 0.12;
+    clip-path: circle(0 at var(--screen-origin-x) var(--screen-origin-y));
+  }
+
+  100% {
+    opacity: 1;
+    clip-path: circle(160vmax at var(--screen-origin-x) var(--screen-origin-y));
+  }
 }
 
 .control-center[data-ui-style='conversation-first'] .personality-panel__heading {
