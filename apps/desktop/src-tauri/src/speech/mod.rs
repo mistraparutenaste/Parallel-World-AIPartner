@@ -2,4 +2,4 @@
 
 mod service;
 
-pub use service::{SpeechService, SttModelPaths};
+pub use service::{STATE_EVENT, SpeechService, SttModelPaths};

@@ -56,6 +56,7 @@ pub fn run() {
             commands::audio::set_capture_enabled,
             commands::audio::set_speech_playback,
             commands::audio::get_audio_diagnostics,
+            commands::audio::get_stt_state,
             commands::behavior::get_behavior_settings,
             commands::behavior::set_behavior_settings,
             commands::safety::get_dark_expression_safety_settings,

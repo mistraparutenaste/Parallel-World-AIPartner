@@ -1,11 +1,11 @@
 //! Microphone and STT commands.
 
 use pw_audio::devices::list_input_devices;
-use pw_contracts::{AudioDeviceDto, AudioDiagnosticsDto};
+use pw_contracts::{AudioDeviceDto, AudioDiagnosticsDto, SttStateEventDto};
 use pw_platform::paths::AppDataLayout;
-use tauri::{AppHandle, Manager, Runtime};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-use crate::speech::{SpeechService, SttModelPaths};
+use crate::speech::{STATE_EVENT, SpeechService, SttModelPaths};
 
 /// Lists selectable microphones.
 ///
@@ -36,29 +36,27 @@ pub async fn list_microphones() -> Result<Vec<AudioDeviceDto>, String> {
 /// Returns an error message when a pipeline is already running or
 /// the worker cannot be spawned.
 #[tauri::command]
-pub async fn start_listening<R: Runtime>(
+#[allow(clippy::needless_pass_by_value)] // Tauri injects an owned AppHandle.
+pub fn start_listening<R: Runtime>(
     app: AppHandle<R>,
     device_id: Option<String>,
 ) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let paths = SttModelPaths::under(&app.state::<AppDataLayout>());
-        let service = app.state::<SpeechService>();
-        service.start(app.clone(), paths, device_id)
-    })
-    .await
-    .map_err(|error| format!("audio command worker failed: {error}"))?
+    let paths = SttModelPaths::under(&app.state::<AppDataLayout>());
+    let service = app.state::<SpeechService>();
+    service.start(app.clone(), paths, device_id)
 }
 
 /// Stops the running speech pipeline.
 ///
 /// # Errors
 ///
-/// Returns an error when the blocking command worker cannot be joined.
+/// Returns an error when the stopped state cannot be emitted.
 #[tauri::command]
-pub async fn stop_listening<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || app.state::<SpeechService>().stop())
-        .await
-        .map_err(|error| format!("audio command worker failed: {error}"))
+#[allow(clippy::needless_pass_by_value)] // Tauri injects an owned AppHandle.
+pub fn stop_listening<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
+    let state = app.state::<SpeechService>().stop();
+    app.emit(STATE_EVENT, state)
+        .map_err(|error| format!("failed to emit stopped speech state: {error}"))
 }
 
 /// Mutes or unmutes capture without tearing the pipeline down
@@ -110,4 +108,11 @@ pub async fn get_audio_diagnostics<R: Runtime>(
     tauri::async_runtime::spawn_blocking(move || app.state::<SpeechService>().diagnostics())
         .await
         .map_err(|error| format!("audio command worker failed: {error}"))
+}
+
+/// Returns the latest STT phase so windows mounted after an event can hydrate.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects an owned AppHandle.
+pub fn get_stt_state<R: Runtime>(app: AppHandle<R>) -> SttStateEventDto {
+    app.state::<SpeechService>().current_state()
 }

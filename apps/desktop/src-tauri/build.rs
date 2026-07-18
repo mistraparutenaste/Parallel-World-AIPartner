@@ -33,6 +33,7 @@ fn main() {
             "stop_listening",
             "set_capture_enabled",
             "get_audio_diagnostics",
+            "get_stt_state",
             "send_chat_message",
             "cancel_turn",
             "get_llm_settings",

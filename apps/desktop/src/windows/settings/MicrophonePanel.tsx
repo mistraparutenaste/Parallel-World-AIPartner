@@ -39,6 +39,7 @@ export function MicrophonePanel() {
 
   useEffect(() => {
     let disposed = false;
+    let stateEventSeen = false;
 
     const refreshDevices = () => invoke<AudioDeviceDto[]>('list_microphones')
       .then((list) => {
@@ -62,15 +63,25 @@ export function MicrophonePanel() {
     void refreshDevices();
 
     const stopState = subscribeEvent<SttStateEventDto>('stt-state', (payload) => {
+      stateEventSeen = true;
       setPhase(payload.phase);
       setMessage(payload.message ?? null);
     });
+    invoke<SttStateEventDto>('get_stt_state')
+      .then((snapshot) => {
+        if (!disposed && !stateEventSeen) {
+          setPhase(snapshot.phase);
+          setMessage(snapshot.message ?? null);
+        }
+      })
+      .catch(() => {});
     const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
       setLevel(payload.rms);
     });
     const stopHealth = subscribeEvent<RuntimeHealthEventDto>('runtime-health', (payload) => {
       if (payload.feature !== 'audio_input') return;
       if (payload.status === 'recovering') {
+        if (payload.circuit_open) return;
         setMessage('マイクを再接続しています…');
         void refreshDevices();
       } else if (payload.status === 'degraded') {

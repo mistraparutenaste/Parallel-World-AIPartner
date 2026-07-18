@@ -11,7 +11,9 @@ use pw_application::recovery::{BackoffDecision, BackoffPolicy, Clock, RandomSour
 use pw_application::speech::{
     PipelineDiagnostics, SpeechEvents, SpeechPipeline, SpeechPipelineConfig, run_pipeline,
 };
-use pw_audio::capture::{CaptureError, CaptureSession, start_capture_with_failures};
+use pw_audio::capture::{
+    CaptureError, CaptureSession, start_capture_with_failures_until_cancelled,
+};
 use pw_audio::devices::{InputDeviceInfo, list_input_devices};
 use pw_audio::frame_source::CaptureFrameSource;
 use pw_audio::recovery::{FailureQueueMetrics, FailureSender, failure_channel};
@@ -32,6 +34,115 @@ pub const DEVICE_FALLBACK_EVENT: &str = "stt-device-fallback";
 
 /// Emit a level event every N frames (~256 ms at 32 ms frames).
 const LEVEL_EVERY_N_FRAMES: u64 = 8;
+/// Maximum time for model loading, device enumeration and capture startup.
+const PIPELINE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const STARTUP_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+struct SpeechState {
+    current: Mutex<VersionedSpeechState>,
+}
+
+struct VersionedSpeechState {
+    generation: u64,
+    event: SttStateEventDto,
+}
+
+impl Default for SpeechState {
+    fn default() -> Self {
+        Self {
+            current: Mutex::new(VersionedSpeechState {
+                generation: 0,
+                event: SttStateEventDto {
+                    schema_version: SCHEMA_VERSION,
+                    phase: SttPhaseDto::Stopped,
+                    message: None,
+                },
+            }),
+        }
+    }
+}
+
+impl SpeechState {
+    fn update_for_generation(
+        &self,
+        generation: u64,
+        phase: SttPhaseDto,
+        message: Option<String>,
+    ) -> Option<SttStateEventDto> {
+        let next = SttStateEventDto {
+            schema_version: SCHEMA_VERSION,
+            phase,
+            message,
+        };
+        let mut current = self
+            .current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if generation < current.generation {
+            return None;
+        }
+        current.generation = generation;
+        current.event = next.clone();
+        Some(next)
+    }
+
+    fn snapshot(&self) -> SttStateEventDto {
+        self.current
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .event
+            .clone()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartupWatchdogOutcome {
+    Ready,
+    Cancelled,
+    TimedOut,
+}
+
+fn wait_for_startup_watchdog(
+    state: &SpeechState,
+    cancel: &AtomicBool,
+    startup_timed_out: &AtomicBool,
+    generation: u64,
+    current_generation: &AtomicU64,
+    timeout: Duration,
+) -> StartupWatchdogOutcome {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::Acquire)
+            || current_generation.load(Ordering::Acquire) != generation
+        {
+            return StartupWatchdogOutcome::Cancelled;
+        }
+        if state.snapshot().phase != SttPhaseDto::Starting {
+            return StartupWatchdogOutcome::Ready;
+        }
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            return if current_generation
+                .compare_exchange(
+                    generation,
+                    generation.wrapping_add(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                startup_timed_out.store(true, Ordering::Release);
+                cancel.store(true, Ordering::Release);
+                StartupWatchdogOutcome::TimedOut
+            } else {
+                StartupWatchdogOutcome::Cancelled
+            };
+        }
+        std::thread::sleep(
+            STARTUP_WATCHDOG_POLL_INTERVAL.min(deadline.saturating_duration_since(now)),
+        );
+    }
+}
 
 /// Resolved model locations under the app data `models/` directory.
 pub struct SttModelPaths {
@@ -137,6 +248,17 @@ impl HealthRegistry {
         }
         events
     }
+
+    fn mark_startup_timeout(&mut self, now_ms: u64) -> [RuntimeHealthEventDto; 2] {
+        let failure = RuntimeFailure::transient(FailureCode::Timeout);
+        self.audio_input.mark_failed(&failure, now_ms);
+        self.speech_to_text.mark_failed(&failure, now_ms);
+        let mut events = self.snapshots(1);
+        for event in &mut events {
+            event.circuit_open = true;
+        }
+        events
+    }
 }
 
 struct SystemClock;
@@ -191,7 +313,9 @@ impl CaptureLifecycle for CaptureSession {
     }
 }
 
-struct ProductionCaptureFactory;
+struct ProductionCaptureFactory {
+    cancel: Arc<AtomicBool>,
+}
 impl CaptureFactory for ProductionCaptureFactory {
     type Session = CaptureSession;
 
@@ -200,7 +324,7 @@ impl CaptureFactory for ProductionCaptureFactory {
         device_id: Option<&str>,
         failures: Option<FailureSender>,
     ) -> Result<CaptureSession, CaptureError> {
-        start_capture_with_failures(device_id, failures)
+        start_capture_with_failures_until_cancelled(device_id, failures, &self.cancel)
     }
 }
 
@@ -318,25 +442,43 @@ fn resolve_device(preferred: Option<&str>, devices: &[InputDeviceInfo]) -> Resol
 
 /// Managed state: at most one running speech pipeline.
 pub struct SpeechService {
+    lifecycle: Mutex<()>,
     running: Mutex<Option<RunningPipeline>>,
+    active_cancel: Mutex<Option<Arc<AtomicBool>>>,
     generation: Arc<AtomicU64>,
+    state: Arc<SpeechState>,
 }
 
 impl Default for SpeechService {
     fn default() -> Self {
         Self {
+            lifecycle: Mutex::new(()),
             running: Mutex::new(None),
+            active_cancel: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
+            state: Arc::new(SpeechState::default()),
         }
     }
 }
 
 impl SpeechService {
+    fn lock_lifecycle(&self) -> MutexGuard<'_, ()> {
+        self.lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn lock(&self) -> MutexGuard<'_, Option<RunningPipeline>> {
         self.running.lock().unwrap_or_else(|poisoned| {
             // Counters remain usable even if a worker panicked.
             poisoned.into_inner()
         })
+    }
+
+    fn lock_active_cancel(&self) -> MutexGuard<'_, Option<Arc<AtomicBool>>> {
+        self.active_cancel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Starts the pipeline on a worker thread. Model loading happens
@@ -351,21 +493,36 @@ impl SpeechService {
         paths: SttModelPaths,
         device_id: Option<String>,
     ) -> Result<(), String> {
+        // Start/stop commands only hold this lock while updating lifecycle
+        // ownership. Native capture remains entirely on the worker thread.
+        let _lifecycle = self.lock_lifecycle();
         let mut guard = self.lock();
-        // A worker that stopped on its own leaves a cancelled entry.
-        if guard
-            .as_ref()
-            .is_some_and(|running| running.cancel.load(Ordering::Relaxed))
+        // Reap a completed worker without ever waiting for an unresponsive
+        // platform/model backend on the command thread.
+        let stopped_worker_finished = guard.as_ref().is_some_and(|running| {
+            running.cancel.load(Ordering::Acquire)
+                && running
+                    .worker
+                    .as_ref()
+                    .is_none_or(std::thread::JoinHandle::is_finished)
+        });
+        if stopped_worker_finished
             && let Some(mut stopped) = guard.take()
             && let Some(worker) = stopped.worker.take()
         {
             let _ = worker.join();
         }
-        if guard.is_some() {
-            return Err("speech pipeline is already running".to_owned());
+        if let Some(running) = guard.as_ref() {
+            return Err(if running.cancel.load(Ordering::Acquire) {
+                "speech pipeline is stopping".to_owned()
+            } else {
+                "speech pipeline is already running".to_owned()
+            });
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
+        let startup_timed_out = Arc::new(AtomicBool::new(false));
+        *self.lock_active_cancel() = Some(Arc::clone(&cancel));
         let capture_enabled = Arc::new(AtomicBool::new(true));
         let diagnostics = Arc::new(PipelineDiagnostics::default());
         let dropped_samples = Arc::new(AtomicU64::new(0));
@@ -375,12 +532,19 @@ impl SpeechService {
             device_id.clone().unwrap_or_else(|| "default".to_owned()),
         ));
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Some(starting) =
+            self.state
+                .update_for_generation(generation, SttPhaseDto::Starting, None)
+        {
+            emit_state(&app, starting);
+        }
 
         let worker = PipelineWorker {
-            app,
+            app: app.clone(),
             paths,
             device_id,
             cancel: Arc::clone(&cancel),
+            startup_timed_out: Arc::clone(&startup_timed_out),
             capture_enabled: Arc::clone(&capture_enabled),
             active_device_id: Arc::clone(&active_device_id),
             diagnostics: Arc::clone(&diagnostics),
@@ -389,12 +553,28 @@ impl SpeechService {
             failure_queue_dropped: Arc::clone(&failure_queue_dropped),
             generation,
             current_generation: Arc::clone(&self.generation),
+            state: Arc::clone(&self.state),
         };
-        let worker = std::thread::Builder::new()
+        let worker = match std::thread::Builder::new()
             .name("pw-speech-pipeline".into())
             .spawn(move || worker.run())
-            .map_err(|error| format!("failed to spawn speech worker: {error}"))?;
+        {
+            Ok(worker) => worker,
+            Err(error) => {
+                self.lock_active_cancel().take();
+                let message = format!("failed to spawn speech worker: {error}");
+                if let Some(unavailable) = self.state.update_for_generation(
+                    generation,
+                    SttPhaseDto::Unavailable,
+                    Some(message.clone()),
+                ) {
+                    emit_state(&app, unavailable);
+                }
+                return Err(message);
+            }
+        };
 
+        let watchdog_cancel = Arc::clone(&cancel);
         *guard = Some(RunningPipeline {
             active_device_id,
             cancel,
@@ -405,18 +585,61 @@ impl SpeechService {
             failure_queue_dropped,
             worker: Some(worker),
         });
+        self.spawn_startup_watchdog(app, watchdog_cancel, startup_timed_out, generation);
         Ok(())
     }
 
-    /// Requests the running pipeline to stop.
-    pub fn stop(&self) {
-        self.generation.fetch_add(1, Ordering::AcqRel);
-        if let Some(mut running) = self.lock().take() {
-            running.cancel.store(true, Ordering::Relaxed);
-            if let Some(worker) = running.worker.take() {
-                let _ = worker.join();
-            }
+    fn spawn_startup_watchdog<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        cancel: Arc<AtomicBool>,
+        startup_timed_out: Arc<AtomicBool>,
+        generation: u64,
+    ) {
+        let state = Arc::clone(&self.state);
+        let current_generation = Arc::clone(&self.generation);
+        if let Err(error) = std::thread::Builder::new()
+            .name("pw-speech-startup-watchdog".into())
+            .spawn(move || {
+                if wait_for_startup_watchdog(
+                    &state,
+                    &cancel,
+                    &startup_timed_out,
+                    generation,
+                    &current_generation,
+                    PIPELINE_STARTUP_TIMEOUT,
+                ) == StartupWatchdogOutcome::TimedOut
+                {
+                    let payload = state.update_for_generation(
+                        generation.wrapping_add(1),
+                        SttPhaseDto::Unavailable,
+                        Some(
+                            "音声認識の起動がタイムアウトしました。停止後に再試行してください。"
+                                .into(),
+                        ),
+                    );
+                    if let Some(payload) = payload {
+                        emit_state(&app, payload);
+                    }
+                    let mut health = HealthRegistry::new();
+                    emit_health_events(&app, health.mark_startup_timeout(SystemClock.now_ms()));
+                }
+            })
+        {
+            tracing::warn!(%error, "failed to spawn speech startup watchdog");
         }
+    }
+
+    /// Requests the running pipeline to stop.
+    pub fn stop(&self) -> SttStateEventDto {
+        let _lifecycle = self.lock_lifecycle();
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Some(cancel) = self.lock_active_cancel().as_ref() {
+            cancel.store(true, Ordering::Release);
+        }
+        self.state
+            .update_for_generation(generation, SttPhaseDto::Stopped, None)
+            .unwrap_or_else(|| self.state.snapshot())
     }
 
     /// Enables or disables capture (mute / TTS playback guard).
@@ -482,13 +705,22 @@ impl SpeechService {
         self.lock().as_ref().map_or_else(
             || "inactive".to_owned(),
             |running| {
-                running
-                    .active_device_id
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone()
+                if running.cancel.load(Ordering::Acquire) {
+                    "inactive".to_owned()
+                } else {
+                    running
+                        .active_device_id
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .clone()
+                }
             },
         )
+    }
+
+    #[must_use]
+    pub fn current_state(&self) -> SttStateEventDto {
+        self.state.snapshot()
     }
 }
 
@@ -497,6 +729,7 @@ struct PipelineWorker<R: Runtime> {
     paths: SttModelPaths,
     device_id: Option<String>,
     cancel: Arc<AtomicBool>,
+    startup_timed_out: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
     active_device_id: Arc<Mutex<String>>,
     diagnostics: Arc<PipelineDiagnostics>,
@@ -505,6 +738,7 @@ struct PipelineWorker<R: Runtime> {
     failure_queue_dropped: Arc<AtomicU64>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
+    state: Arc<SpeechState>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -512,10 +746,18 @@ enum WorkerInterruption {
     Continue,
     Stopped,
     Stale,
+    TimedOut,
 }
 
-const fn worker_interruption(cancelled: bool, generation: u64, current: u64) -> WorkerInterruption {
-    if cancelled {
+const fn worker_interruption(
+    startup_timed_out: bool,
+    cancelled: bool,
+    generation: u64,
+    current: u64,
+) -> WorkerInterruption {
+    if startup_timed_out {
+        WorkerInterruption::TimedOut
+    } else if cancelled {
         WorkerInterruption::Stopped
     } else if generation != current {
         WorkerInterruption::Stale
@@ -529,14 +771,16 @@ impl<R: Runtime> PipelineWorker<R> {
         if self.is_stale() {
             return;
         }
-        emit_state(&self.app, SttPhaseDto::Starting, None);
+        self.emit_state(SttPhaseDto::Starting, None);
         let mut health = HealthRegistry::new();
         emit_health_events(&self.app, health.snapshots(0));
         let clock = SystemClock;
         let mut policy = BackoffPolicy::new(&clock, Jitter(clock.now_ms().max(1)));
         let mut recovery = RecoveryCycle::new(
             ProductionDeviceSelector,
-            ProductionCaptureFactory,
+            ProductionCaptureFactory {
+                cancel: Arc::clone(&self.cancel),
+            },
             self.device_id.clone(),
             Arc::clone(&self.capture_enabled),
             Arc::clone(&self.active_device_id),
@@ -547,17 +791,17 @@ impl<R: Runtime> PipelineWorker<R> {
             match self.interruption() {
                 WorkerInterruption::Continue => {}
                 WorkerInterruption::Stopped => {
-                    emit_state(&self.app, SttPhaseDto::Stopped, None);
+                    self.emit_state(SttPhaseDto::Stopped, None);
                     emit_health_events(
                         &self.app,
                         health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
                     );
                     break;
                 }
-                WorkerInterruption::Stale => break,
+                WorkerInterruption::Stale | WorkerInterruption::TimedOut => break,
             }
             let result = self.build_and_run(&mut recovery, &mut health, || policy.record_healthy());
-            if self.interruption() == WorkerInterruption::Stale {
+            if self.was_superseded() {
                 break;
             }
             let failure = match result {
@@ -569,7 +813,7 @@ impl<R: Runtime> PipelineWorker<R> {
                 }
             };
             if failure == SpeechFailure::Stopped {
-                emit_state(&self.app, SttPhaseDto::Stopped, None);
+                self.emit_state(SttPhaseDto::Stopped, None);
                 emit_health_events(
                     &self.app,
                     health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
@@ -577,7 +821,7 @@ impl<R: Runtime> PipelineWorker<R> {
                 break;
             }
             if matches!(failure, SpeechFailure::VadModel | SpeechFailure::SttModel) {
-                emit_state(&self.app, SttPhaseDto::Unavailable, Some(failure.message()));
+                self.emit_state(SttPhaseDto::Unavailable, Some(failure.message()));
                 emit_health_event(
                     &self.app,
                     health.mark_failure(failure, SystemClock.now_ms(), policy.attempts(), true),
@@ -586,7 +830,7 @@ impl<R: Runtime> PipelineWorker<R> {
             }
             match policy.record_failure() {
                 BackoffDecision::CircuitOpen => {
-                    emit_state(&self.app, SttPhaseDto::Unavailable, Some(failure.message()));
+                    self.emit_state(SttPhaseDto::Unavailable, Some(failure.message()));
                     emit_health_event(
                         &self.app,
                         health.mark_failure(failure, SystemClock.now_ms(), policy.attempts(), true),
@@ -603,8 +847,7 @@ impl<R: Runtime> PipelineWorker<R> {
                             false,
                         ),
                     );
-                    emit_state(
-                        &self.app,
+                    self.emit_state(
                         SttPhaseDto::Starting,
                         Some("音声認識を再初期化しています".into()),
                     );
@@ -612,7 +855,7 @@ impl<R: Runtime> PipelineWorker<R> {
                         continue;
                     }
                     if self.interruption() == WorkerInterruption::Stopped {
-                        emit_state(&self.app, SttPhaseDto::Stopped, None);
+                        self.emit_state(SttPhaseDto::Stopped, None);
                         emit_health_events(
                             &self.app,
                             health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
@@ -622,15 +865,32 @@ impl<R: Runtime> PipelineWorker<R> {
                 }
             }
         }
-        self.cancel.store(true, Ordering::Relaxed);
+        self.cancel.store(true, Ordering::Release);
+    }
+
+    fn was_superseded(&self) -> bool {
+        matches!(
+            self.interruption(),
+            WorkerInterruption::Stale | WorkerInterruption::TimedOut
+        )
     }
 
     fn is_stale(&self) -> bool {
         self.current_generation.load(Ordering::Acquire) != self.generation
     }
 
+    fn emit_state(&self, phase: SttPhaseDto, message: Option<String>) {
+        if let Some(payload) = self
+            .state
+            .update_for_generation(self.generation, phase, message)
+        {
+            emit_state(&self.app, payload);
+        }
+    }
+
     fn interruption(&self) -> WorkerInterruption {
         worker_interruption(
+            self.startup_timed_out.load(Ordering::Acquire),
             self.cancel.load(Ordering::Acquire),
             self.generation,
             self.current_generation.load(Ordering::Acquire),
@@ -710,7 +970,7 @@ impl<R: Runtime> PipelineWorker<R> {
             let _ = mirror.join();
             return Ok(());
         }
-        emit_state(&self.app, SttPhaseDto::Listening, None);
+        self.emit_state(SttPhaseDto::Listening, None);
         emit_health_events(
             &self.app,
             health.mark_pipeline_healthy(SystemClock.now_ms()),
@@ -837,12 +1097,7 @@ fn model_error(error: &SherpaError) -> String {
     format!("{error}. `node tools/scripts/download-stt-models.mjs` でモデルを配置してください。")
 }
 
-fn emit_state<R: Runtime>(app: &AppHandle<R>, phase: SttPhaseDto, message: Option<String>) {
-    let payload = SttStateEventDto {
-        schema_version: SCHEMA_VERSION,
-        phase,
-        message,
-    };
+fn emit_state<R: Runtime>(app: &AppHandle<R>, payload: SttStateEventDto) {
     // Broadcast exactly once: every window-scoped listener receives
     // one copy. Emitting per window would deliver duplicates to
     // listeners registered with the default `Any` target.
@@ -913,17 +1168,106 @@ impl<R: Runtime> SpeechEvents for TauriSpeechEvents<R> {
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+    use std::time::Duration;
 
+    use pw_application::speech::PipelineDiagnostics;
     use pw_audio::capture::CaptureError;
     use pw_audio::devices::InputDeviceInfo;
+    use pw_audio::recovery::FailureQueueMetrics;
     use pw_platform::paths::AppDataLayout;
 
     use super::{
         CaptureFactory, CaptureLifecycle, DeviceSelector, HealthRegistry, RecoveryCycle,
-        RecoveryCycleEvent, SpeechFailure, SpeechService, SttModelPaths, WorkerInterruption,
-        aggregate_counter, resolve_device, worker_interruption,
+        RecoveryCycleEvent, RunningPipeline, SpeechFailure, SpeechService, SpeechState,
+        StartupWatchdogOutcome, SttModelPaths, WorkerInterruption, aggregate_counter,
+        resolve_device, wait_for_startup_watchdog, worker_interruption,
     };
-    use pw_contracts::{HealthStatusDto, RuntimeFeatureDto};
+    use pw_contracts::{HealthStatusDto, RuntimeFeatureDto, SttPhaseDto};
+
+    #[test]
+    fn speech_state_keeps_the_latest_phase_for_late_subscribers() {
+        let state = SpeechState::default();
+        assert_eq!(state.snapshot().phase, SttPhaseDto::Stopped);
+
+        state.update_for_generation(
+            1,
+            SttPhaseDto::Starting,
+            Some("initializing microphone".into()),
+        );
+
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.phase, SttPhaseDto::Starting);
+        assert_eq!(snapshot.message.as_deref(), Some("initializing microphone"));
+    }
+
+    #[test]
+    fn startup_watchdog_cancels_a_pipeline_that_never_becomes_ready() {
+        let state = SpeechState::default();
+        state.update_for_generation(7, SttPhaseDto::Starting, None);
+        let cancel = AtomicBool::new(false);
+        let startup_timed_out = AtomicBool::new(false);
+        let current_generation = AtomicU64::new(7);
+
+        let outcome = wait_for_startup_watchdog(
+            &state,
+            &cancel,
+            &startup_timed_out,
+            7,
+            &current_generation,
+            Duration::ZERO,
+        );
+
+        assert_eq!(outcome, StartupWatchdogOutcome::TimedOut);
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(startup_timed_out.load(Ordering::Acquire));
+        assert_eq!(current_generation.load(Ordering::Acquire), 8);
+    }
+
+    #[test]
+    fn startup_watchdog_finishes_when_listening_begins() {
+        let state = SpeechState::default();
+        state.update_for_generation(3, SttPhaseDto::Listening, None);
+        let cancel = AtomicBool::new(false);
+        let startup_timed_out = AtomicBool::new(false);
+        let current_generation = AtomicU64::new(3);
+
+        let outcome = wait_for_startup_watchdog(
+            &state,
+            &cancel,
+            &startup_timed_out,
+            3,
+            &current_generation,
+            Duration::from_secs(1),
+        );
+
+        assert_eq!(outcome, StartupWatchdogOutcome::Ready);
+        assert!(!cancel.load(Ordering::Acquire));
+        assert!(!startup_timed_out.load(Ordering::Acquire));
+        assert_eq!(current_generation.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn stale_worker_cannot_overwrite_a_newer_timeout_state() {
+        let state = SpeechState::default();
+        assert!(
+            state
+                .update_for_generation(
+                    8,
+                    SttPhaseDto::Unavailable,
+                    Some("startup timed out".into()),
+                )
+                .is_some()
+        );
+
+        assert!(
+            state
+                .update_for_generation(7, SttPhaseDto::Listening, None)
+                .is_none()
+        );
+        let snapshot = state.snapshot();
+        assert_eq!(snapshot.phase, SttPhaseDto::Unavailable);
+        assert_eq!(snapshot.message.as_deref(), Some("startup timed out"));
+    }
 
     #[test]
     fn missing_preferred_device_falls_back_without_overwriting_preference() {
@@ -983,6 +1327,41 @@ mod tests {
     }
 
     #[test]
+    fn stop_does_not_wait_for_an_unresponsive_worker() {
+        let service = SpeechService::default();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let _ = release_rx.recv();
+        });
+        *service.lock_active_cancel() = Some(Arc::clone(&cancel));
+        *service.lock() = Some(RunningPipeline {
+            active_device_id: Arc::new(Mutex::new("test-device".to_owned())),
+            cancel: Arc::clone(&cancel),
+            capture_enabled: Arc::new(AtomicBool::new(true)),
+            diagnostics: Arc::new(PipelineDiagnostics::default()),
+            dropped_samples: Arc::new(AtomicU64::new(0)),
+            failure_metrics: Arc::new(Mutex::new(Arc::new(FailureQueueMetrics::default()))),
+            failure_queue_dropped: Arc::new(AtomicU64::new(0)),
+            worker: Some(worker),
+        });
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = release_tx.send(());
+        });
+
+        let started = std::time::Instant::now();
+        service.stop();
+        let state = service.current_state();
+
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(state.phase, SttPhaseDto::Stopped);
+        assert_eq!(service.active_device_id(), "inactive");
+        let _ = releaser.join();
+    }
+
+    #[test]
     fn audio_disconnect_and_rebuild_preserve_stt_health() {
         let mut health = HealthRegistry::new();
         let initial = health.mark_pipeline_healthy(10);
@@ -1022,6 +1401,20 @@ mod tests {
     }
 
     #[test]
+    fn startup_timeout_keeps_both_features_unavailable() {
+        let mut health = HealthRegistry::new();
+        let events = health.mark_startup_timeout(20);
+
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.status == HealthStatusDto::Recovering)
+        );
+        assert!(events.iter().all(|event| event.circuit_open));
+    }
+
+    #[test]
     fn circuit_opens_on_exactly_the_eighth_failure() {
         let mut health = HealthRegistry::new();
         for attempts in 1..8 {
@@ -1036,14 +1429,28 @@ mod tests {
 
     #[test]
     fn explicit_stop_wins_over_generation_staleness() {
-        assert_eq!(worker_interruption(true, 1, 2), WorkerInterruption::Stopped);
+        assert_eq!(
+            worker_interruption(false, true, 1, 2),
+            WorkerInterruption::Stopped
+        );
+    }
+
+    #[test]
+    fn startup_timeout_wins_over_cancelled_worker_cleanup() {
+        assert_eq!(
+            worker_interruption(true, true, 1, 2),
+            WorkerInterruption::TimedOut
+        );
     }
 
     #[test]
     fn stale_configuration_suppresses_old_worker_transitions() {
-        assert_eq!(worker_interruption(false, 1, 2), WorkerInterruption::Stale);
         assert_eq!(
-            worker_interruption(false, 2, 2),
+            worker_interruption(false, false, 1, 2),
+            WorkerInterruption::Stale
+        );
+        assert_eq!(
+            worker_interruption(false, false, 2, 2),
             WorkerInterruption::Continue
         );
     }

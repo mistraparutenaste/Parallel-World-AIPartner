@@ -34,8 +34,34 @@ describe('MicrophonePanel', () => {
       if (command === 'list_microphones') {
         return Promise.resolve(DEVICES);
       }
+      if (command === 'get_stt_state') {
+        return Promise.resolve({
+          schema_version: 1,
+          phase: 'stopped',
+          message: null,
+        } satisfies SttStateEventDto);
+      }
       return Promise.resolve(null);
     });
+  });
+
+  it('hydrates the current state when the panel mounts after STT started', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_microphones') return Promise.resolve(DEVICES);
+      if (command === 'get_stt_state') {
+        return Promise.resolve({
+          schema_version: 1,
+          phase: 'listening',
+          message: null,
+        } satisfies SttStateEventDto);
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<MicrophonePanel />);
+
+    expect(await screen.findByText('聞き取り中')).toBeInTheDocument();
+    expect(invokeMock).toHaveBeenCalledWith('get_stt_state');
   });
 
   it('lists devices and preselects the default one', async () => {
@@ -72,6 +98,38 @@ describe('MicrophonePanel', () => {
 
     expect(screen.getByRole('alert')).toHaveTextContent('model missing');
     expect(screen.getByText('利用できません')).toBeInTheDocument();
+  });
+
+  it('keeps the startup timeout message when the health circuit opens', async () => {
+    render(<MicrophonePanel />);
+    await screen.findByRole('option', { name: 'Mic A' });
+
+    act(() => {
+      listenHandlers.get('stt-state')?.({
+        payload: {
+          schema_version: 1,
+          phase: 'unavailable',
+          message: '音声認識の起動がタイムアウトしました。停止後に再試行してください。',
+        } satisfies SttStateEventDto,
+      });
+      listenHandlers.get('runtime-health')?.({
+        payload: {
+          schema_version: 1,
+          feature: 'audio_input',
+          status: 'recovering',
+          failure_class: 'transient',
+          last_error: 'operation timed out',
+          attempts: 1,
+          ownership: 'not_applicable',
+          circuit_open: true,
+          changed_at_ms: 1,
+        } satisfies RuntimeHealthEventDto,
+      });
+    });
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      '音声認識の起動がタイムアウトしました',
+    );
   });
 
   it('toggles mute through set_capture_enabled', async () => {

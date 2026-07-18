@@ -6,9 +6,10 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{DeviceId, SampleFormat};
@@ -20,6 +21,10 @@ use crate::recovery::{AudioStreamFailure, FailureSender};
 const RING_CAPACITY: usize = 96_000;
 /// Scratch buffer for one callback worth of mono samples.
 const SCRATCH_CAPACITY: usize = 8_192;
+/// Maximum time allowed for the platform audio backend to open and play a stream.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
+/// Polling interval used so startup cancellation remains responsive.
+const STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, thiserror::Error)]
 pub enum CaptureError {
@@ -37,6 +42,10 @@ pub enum CaptureError {
     PlayStream(cpal::Error),
     #[error("audio thread terminated unexpectedly")]
     ThreadGone,
+    #[error("audio capture startup was cancelled")]
+    StartupCancelled,
+    #[error("audio capture startup timed out")]
+    StartupTimeout,
 }
 
 /// Running capture session. Dropping it stops the stream.
@@ -104,6 +113,26 @@ pub fn start_capture_with_failures(
     device_id: Option<&str>,
     failures: Option<FailureSender>,
 ) -> Result<CaptureSession, CaptureError> {
+    let cancel = AtomicBool::new(false);
+    start_capture_with_failures_until_cancelled(device_id, failures, &cancel)
+}
+
+/// Starts capture while allowing the caller to cancel a platform backend that
+/// does not return from stream initialization.
+///
+/// # Errors
+///
+/// Returns [`CaptureError::StartupCancelled`] when `cancel` is set, or
+/// [`CaptureError::StartupTimeout`] when the backend does not respond in time.
+///
+/// # Panics
+///
+/// Panics when the OS refuses to spawn the dedicated capture thread.
+pub fn start_capture_with_failures_until_cancelled(
+    device_id: Option<&str>,
+    failures: Option<FailureSender>,
+    cancel: &AtomicBool,
+) -> Result<CaptureSession, CaptureError> {
     let device_id = device_id.map(str::to_owned);
     let (ready_tx, ready_rx) = mpsc::channel();
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -131,8 +160,7 @@ pub fn start_capture_with_failures(
         })
         .expect("failed to spawn audio capture thread");
 
-    let (consumer, sample_rate, dropped) =
-        ready_rx.recv().map_err(|_| CaptureError::ThreadGone)??;
+    let (consumer, sample_rate, dropped) = wait_for_startup(&ready_rx, cancel, STARTUP_TIMEOUT)?;
     Ok(CaptureSession {
         consumer,
         sample_rate,
@@ -140,6 +168,29 @@ pub fn start_capture_with_failures(
         stop: Some(stop_tx),
         worker: Some(worker),
     })
+}
+
+fn wait_for_startup(
+    ready_rx: &mpsc::Receiver<Result<SessionParts, CaptureError>>,
+    cancel: &AtomicBool,
+    timeout: Duration,
+) -> Result<SessionParts, CaptureError> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if cancel.load(Ordering::Acquire) {
+            return Err(CaptureError::StartupCancelled);
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(CaptureError::StartupTimeout);
+        }
+        let wait = STARTUP_POLL_INTERVAL.min(deadline.saturating_duration_since(now));
+        match ready_rx.recv_timeout(wait) {
+            Ok(result) => return result,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Err(CaptureError::ThreadGone),
+        }
+    }
 }
 
 type SessionParts = (rtrb::Consumer<f32>, u32, Arc<AtomicU64>);
@@ -255,8 +306,29 @@ fn classify_stream_error(error: &cpal::Error) -> AudioStreamFailure {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::time::Duration;
 
-    use super::CaptureSession;
+    use super::{CaptureError, CaptureSession, wait_for_startup};
+
+    #[test]
+    fn startup_wait_honors_cancellation_when_audio_backend_does_not_respond() {
+        let (_ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(true);
+
+        let result = wait_for_startup(&ready_rx, &cancel, Duration::from_secs(1));
+
+        assert!(matches!(result, Err(CaptureError::StartupCancelled)));
+    }
+
+    #[test]
+    fn startup_wait_times_out_when_audio_backend_does_not_respond() {
+        let (_ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let cancel = AtomicBool::new(false);
+
+        let result = wait_for_startup(&ready_rx, &cancel, Duration::ZERO);
+
+        assert!(matches!(result, Err(CaptureError::StartupTimeout)));
+    }
 
     #[test]
     fn dropping_session_joins_stream_owner() {

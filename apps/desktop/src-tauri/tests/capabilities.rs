@@ -137,6 +137,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-stop-listening",
             "allow-set-capture-enabled",
             "allow-get-audio-diagnostics",
+            "allow-get-stt-state",
             "allow-get-runtime-diagnostics",
             "allow-get-llm-settings",
             "allow-set-llm-settings",

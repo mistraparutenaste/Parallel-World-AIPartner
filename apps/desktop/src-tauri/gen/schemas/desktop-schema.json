@@ -297,6 +297,12 @@
           "markdownDescription": "Enables the get_runtime_diagnostics command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_stt_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-stt-state",
+          "markdownDescription": "Enables the get_stt_state command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_tts_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-tts-settings",
@@ -631,6 +637,12 @@
           "type": "string",
           "const": "deny-get-runtime-diagnostics",
           "markdownDescription": "Denies the get_runtime_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_stt_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-stt-state",
+          "markdownDescription": "Denies the get_stt_state command without any pre-configured scope."
         },
         {
           "description": "Denies the get_tts_settings command without any pre-configured scope.",
