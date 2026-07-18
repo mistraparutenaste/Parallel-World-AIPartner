@@ -352,12 +352,10 @@ export function SettingsWindow() {
         originSize,
       };
       setScreenTransition(transition);
-      const reducedMotion = typeof window.matchMedia === 'function'
-        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       screenTransitionTimer.current = window.setTimeout(() => {
         setScreenTransition(null);
         screenTransitionTimer.current = null;
-      }, reducedMotion ? 0 : SCREEN_TRANSITION_DURATION[next]);
+      }, SCREEN_TRANSITION_DURATION[next]);
     }
 
     setScreenArea(next);
