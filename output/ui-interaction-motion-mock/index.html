@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="ja" data-theme="light" data-motion="preview">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Parallel World UI Motion Mock</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="mock-shell" aria-label="Parallel World モーションモック">
+      <section class="mock-view mock-view--chat is-active" data-view="chat" aria-label="メイン画面">
+        <div class="conversation" aria-hidden="true">
+          <p class="speech speech--user speech--one">会話の足跡は左に7件だけ残したいです。</p>
+          <p class="speech speech--assistant speech--two">古い話題は隠して、必要なときだけ自然に呼び戻せる形にします。</p>
+          <p class="speech speech--user speech--three">別ウィンドウのチャットは残したいです。</p>
+          <p class="speech speech--assistant speech--four">設定から切り替えられるようにして、チャット画面には操作感を残しません。</p>
+        </div>
+
+        <nav class="main-menu" aria-label="画面メニュー">
+          <button class="diamond diamond--main diamond--settings" type="button" data-main-target="settings">
+            <span class="diamond__shape"><span class="diamond__label">設定</span></span>
+          </button>
+          <button class="diamond diamond--main diamond--personality" type="button" data-main-target="personality">
+            <span class="diamond__shape"><span class="diamond__label">性格</span></span>
+          </button>
+          <button class="diamond diamond--main diamond--conversation" type="button" data-main-target="conversation">
+            <span class="diamond__shape"><span class="diamond__label">会話</span></span>
+          </button>
+        </nav>
+
+        <button class="diamond diamond--main diamond--chat is-selected" type="button" data-main-target="chat" aria-current="page">
+          <span class="diamond__shape"><span class="diamond__label">チャット</span></span>
+        </button>
+
+        <div class="composer" aria-hidden="true"><span>話しかける...</span></div>
+      </section>
+
+      <section class="mock-view mock-view--personality" data-view="personality" role="dialog" aria-modal="true" aria-label="性格画面" aria-hidden="true" inert>
+        <button class="close-button personality-close-button" type="button" aria-label="性格画面を閉じる">×</button>
+
+        <section class="personality-preview" aria-label="性格画面トランジション確認用">
+          <p class="personality-preview__eyebrow">PERSONALITY</p>
+          <h1>性格</h1>
+          <p class="personality-preview__lead">その人らしさを形づくる、いくつもの層。</p>
+          <div class="personality-preview__facets" aria-hidden="true">
+            <span>価値観</span>
+            <span>話し方</span>
+            <span>距離感</span>
+          </div>
+        </section>
+      </section>
+
+      <section class="mock-view mock-view--conversation" data-view="conversation" role="dialog" aria-modal="true" aria-label="会話画面" aria-hidden="true" inert>
+        <button class="close-button conversation-close-button" type="button" aria-label="会話画面を閉じる">×</button>
+
+        <section class="conversation-preview" aria-label="会話画面トランジション確認用">
+          <p class="conversation-preview__eyebrow">CONVERSATION</p>
+          <h1>会話</h1>
+          <p class="conversation-preview__lead">言葉がつながり、ひとつの流れになる。</p>
+          <div class="conversation-preview__thread" aria-hidden="true">
+            <span>最近の会話</span>
+            <span>大切な話題</span>
+            <span>続きから話す</span>
+          </div>
+        </section>
+      </section>
+
+      <section class="mock-view mock-view--settings" data-view="settings" role="dialog" aria-modal="true" aria-label="設定画面" aria-hidden="true" inert>
+        <div class="settings-gradient" aria-hidden="true"></div>
+
+        <div class="conversation conversation--ghost" aria-hidden="true">
+          <p class="speech speech--user speech--one">会話の足跡は左に7件だけ残したいです。</p>
+          <p class="speech speech--assistant speech--two">古い話題は隠して、必要なときだけ自然に呼び戻せる形にします。</p>
+          <p class="speech speech--user speech--three">別ウィンドウのチャットは残したいです。</p>
+          <p class="speech speech--assistant speech--four">設定から切り替えられるようにして、チャット画面には操作感を残しません。</p>
+        </div>
+
+        <button class="close-button" type="button" aria-label="設定を閉じる">×</button>
+
+        <nav class="settings-crown" aria-label="設定カテゴリ">
+          <button class="diamond diamond--category category--audio" type="button" data-category="audio" style="--order: 0; --column: 0">
+            <span class="diamond__shape"><span class="diamond__label">音声</span></span>
+          </button>
+          <button class="diamond diamond--category category--diagnostics" type="button" data-category="diagnostics" style="--order: 1; --column: 1">
+            <span class="diamond__shape"><span class="diamond__label">診断</span></span>
+          </button>
+          <button class="diamond diamond--category category--ai" type="button" data-category="ai" style="--order: 2; --column: 2">
+            <span class="diamond__shape"><span class="diamond__label">AI</span></span>
+          </button>
+          <button class="diamond diamond--category category--display is-selected" type="button" data-category="display" style="--order: 3; --column: 3" aria-current="page">
+            <span class="diamond__shape"><span class="diamond__label">表示</span></span>
+          </button>
+          <button class="diamond diamond--category category--character" type="button" data-category="character" style="--order: 4; --column: 4">
+            <span class="diamond__shape"><span class="diamond__label">キャラクター</span></span>
+          </button>
+          <button class="diamond diamond--category category--updates" type="button" data-category="updates" style="--order: 5; --column: 5">
+            <span class="diamond__shape"><span class="diamond__label">更新</span></span>
+          </button>
+          <button class="diamond diamond--category category--data" type="button" data-category="data" style="--order: 6; --column: 6">
+            <span class="diamond__shape"><span class="diamond__label">データ</span></span>
+          </button>
+        </nav>
+
+        <section class="settings-content" aria-label="表示設定">
+          <article class="setting-block">
+            <h2><span aria-hidden="true"></span>テーマ</h2>
+            <div class="setting-row">
+              <div>
+                <h3>画面の明るさ</h3>
+                <p>システム設定に合わせるか、ライト／ダークを固定します。</p>
+              </div>
+              <label>
+                テーマ
+                <select id="theme-select">
+                  <option value="dark">ダーク</option>
+                  <option value="light" selected>ライト</option>
+                </select>
+              </label>
+            </div>
+          </article>
+          <article class="setting-block">
+            <h2><span aria-hidden="true"></span>チャット表示</h2>
+            <div class="setting-row">
+              <div>
+                <h3>会話を表示する場所</h3>
+                <p>この画面に収めるか、独立したウィンドウで表示します。</p>
+              </div>
+              <label>
+                チャット表示
+                <select>
+                  <option>この画面</option>
+                  <option>別ウィンドウ</option>
+                </select>
+              </label>
+            </div>
+          </article>
+        </section>
+
+      </section>
+
+      <div class="personality-transition" aria-hidden="true">
+        <span class="personality-transition__ring personality-transition__ring--blue" data-personality-ring></span>
+        <span class="personality-transition__ring personality-transition__ring--highlight" data-personality-ring></span>
+        <span class="personality-transition__ring personality-transition__ring--purple" data-personality-ring></span>
+      </div>
+
+      <div class="conversation-transition" aria-hidden="true">
+        <span class="conversation-transition__ring conversation-transition__ring--blue" data-conversation-ring></span>
+        <span class="conversation-transition__ring conversation-transition__ring--highlight" data-conversation-ring></span>
+        <span class="conversation-transition__ring conversation-transition__ring--purple" data-conversation-ring></span>
+      </div>
+    </main>
+
+    <script src="./mock.js"></script>
+  </body>
+</html>
