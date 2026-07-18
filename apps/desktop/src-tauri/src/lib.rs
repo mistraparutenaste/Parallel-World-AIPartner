@@ -160,14 +160,38 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label() == "chat"
-                && let tauri::WindowEvent::CloseRequested { api, .. } = event
-            {
-                api.prevent_close();
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
-                let layout = app.state::<pw_platform::paths::AppDataLayout>();
-                if let Err(error) = commands::ui::dock_chat_on_close(app, &layout) {
-                    tracing::warn!(%error, "failed to dock chat on close");
+                let mut visibilities = Vec::new();
+                let mut visibility_complete = true;
+                for (label, candidate) in app.webview_windows() {
+                    match candidate.is_visible() {
+                        Ok(visible) => visibilities.push((label, visible)),
+                        Err(error) => {
+                            tracing::warn!(%error, %label, "failed to inspect window visibility");
+                            visibility_complete = false;
+                            break;
+                        }
+                    }
+                }
+                if visibility_complete
+                    && windows::should_exit_after_close(
+                        window.label(),
+                        visibilities
+                            .iter()
+                            .map(|(label, visible)| (label.as_str(), *visible)),
+                    )
+                {
+                    app.exit(0);
+                    return;
+                }
+
+                if window.label() == "chat" {
+                    api.prevent_close();
+                    let layout = app.state::<pw_platform::paths::AppDataLayout>();
+                    if let Err(error) = commands::ui::dock_chat_on_close(app, &layout) {
+                        tracing::warn!(%error, "failed to dock chat on close");
+                    }
                 }
             }
         })

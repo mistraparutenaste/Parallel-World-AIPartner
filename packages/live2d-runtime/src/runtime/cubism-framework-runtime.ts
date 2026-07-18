@@ -10,6 +10,9 @@ import {
   Option,
 } from '../../vendor/framework/src/live2dcubismframework';
 import { CubismMatrix44 } from '../../vendor/framework/src/math/cubismmatrix44';
+import {
+  CubismShaderManager_WebGL,
+} from '../../vendor/framework/src/rendering/cubismshader_webgl';
 import { CharacterModel } from '../model/character-model';
 import type { CubismRuntime, ModelHandle, ModelSource } from './cubism-runtime';
 import { FrameTimer } from './frame-timer';
@@ -37,6 +40,7 @@ export class CubismFrameworkRuntime implements CubismRuntime {
   #model: CharacterModel | null = null;
   #timer: FrameTimer | null = null;
   #frameHandle: number | null = null;
+  #lifecycleGeneration = 0;
 
   constructor(options: CubismFrameworkRuntimeOptions) {
     this.#options = {
@@ -63,6 +67,10 @@ export class CubismFrameworkRuntime implements CubismRuntime {
     if (gl == null) {
       throw new Error('WebGL is unavailable');
     }
+    if (this.#gl !== null || this.#canvas !== null) {
+      this.stop();
+    }
+    this.#lifecycleGeneration++;
     this.#canvas = canvas;
     this.#gl = gl;
 
@@ -88,8 +96,26 @@ export class CubismFrameworkRuntime implements CubismRuntime {
     if (gl == null || canvas == null) {
       throw new Error('runtime is not started');
     }
+    const generation = this.#lifecycleGeneration;
     const model = new CharacterModel(gl, canvas, this.#options.shaderPath);
-    await model.load(source);
+    try {
+      await model.load(source);
+    } catch (error) {
+      const stale = this.#loadIsStale(generation, gl, canvas);
+      try {
+        this.#releaseLoadResources(model, gl, stale);
+      } finally {
+        throw error;
+      }
+    }
+    if (this.#loadIsStale(generation, gl, canvas)) {
+      const staleError = new Error('runtime changed while the model was loading');
+      try {
+        this.#releaseLoadResources(model, gl, true);
+      } finally {
+        throw staleError;
+      }
+    }
 
     this.#model?.release();
     this.#model = model;
@@ -122,16 +148,24 @@ export class CubismFrameworkRuntime implements CubismRuntime {
   }
 
   stop(): void {
+    this.#lifecycleGeneration++;
     if (this.#frameHandle !== null) {
       cancelAnimationFrame(this.#frameHandle);
       this.#frameHandle = null;
     }
-    this.#model?.release();
-    this.#model = null;
-    // CubismFramework stays initialized: it is process-global and may
-    // be reused by a later runtime instance in the same page.
-    this.#gl = null;
-    this.#canvas = null;
+    const gl = this.#gl;
+    try {
+      this.#model?.release();
+    } finally {
+      this.#model = null;
+      if (gl !== null) {
+        CubismShaderManager_WebGL.getInstance().releaseGlContext(gl);
+      }
+      // CubismFramework stays initialized: it is process-global and may
+      // be reused by a later runtime instance in the same page.
+      this.#gl = null;
+      this.#canvas = null;
+    }
   }
 
   #scheduleFrame(): void {
@@ -141,6 +175,30 @@ export class CubismFrameworkRuntime implements CubismRuntime {
         this.#scheduleFrame();
       }
     });
+  }
+
+  #loadIsStale(
+    generation: number,
+    gl: GL,
+    canvas: HTMLCanvasElement,
+  ): boolean {
+    return generation !== this.#lifecycleGeneration
+      || this.#gl !== gl
+      || this.#canvas !== canvas;
+  }
+
+  #releaseLoadResources(
+    model: CharacterModel,
+    gl: GL,
+    releaseContext: boolean,
+  ): void {
+    try {
+      model.release();
+    } finally {
+      if (releaseContext) {
+        CubismShaderManager_WebGL.getInstance().releaseGlContext(gl);
+      }
+    }
   }
 
   #renderFrame(): void {

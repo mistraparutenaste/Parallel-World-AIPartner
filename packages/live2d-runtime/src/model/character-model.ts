@@ -100,7 +100,7 @@ export class CharacterModel extends CubismUserModel {
     this.#setupEffects(setting);
     this.#setupLayout(setting);
     await this.#loadMotions(setting);
-    this.#setupRenderer(setting);
+    await this.#setupRenderer(setting);
     await this.#loadTextures(setting);
 
     this._model.saveParameters();
@@ -383,11 +383,11 @@ export class CharacterModel extends CubismUserModel {
     this._motionManager.stopAllMotions();
   }
 
-  #setupRenderer(_setting: ICubismModelSetting): void {
+  async #setupRenderer(_setting: ICubismModelSetting): Promise<void> {
     this.createRenderer(this.#canvas.width, this.#canvas.height);
     this.getRenderer().startUp(this.#gl);
     this.getRenderer().setIsPremultipliedAlpha(true);
-    this.getRenderer().loadShaders(this.#shaderPath);
+    await this.getRenderer().loadShaders(this.#shaderPath);
   }
 
   async #loadTextures(setting: ICubismModelSetting): Promise<void> {

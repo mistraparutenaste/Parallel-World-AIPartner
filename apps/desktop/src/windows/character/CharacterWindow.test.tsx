@@ -24,6 +24,19 @@ const STATIC_MANIFEST: CharacterManifestDto = {
   },
 };
 
+const LIVE2D_MANIFEST: CharacterManifestDto = {
+  schema_version: 2,
+  id: 'epsilon-live2d',
+  display_name: 'Epsilon Live2D',
+  renderer: {
+    kind: 'live2d',
+    model_path: 'C:\\characters\\epsilon\\Epsilon.model3.json',
+    default_expression: null,
+    expressions: [],
+    motion_groups: [],
+  },
+};
+
 const SETTINGS: CharacterSettingsDto = {
   schema_version: 2,
   active_character_id: 'epsilon-static',
@@ -227,6 +240,32 @@ describe('CharacterWindow common renderer lifecycle', () => {
     expect(h.invokeMock.mock.calls.filter(([command]) => command === 'get_character_manifest')).toHaveLength(
       manifestLoadsBeforeEvents + 1,
     );
+  });
+
+  it('replaces the canvas when switching between renderer context kinds', async () => {
+    const h = harness();
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
+    const firstCanvas = vi.mocked(h.dependencies.createRenderer).mock.calls[0]?.[1];
+
+    h.invokeMock.mockImplementation(async (command: string) => {
+      if (command === 'get_character_manifest') return LIVE2D_MANIFEST;
+      if (command === 'get_character_settings') {
+        return { ...SETTINGS, active_character_id: LIVE2D_MANIFEST.id };
+      }
+      return undefined;
+    });
+    await act(async () => {
+      h.publish('character-settings-changed', {
+        schema_version: 2,
+        settings: { ...SETTINGS, active_character_id: LIVE2D_MANIFEST.id },
+      });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledTimes(2));
+    const secondCanvas = vi.mocked(h.dependencies.createRenderer).mock.calls[1]?.[1];
+    expect(secondCanvas).not.toBe(firstCanvas);
   });
 
   it('does not restart again for the same requested id while the replacement manifest is pending', async () => {

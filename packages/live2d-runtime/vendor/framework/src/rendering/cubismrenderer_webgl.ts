@@ -764,12 +764,11 @@ export class CubismRenderer_WebGL extends CubismRenderer {
    * Shaderの読み込みを行う
    * @param shaderPath シェーダのパス
    */
-  public loadShaders(shaderPath: string = null): void {
+  public async loadShaders(shaderPath: string = null): Promise<void> {
     if (this.gl == null) {
-      CubismLogError(
+      throw new Error(
         "'gl' is null. WebGLRenderingContext is required.\nPlease call 'CubimRenderer_WebGL.startUp' function."
       );
-      return;
     }
 
     if (
@@ -782,7 +781,7 @@ export class CubismRenderer_WebGL extends CubismRenderer {
       if (shaderPath != null) {
         shader.setShaderPath(shaderPath);
       }
-      shader.generateShaders();
+      await shader.generateShaders();
     }
   }
 

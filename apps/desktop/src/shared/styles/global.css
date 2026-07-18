@@ -684,6 +684,7 @@ button.danger-button--confirm {
 
 .conversation-log-list p {
   margin: 5px 0 0;
+  overflow-wrap: anywhere;
 }
 
 .log-meta,

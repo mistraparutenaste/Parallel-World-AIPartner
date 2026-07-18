@@ -335,6 +335,7 @@ export function CharacterWindow({
   return (
     <main aria-label="キャラクター">
       <canvas
+        key={retryGeneration}
         ref={canvasRef}
         className="character-canvas"
         data-tauri-drag-region
