@@ -43,6 +43,40 @@ function stopProcess(pid) {
   );
 }
 
+function getProcessIdentity(pid) {
+  const result = runPowerShell(
+    `$process = Get-Process -Id ${Number(pid)} -ErrorAction Stop; ` +
+      `[ordered]@{ pid = $process.Id; start_time_utc_ticks = $process.StartTime.ToUniversalTime().Ticks.ToString() } | ConvertTo-Json -Compress`,
+  );
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout.trim());
+}
+
+function stopOwnedProcessIdentity(identity) {
+  if (!identity || !Number.isInteger(Number(identity.pid))) return;
+  const ticks = String(identity.start_time_utc_ticks);
+  if (!/^\d+$/.test(ticks)) return;
+  runPowerShell(
+    `$process = Get-Process -Id ${Number(identity.pid)} -ErrorAction SilentlyContinue; ` +
+      `if ($null -ne $process -and $process.StartTime.ToUniversalTime().Ticks.ToString() -eq '${ticks}') { ` +
+      `Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }`,
+  );
+}
+
+async function cleanupOwnedProcessesFromMarker(marker) {
+  try {
+    const value = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+    for (const name of ["child", "root"]) {
+      stopOwnedProcessIdentity({
+        pid: value[name],
+        start_time_utc_ticks: value[`${name}_start_time_utc_ticks`],
+      });
+    }
+  } catch {
+    // The helper may fail before publishing an atomic-enough test marker.
+  }
+}
+
 async function waitFor(check, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -242,6 +276,28 @@ test(
 );
 
 test(
+  "test helper cleanup stops only the recorded process identity",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const helper = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      windowsHide: true,
+    });
+    try {
+      const identity = getProcessIdentity(helper.pid);
+      stopOwnedProcessIdentity({
+        ...identity,
+        start_time_utc_ticks: (BigInt(identity.start_time_utc_ticks) + 1n).toString(),
+      });
+      assert.equal(isAlive(helper.pid), true);
+      stopOwnedProcessIdentity(identity);
+      assert.equal(await waitFor(() => !isAlive(helper.pid)), true);
+    } finally {
+      stopProcess(helper.pid);
+    }
+  },
+);
+
+test(
   "stops owned root and descendant while preserving external TTS and LLM",
   { skip: process.platform !== "win32" },
   async () => {
@@ -257,7 +313,7 @@ test(
     try {
       await writeFile(
         helper,
-        `param([string]$Marker)\n$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
+        `param([string]$Marker)\n$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n$rootProcess = Get-Process -Id $PID\n@{ root = $PID; root_start_time_utc_ticks = $rootProcess.StartTime.ToUniversalTime().Ticks.ToString(); child = $child.Id; child_start_time_utc_ticks = $child.StartTime.ToUniversalTime().Ticks.ToString() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
         "utf8",
       );
       const command = [
@@ -275,6 +331,7 @@ test(
       assert.equal(isAlive(externalTts.pid), true);
       assert.equal(isAlive(externalLlm.pid), true);
     } finally {
+      await cleanupOwnedProcessesFromMarker(marker);
       stopProcess(externalTts.pid);
       stopProcess(externalLlm.pid);
       await rm(temp, { recursive: true, force: true });
@@ -311,7 +368,7 @@ test(
     try {
       await writeFile(
         helper,
-        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\n`,
+        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n$rootProcess = Get-Process -Id $PID\n@{ root = $PID; root_start_time_utc_ticks = $rootProcess.StartTime.ToUniversalTime().Ticks.ToString(); child = $child.Id; child_start_time_utc_ticks = $child.StartTime.ToUniversalTime().Ticks.ToString() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\n`,
         "utf8",
       );
       const command = [
@@ -329,10 +386,7 @@ test(
       const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
       assert.equal(await waitFor(() => !isAlive(pids.child)), true);
     } finally {
-      if (await readFile(marker, "utf8").catch(() => null)) {
-        const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
-        stopProcess(pids.child);
-      }
+      await cleanupOwnedProcessesFromMarker(marker);
       await rm(temp, { recursive: true, force: true });
     }
   },
@@ -352,7 +406,7 @@ test(
     try {
       await writeFile(
         helper,
-        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
+        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n$rootProcess = Get-Process -Id $PID\n@{ root = $PID; root_start_time_utc_ticks = $rootProcess.StartTime.ToUniversalTime().Ticks.ToString(); child = $child.Id; child_start_time_utc_ticks = $child.StartTime.ToUniversalTime().Ticks.ToString() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
         "utf8",
       );
       await writeFile(
@@ -370,6 +424,7 @@ test(
       assert.equal(await waitFor(() => !isAlive(pids.child)), true);
       assert.equal(isAlive(external.pid), true);
     } finally {
+      await cleanupOwnedProcessesFromMarker(marker);
       stopProcess(external.pid);
       await rm(temp, { recursive: true, force: true });
     }
