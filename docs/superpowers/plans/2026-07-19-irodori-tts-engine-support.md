@@ -145,7 +145,7 @@
 
 - Automated implementation and verification are complete on branch `codex/irodori-tts-support`.
 - Irodori の Python／uv／CUDA／model 環境は、この repository 内にもローカル作業環境にも作成していない。
-- 実サーバーへ接続する acceptance test は `#[ignore]` かつ環境変数 opt-in とした。`PW_IRODORI_BASE_URL` の既定値は `http://127.0.0.1:8088`、`PW_IRODORI_VOICE` は任意。
+- 実サーバーへ接続する acceptance test は `#[ignore]` かつ環境変数 opt-in とした。誤接続を防ぐため `PW_IRODORI_BASE_URL` は明示必須、`PW_IRODORI_VOICE` は任意。
 - 実サーバーを必要としない HTTP contract、WAV gain、cache isolation、settings migration、engine dispatch、UI、launcher checks は自動テスト対象。
 - ts-rs bindings は repository tool で再生成確認済み。契約 drift はなく、generator が再付与する末尾空白は追跡差分に含めない。
 - Tauri の `list_tts_voices` permission と capability schema は生成済み成果物との整合を確認済み。

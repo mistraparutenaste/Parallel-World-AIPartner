@@ -4,8 +4,8 @@
 //! `cargo test -p pw-tts --test real_engine -- --ignored --nocapture`
 //! Override the endpoint with `PW_TTS_BASE_URL`.
 //!
-//! The Irodori acceptance test uses `PW_IRODORI_BASE_URL` (default port 8088)
-//! and optionally `PW_IRODORI_VOICE`. It remains ignored unless explicitly run.
+//! The Irodori acceptance test requires `PW_IRODORI_BASE_URL` and optionally
+//! uses `PW_IRODORI_VOICE`. It remains ignored unless explicitly run.
 
 use std::time::{Duration, Instant};
 
@@ -93,8 +93,9 @@ fn cached_synthesizer_reuses_the_wav_file() {
 }
 
 fn irodori_client() -> IrodoriTtsClient {
-    let base_url =
-        std::env::var("PW_IRODORI_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8088".to_owned());
+    let base_url = std::env::var("PW_IRODORI_BASE_URL").expect(
+        "set PW_IRODORI_BASE_URL to the explicit loopback Irodori server URL before running this ignored test",
+    );
     IrodoriTtsClient::new(&TtsClientConfig {
         base_url,
         timeout: Duration::from_mins(1),
@@ -116,6 +117,50 @@ fn selected_irodori_voice(voices: &[String]) -> String {
     }
 }
 
+fn wav_has_decodable_sample(wav: &[u8]) -> Result<bool, hound::Error> {
+    let mut reader = hound::WavReader::new(std::io::Cursor::new(wav))?;
+    match reader.spec().sample_format {
+        hound::SampleFormat::Int => reader
+            .samples::<i32>()
+            .next()
+            .transpose()
+            .map(|sample| sample.is_some()),
+        hound::SampleFormat::Float => reader
+            .samples::<f32>()
+            .next()
+            .transpose()
+            .map(|sample| sample.is_some()),
+    }
+}
+
+fn pcm16_wav(samples: &[i16]) -> Vec<u8> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 24_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav = Vec::new();
+    {
+        let mut writer = hound::WavWriter::new(std::io::Cursor::new(&mut wav), spec).unwrap();
+        for sample in samples {
+            writer.write_sample(*sample).unwrap();
+        }
+        writer.finalize().unwrap();
+    }
+    wav
+}
+
+#[test]
+fn wav_sample_check_rejects_metadata_only_wav() {
+    assert!(!wav_has_decodable_sample(&pcm16_wav(&[])).unwrap());
+}
+
+#[test]
+fn wav_sample_check_accepts_one_pcm_sample() {
+    assert!(wav_has_decodable_sample(&pcm16_wav(&[1])).unwrap());
+}
+
 #[test]
 #[ignore = "requires a running Irodori TTS server and an installed voice"]
 fn irodori_voices_then_short_synthesis_produces_wav_and_records_latency() {
@@ -135,9 +180,8 @@ fn irodori_voices_then_short_synthesis_produces_wav_and_records_latency() {
     assert!(wav.starts_with(b"RIFF"), "response has no RIFF header");
     assert_eq!(wav.get(8..12), Some(&b"WAVE"[..]), "response is not WAVE");
     assert!(
-        wav.len() > 44,
-        "wav has no sample data: {} bytes",
-        wav.len()
+        wav_has_decodable_sample(&wav).expect("decode Irodori WAV"),
+        "wav contains no decodable PCM sample"
     );
     println!("synthesized {} bytes in {elapsed:?}", wav.len());
 }
