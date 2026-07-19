@@ -1,7 +1,7 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$AllowedManifestFields = @('schema_version', 'manifest_version', 'python_version', 'backends', 'artifacts')
+$AllowedManifestFields = @('schema_version', 'manifest_version', 'python_version', 'python_build', 'environment_reserve_bytes', 'backends', 'artifacts')
 $AllowedArtifactFields = @('id', 'url', 'size', 'sha256', 'install_relative_path', 'license_id', 'license_url')
 $AllowedLicenseIds = @('Apache-2.0 OR MIT', 'MIT')
 $AllowedBackends = @('cpu', 'cu128')
@@ -51,6 +51,8 @@ function Import-IrodoriManifest {
     if ($manifest.schema_version -ne 1) { throw 'Irodori manifest schema_version must be 1.' }
     if ($manifest.manifest_version -notmatch '^\d{4}-\d{2}-\d{2}\.\d+$') { throw 'Irodori manifest_version must be a versioned date.' }
     if ($manifest.python_version -notmatch '^3\.10\.\d+$') { throw 'Irodori python_version must be a CPython 3.10 patch version.' }
+    if (-not (Test-IrodoriString $manifest.python_build) -or $manifest.python_build -cne '20260510') { throw 'Irodori python_build must be exactly 20260510.' }
+    if (-not (Test-IrodoriPositiveInteger $manifest.environment_reserve_bytes) -or [decimal] $manifest.environment_reserve_bytes -gt [int64]::MaxValue) { throw 'Irodori environment_reserve_bytes must be a positive Int64 integer.' }
     if (@($manifest.backends).Count -ne $AllowedBackends.Count -or (@($manifest.backends | Sort-Object -Unique) -join ',') -ne ($AllowedBackends -join ',')) { throw 'Irodori backends must be exactly cpu and cu128.' }
     if (@($manifest.artifacts).Count -eq 0) { throw 'Irodori manifest must contain artifacts.' }
 
@@ -68,6 +70,19 @@ function Import-IrodoriManifest {
         if (-not (Test-IrodoriString $artifact.license_url) -or -not (Test-IrodoriHttpsUrl $artifact.license_url)) { throw "Irodori artifact license_url must be an HTTPS string: $($artifact.id)" }
     }
     return $manifest
+}
+
+function Get-IrodoriRequiredBytes {
+    param([psobject] $Manifest)
+    [int64] $artifactBytes = 0
+    foreach ($artifact in @($Manifest.artifacts)) {
+        $size = [int64] $artifact.size
+        if ($artifactBytes -gt [int64]::MaxValue - $size) { throw 'Irodori manifest artifact sizes overflow the disk estimate.' }
+        $artifactBytes += $size
+    }
+    [int64] $reserveBytes = $Manifest.environment_reserve_bytes
+    if ($artifactBytes -gt ([int64]::MaxValue - $reserveBytes) / 2) { throw 'Irodori manifest artifact sizes overflow the disk estimate.' }
+    return [int64] (($artifactBytes * 2) + $reserveBytes)
 }
 
 function Get-IrodoriLayout {
@@ -191,18 +206,48 @@ function Test-IrodoriVerifiedFile {
 }
 
 function Invoke-IrodoriHttpDownload {
-    param([psobject] $Artifact, [string] $PartialPath, [int64] $MaximumBytes)
+    param(
+        [psobject] $Artifact,
+        [string] $PartialPath,
+        [int64] $MaximumBytes,
+        [Threading.CancellationToken] $CancellationToken = [Threading.CancellationToken]::None,
+        [int] $PerReadTimeoutMilliseconds = 30000,
+        [object] $HttpMessageHandler = $null
+    )
     if (-not (Test-IrodoriHttpsUrl $Artifact.url)) { throw 'Irodori download URL must use HTTPS.' }
+    if ($PerReadTimeoutMilliseconds -le 0 -or $PerReadTimeoutMilliseconds -gt 600000) { throw 'Irodori download read timeout must be between 1 and 600000 milliseconds.' }
     Add-Type -AssemblyName System.Net.Http
-    $handler = [Net.Http.HttpClientHandler]::new()
-    $handler.AllowAutoRedirect = $false
-    $handler.UseDefaultCredentials = $false
+    if ($null -ne $HttpMessageHandler -and $HttpMessageHandler -isnot [Net.Http.HttpMessageHandler]) { throw 'Irodori download HTTP handler is invalid.' }
+    $handler = $HttpMessageHandler
+    if ($null -eq $handler) {
+        $handler = [Net.Http.HttpClientHandler]::new()
+        $handler.AllowAutoRedirect = $false
+        $handler.UseDefaultCredentials = $false
+    }
     $client = [Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
+    $operationCts = [Threading.CancellationTokenSource]::CreateLinkedTokenSource($CancellationToken, [Threading.CancellationToken]::None)
+    $operationCancellationToken = $operationCts.Token
+    $cancelHandlerRegistered = $false
+    $cancelHandler = [ConsoleCancelEventHandler] {
+        param($Sender, $EventArgs)
+        $EventArgs.Cancel = $true
+        $operationCts.Cancel()
+    }.GetNewClosure()
     $current = [Uri] $Artifact.url
+    $completed = $false
     try {
+        try {
+            [Console]::add_CancelKeyPress($cancelHandler)
+            $cancelHandlerRegistered = $true
+        } catch { $cancelHandlerRegistered = $false }
         for ($redirects = 0; $redirects -le 10; $redirects++) {
             if ($current.Scheme -ne 'https') { throw 'Irodori download redirect must use HTTPS.' }
-            $response = $client.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+            try {
+                $response = $client.GetAsync($current, [Net.Http.HttpCompletionOption]::ResponseHeadersRead, $operationCancellationToken).GetAwaiter().GetResult()
+            } catch [OperationCanceledException] {
+                throw [OperationCanceledException]::new('Irodori artifact download was cancelled.', $_.Exception, $operationCancellationToken)
+            }
             try {
                 if ([int] $response.StatusCode -ge 300 -and [int] $response.StatusCode -lt 400) {
                     if ($redirects -eq 10 -or $null -eq $response.Headers.Location) { throw 'Irodori download redirect is invalid or excessive.' }
@@ -211,13 +256,26 @@ function Invoke-IrodoriHttpDownload {
                     continue
                 }
                 $response.EnsureSuccessStatusCode() | Out-Null
-                if ($response.Content.Headers.ContentLength.HasValue -and $response.Content.Headers.ContentLength.Value -gt $MaximumBytes) { throw 'Irodori download exceeds the manifest size.' }
+                $contentLength = $response.Content.Headers.ContentLength
+                if ($null -ne $contentLength -and [int64] $contentLength -gt $MaximumBytes) { throw 'Irodori download exceeds the manifest size.' }
                 $input = $response.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
                 $output = [IO.FileStream]::new($PartialPath, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None, 1048576, [IO.FileOptions]::WriteThrough)
                 try {
                     $buffer = [byte[]]::new(1048576)
                     [int64] $total = 0
-                    while (($read = $input.Read($buffer, 0, $buffer.Length)) -gt 0) {
+                    while ($true) {
+                        $readCts = [Threading.CancellationTokenSource]::CreateLinkedTokenSource($operationCancellationToken, [Threading.CancellationToken]::None)
+                        $readCancellationToken = $readCts.Token
+                        $readCts.CancelAfter($PerReadTimeoutMilliseconds)
+                        try {
+                            $read = $input.ReadAsync($buffer, 0, $buffer.Length, $readCancellationToken).GetAwaiter().GetResult()
+                        } catch [OperationCanceledException] {
+                            if ($operationCancellationToken.IsCancellationRequested) {
+                                throw [OperationCanceledException]::new('Irodori artifact download was cancelled.', $_.Exception, $operationCancellationToken)
+                            }
+                            throw [TimeoutException]::new('Irodori artifact download read timed out.', $_.Exception)
+                        } finally { $readCts.Dispose() }
+                        if ($read -le 0) { break }
                         if ($total + $read -gt $MaximumBytes) { throw 'Irodori download exceeds the manifest size.' }
                         $output.Write($buffer, 0, $read)
                         $total += $read
@@ -227,12 +285,15 @@ function Invoke-IrodoriHttpDownload {
                     $output.Dispose()
                     $input.Dispose()
                 }
+                $completed = $true
                 return [pscustomobject]@{ final_url = $current.AbsoluteUri; bytes_written = $total; cancelled = $false }
             } finally { $response.Dispose() }
         }
     } finally {
+        if ($cancelHandlerRegistered) { [Console]::remove_CancelKeyPress($cancelHandler) }
+        $operationCts.Dispose()
         $client.Dispose()
-        $handler.Dispose()
+        if (-not $completed -and (Test-Path -LiteralPath $PartialPath)) { Remove-Item -LiteralPath $PartialPath -Force -ErrorAction SilentlyContinue }
     }
     throw 'Irodori download failed.'
 }
@@ -464,13 +525,15 @@ function Invoke-IrodoriDefaultRunApp {
         $previous[$key] = [Environment]::GetEnvironmentVariable($key, [EnvironmentVariableTarget]::Process)
         [Environment]::SetEnvironmentVariable($key, [string] $Environment[$key], [EnvironmentVariableTarget]::Process)
     }
-    Push-Location -LiteralPath $WorkingDirectory
+    $locationPushed = $false
     try {
+        Push-Location -LiteralPath $WorkingDirectory
+        $locationPushed = $true
         $output = & $Executable @Arguments 2>&1
         $exitCode = $LASTEXITCODE
         return [pscustomobject]@{ exit_code = $exitCode; cancelled = $false; output = @($output | ForEach-Object { [string] $_ }) }
     } finally {
-        Pop-Location
+        if ($locationPushed) { Pop-Location }
         foreach ($key in $Environment.Keys) { [Environment]::SetEnvironmentVariable($key, $previous[$key], [EnvironmentVariableTarget]::Process) }
     }
 }
@@ -490,8 +553,9 @@ function Get-IrodoriArtifactById {
 }
 
 function Get-IrodoriRuntimeEnvironment {
-    param([hashtable] $Layout)
+    param([hashtable] $Layout, [psobject] $Manifest)
     return @{
+        UV_PYTHON_CPYTHON_BUILD = [string] $Manifest.python_build
         UV_PYTHON_INSTALL_DIR = Join-Path $Layout.runtime 'python'
         UV_PROJECT_ENVIRONMENT = Join-Path $Layout.runtime 'env'
         UV_CACHE_DIR = Join-Path $Layout.runtime 'cache\uv'
@@ -535,7 +599,7 @@ function Test-IrodoriReusableRuntime {
         }
         $referencePath = Join-Path $Layout.runtime 'hf\hub\models--sbintuitions--sarashina2.2-0.5b\refs\main'
         if (-not (Test-Path -LiteralPath $referencePath -PathType Leaf) -or (Get-Content -LiteralPath $referencePath -Raw).Trim() -ne $revision) { return $false }
-        $verification = & $RunAdapter $uvPath @('run', '--no-sync', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout)
+        $verification = & $RunAdapter $uvPath @('run', '--no-sync', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest)
         Assert-IrodoriRunSucceeded -Result $verification -Stage 'reuse environment verification'
         return $true
     } catch { return $false }
@@ -602,14 +666,7 @@ function Invoke-IrodoriProvisionLocked {
         return [pscustomobject]@{ status = 'reused'; runtime_path = $Layout.runtime; uv_path = Join-Path $Layout.runtime $uvArtifact.install_relative_path }
     }
 
-    [int64] $artifactBytes = 0
-    foreach ($artifact in @($Manifest.artifacts)) {
-        $size = [int64] $artifact.size
-        if ($artifactBytes -gt [int64]::MaxValue - $size) { throw 'Irodori manifest artifact sizes overflow the disk estimate.' }
-        $artifactBytes += $size
-    }
-    if ($artifactBytes -gt ([int64]::MaxValue - 2147483648) / 2) { throw 'Irodori manifest artifact sizes overflow the disk estimate.' }
-    [int64] $requiredBytes = ($artifactBytes * 2) + 2147483648
+    [int64] $requiredBytes = Get-IrodoriRequiredBytes -Manifest $Manifest
     $getFreeBytes = if ($Adapters.ContainsKey('GetFreeBytes')) { $Adapters.GetFreeBytes } else {
         { param($Path) return [IO.DriveInfo]::new([IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path))).AvailableFreeSpace }
     }
@@ -668,7 +725,7 @@ function Invoke-IrodoriProvisionLocked {
         $uvPath = Join-Path $Layout.runtime $uvArtifact.install_relative_path
         $serverPath = Join-Path $Layout.runtime $serverArtifact.install_relative_path
         if (-not (Test-Path -LiteralPath $uvPath -PathType Leaf) -or -not (Test-IrodoriDescendantPath $Layout.runtime $uvPath)) { throw 'Verified managed uv.exe is missing.' }
-        $environment = Get-IrodoriRuntimeEnvironment -Layout $Layout
+        $environment = Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest
         $pythonInstall = & $runAdapter $uvPath @('python', 'install', $Manifest.python_version) $serverPath $environment
         Assert-IrodoriRunSucceeded -Result $pythonInstall -Stage 'Python installation'
         $sync = & $runAdapter $uvPath @('sync', '--frozen', '--extra', $Backend, '--python', $Manifest.python_version, '--managed-python') $serverPath $environment
@@ -805,7 +862,8 @@ function Invoke-IrodoriBootstrap {
     $managedEnvironmentNames = @(
         'PATH', 'PW_TTS_ENGINE', 'PW_TTS_PORT', 'PW_IRODORI_DIR', 'IRODORI_CHECKPOINT',
         'PW_IRODORI_SKIP_WARMUP', 'PW_IRODORI_BOOTSTRAP_STATUS', 'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
-        'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
+        'UV_PYTHON_CPYTHON_BUILD', 'UV_PROJECT_ENVIRONMENT', 'UV_PYTHON_INSTALL_DIR', 'UV_CACHE_DIR', 'UV_NO_SYSTEM_CONFIG',
+        'PYTHONDONTWRITEBYTECODE', 'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
     )
     foreach ($name in $managedEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
     if ([string]::IsNullOrWhiteSpace($explicitEngine)) { $env:PW_TTS_ENGINE = 'irodori' }
@@ -826,7 +884,7 @@ function Invoke-IrodoriBootstrap {
             if (-not $isComplete) {
                 [int64] $downloadBytes = 0
                 foreach ($artifact in @($manifest.artifacts)) { $downloadBytes += [int64] $artifact.size }
-                [int64] $peakBytes = ($downloadBytes * 2) + 2147483648
+                [int64] $peakBytes = Get-IrodoriRequiredBytes -Manifest $manifest
                 $promptMessage = @"
 Irodori-TTS managed environment is not ready.
 Backend: $backend
@@ -861,15 +919,12 @@ Build now? [Y/N]
             if ($isComplete) {
                 $uvPath = [string] $provisionResult.uv_path
                 $serverPath = Join-Path $layout.runtime 'server'
-                $runtimeEnvironment = [ordered]@{
-                    IRODORI_CHECKPOINT = Join-Path $layout.runtime 'models\model.safetensors'
-                    IRODORI_CODEC_REPO = Join-Path $layout.runtime 'models\codec\weights.pth'
-                    IRODORI_VOICES_DIR = $layout.voices
-                    IRODORI_COMPILE_MODEL = 'false'
-                    HF_HOME = Join-Path $layout.runtime 'hf'
-                    HF_HUB_OFFLINE = '1'
-                    TRANSFORMERS_OFFLINE = '1'
-                }
+                $runtimeEnvironment = [ordered]@{}
+                foreach ($entry in (Get-IrodoriRuntimeEnvironment -Layout $layout -Manifest $manifest).GetEnumerator()) { $runtimeEnvironment[$entry.Key] = $entry.Value }
+                $runtimeEnvironment['IRODORI_CHECKPOINT'] = Join-Path $layout.runtime 'models\model.safetensors'
+                $runtimeEnvironment['IRODORI_CODEC_REPO'] = Join-Path $layout.runtime 'models\codec\weights.pth'
+                $runtimeEnvironment['IRODORI_VOICES_DIR'] = $layout.voices
+                $runtimeEnvironment['IRODORI_COMPILE_MODEL'] = 'false'
                 [void] [IO.Directory]::CreateDirectory($layout.voices)
                 [void] [IO.Directory]::CreateDirectory($layout.loras)
                 $env:PATH = ([IO.Path]::GetDirectoryName($uvPath)) + [IO.Path]::PathSeparator + $env:PATH

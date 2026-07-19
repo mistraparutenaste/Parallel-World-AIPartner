@@ -2,6 +2,8 @@
   "schema_version": 1,
   "manifest_version": "2026-07-19.1",
   "python_version": "3.10.20",
+  "python_build": "20260510",
+  "environment_reserve_bytes": 12884901888,
   "backends": [
     "cpu",
     "cu128"

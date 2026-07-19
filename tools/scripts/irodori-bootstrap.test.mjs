@@ -232,7 +232,7 @@ async function runBootstrapHarness(scenario) {
         throw "unexpected fixture URI: $Uri"
       }
       Sleep = { param($Milliseconds) }
-      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
+      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; UV_PYTHON_CPYTHON_BUILD = $env:UV_PYTHON_CPYTHON_BUILD; UV_PROJECT_ENVIRONMENT = $env:UV_PROJECT_ENVIRONMENT; UV_PYTHON_INSTALL_DIR = $env:UV_PYTHON_INSTALL_DIR; UV_CACHE_DIR = $env:UV_CACHE_DIR; UV_NO_SYSTEM_CONFIG = $env:UV_NO_SYSTEM_CONFIG; PYTHONDONTWRITEBYTECODE = $env:PYTHONDONTWRITEBYTECODE; HF_HOME = $env:HF_HOME; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
       WriteProgress = { param($Stage, $Message) [void] $observations.progress.Add("$Stage|$Message") }
     }
     if ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
@@ -364,6 +364,8 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     schema_version: 1,
     manifest_version: "2026-07-19.1",
     python_version: "3.10.20",
+    python_build: "20260510",
+    environment_reserve_bytes: 12884901888,
     backends: ["cpu", "cu128"],
     artifacts,
   };
@@ -498,7 +500,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     $getFreeBytes = {
       param($Path)
       if ($scenario -eq 'disk_full') { return [int64] 0 }
-      return [int64]::MaxValue
+      return ${options.freeBytes === undefined ? "[int64]::MaxValue" : `[int64] ${Number(options.freeBytes)}`}
     }.GetNewClosure()
     $runApp = {
       param($Executable, [string[]] $Arguments, $WorkingDirectory, [hashtable] $Environment)
@@ -698,6 +700,8 @@ test("production manifest pins the direct Windows artifacts and their licenses",
   assert.equal(manifest.schema_version, 1);
   assert.equal(manifest.manifest_version, "2026-07-19.1");
   assert.equal(manifest.python_version, "3.10.20");
+  assert.equal(manifest.python_build, "20260510");
+  assert.equal(manifest.environment_reserve_bytes, 12884901888);
   assert.deepEqual(
     manifest.artifacts.map(({ id, url, size, sha256 }) => ({ id, url, size, sha256 })),
     [
@@ -749,6 +753,75 @@ test("production manifest pins the direct Windows artifacts and their licenses",
     assert.equal(typeof artifact.install_relative_path, "string");
     assert.match(artifact.license_id, /^(Apache-2\.0 OR MIT|MIT)$/);
     assert.match(artifact.license_url, /^https:\/\//);
+  }
+});
+
+test("requires the exact managed Python build and an int64 environment reserve", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-manifest-runtime-pin-"));
+  try {
+    const mutations = [
+      ["python_build", undefined],
+      ["python_build", "20260511"],
+      ["python_build", 20260510],
+      ["environment_reserve_bytes", undefined],
+      ["environment_reserve_bytes", "12884901888"],
+      ["environment_reserve_bytes", 1.5],
+      ["environment_reserve_bytes", 0],
+    ];
+    for (const [index, [field, value]] of mutations.entries()) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      if (value === undefined) delete manifest[field];
+      else manifest[field] = value;
+      const invalidManifestPath = path.join(temporaryDirectory, `${index}.json`);
+      await writeFile(invalidManifestPath, JSON.stringify(manifest), "utf8");
+      await assert.rejects(
+        invokePowerShell(`Import-IrodoriManifest -Path ${quotePowerShell(invalidManifestPath)}`),
+        new RegExp(field, "i"),
+      );
+    }
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test("uses one conservative disk requirement for prompt and provisioning", async () => {
+  const requiredBytes = await invokePowerShell(`
+    & (Get-Module irodori-bootstrap) {
+      $manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestPath)}
+      Get-IrodoriRequiredBytes -Manifest $manifest
+    }
+  `);
+  assert.equal(requiredBytes, 17896221662);
+  await assert.rejects(
+    invokePowerShell(`
+      & (Get-Module irodori-bootstrap) {
+        $overflow = [pscustomobject]@{ environment_reserve_bytes = [int64] 1; artifacts = @([pscustomobject]@{ size = [int64]::MaxValue }) }
+        Get-IrodoriRequiredBytes -Manifest $overflow
+      }
+    `),
+    /overflow/i,
+  );
+  const declined = await runBootstrapHarness("decline");
+  assert.match(declined.observations.prompt_text, /17896221662 bytes/);
+
+  const fixtureServer = createStoredZip([
+    { name: "Irodori-fixture/", data: "" },
+    { name: "Irodori-fixture/pyproject.toml", data: "[project]\nname='fixture'\n" },
+    { name: "Irodori-fixture/uv.lock", data: "version = 1\n" },
+    { name: "Irodori-fixture/irodori_openai_tts/__init__.py", data: "" },
+  ]);
+  const { artifacts } = fixtureArtifacts(fixtureServer);
+  const fixtureRequired = artifacts.reduce((sum, artifact) => sum + artifact.size, 0) * 2 + 12884901888;
+  const below = await runProvisionHarness("success", { freeBytes: fixtureRequired - 1 });
+  const exact = await runProvisionHarness("success", { freeBytes: fixtureRequired });
+  try {
+    assert.match(Buffer.from(below.powerShellResult.failure_detail, "base64").toString("utf8"), /disk space/i);
+    assert.equal(below.completionExists, false);
+    assert.equal(exact.powerShellResult.first.status, "provisioned");
+    assert.equal(exact.completionExists, true);
+  } finally {
+    await cleanupHarness(below);
+    await cleanupHarness(exact);
   }
 });
 
@@ -910,6 +983,87 @@ test("default downloader rejects HTTP before creating a partial file", async () 
   }
 });
 
+test("default downloader cancels a stalled response body and removes the partial file", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-stalled-download-"));
+  const partialPath = path.join(temporaryDirectory, "artifact.partial");
+  try {
+    const result = await invokePowerShell(`
+      Add-Type -ReferencedAssemblies System.Net.Http -TypeDefinition @'
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Threading;
+using System.Threading.Tasks;
+public sealed class IrodoriStalledStream : Stream {
+    public override bool CanRead { get { return true; } }
+    public override bool CanSeek { get { return false; } }
+    public override bool CanWrite { get { return false; } }
+    public override long Length { get { throw new NotSupportedException(); } }
+    public override long Position { get { throw new NotSupportedException(); } set { throw new NotSupportedException(); } }
+    public override void Flush() { }
+    public override int Read(byte[] buffer, int offset, int count) { Thread.Sleep(Timeout.Infinite); return 0; }
+    public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) {
+        var completion = new TaskCompletionSource<int>();
+        cancellationToken.Register(() => completion.TrySetCanceled());
+        return completion.Task;
+    }
+    public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+    public override void SetLength(long value) { throw new NotSupportedException(); }
+    public override void Write(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+}
+public sealed class IrodoriStalledHandler : HttpMessageHandler {
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) {
+        var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK);
+        response.RequestMessage = request;
+        response.Content = new StreamContent(new IrodoriStalledStream());
+        response.Content.Headers.ContentLength = 100;
+        return Task.FromResult(response);
+    }
+}
+'@
+      $failureType = $null
+      $failureMessage = $null
+      $timeoutType = $null
+      $supportsCancellation = & (Get-Module irodori-bootstrap) { (Get-Command Invoke-IrodoriHttpDownload).Parameters.ContainsKey('CancellationToken') }
+      if (-not $supportsCancellation) {
+        $failureType = 'MissingCancellationSupport'
+      } else {
+        $cts = [Threading.CancellationTokenSource]::new()
+        $cts.CancelAfter(200)
+        try {
+          & (Get-Module irodori-bootstrap) {
+            param($Url, $PartialPath, $Token)
+            $artifact = [pscustomobject]@{ url = $Url }
+            Invoke-IrodoriHttpDownload -Artifact $artifact -PartialPath $PartialPath -MaximumBytes 100 -CancellationToken $Token -PerReadTimeoutMilliseconds 5000 -HttpMessageHandler ([IrodoriStalledHandler]::new())
+          } 'https://127.0.0.1/stall' ${quotePowerShell(partialPath)} $cts.Token
+        } catch { $failureType = $_.Exception.GetType().FullName; $failureMessage = $_.Exception.Message }
+        finally { $cts.Dispose() }
+        try {
+          & (Get-Module irodori-bootstrap) {
+            param($Url, $PartialPath)
+            $artifact = [pscustomobject]@{ url = $Url }
+            Invoke-IrodoriHttpDownload -Artifact $artifact -PartialPath $PartialPath -MaximumBytes 100 -PerReadTimeoutMilliseconds 100 -HttpMessageHandler ([IrodoriStalledHandler]::new())
+          } 'https://127.0.0.1/stall' ${quotePowerShell(partialPath)}
+        } catch { $timeoutType = $_.Exception.GetType().FullName }
+      }
+      [pscustomobject]@{ failure_type = $failureType; failure_message = $failureMessage; timeout_type = $timeoutType; partial_exists = Test-Path -LiteralPath ${quotePowerShell(partialPath)} }
+    `);
+    assert.match(result.failure_type, /OperationCanceledException$/, result.failure_message);
+    assert.match(result.timeout_type, /TimeoutException$/);
+    assert.equal(result.partial_exists, false);
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test("default downloader wires and unwires Console cancellation around tokenized reads", async () => {
+  const source = await readFile(modulePath, "utf8");
+  assert.match(source, /add_CancelKeyPress/);
+  assert.match(source, /remove_CancelKeyPress/);
+  assert.match(source, /GetAsync\([^\r\n]*CancellationToken/);
+  assert.match(source, /ReadAsync\([^\r\n]*CancellationToken/);
+});
+
 test("default runner scopes environment and working directory then restores it", async () => {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-default-runner-"));
   try {
@@ -933,6 +1087,27 @@ test("default runner scopes environment and working directory then restores it",
   } finally {
     await rm(temporaryDirectory, { force: true, recursive: true });
   }
+});
+
+test("default runner restores managed environment when changing directory fails", async () => {
+  const missingDirectory = path.join(os.tmpdir(), `irodori-missing-${Date.now()}`);
+  const result = await invokePowerShell(`
+    $names = @('UV_PROJECT_ENVIRONMENT', 'HF_HOME')
+    $before = @{}
+    foreach ($name in $names) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+    $failure = $null
+    try {
+      & (Get-Module irodori-bootstrap) {
+        Invoke-IrodoriDefaultRunApp -Executable ${quotePowerShell(powerShell)} -Arguments @('-NoProfile') -WorkingDirectory ${quotePowerShell(missingDirectory)} -Environment @{ UV_PROJECT_ENVIRONMENT = 'fixture-uv'; HF_HOME = 'fixture-hf' }
+      }
+    } catch { $failure = $_.Exception.Message }
+    [pscustomobject]@{
+      restored = @($names | Where-Object { [Environment]::GetEnvironmentVariable($_, 'Process') -ne $before[$_] }).Count -eq 0
+      failure = $failure
+    }
+  `);
+  assert.equal(result.restored, true);
+  assert.match(result.failure, /irodori-missing-/i);
 });
 
 test("rejects a completion marker for another manifest or backend", async () => {
@@ -1126,6 +1301,7 @@ test("reuses only after offline import verification of a complete runtime", asyn
     assert.equal(result.powerShellResult.run_calls[0].environment.HF_HUB_OFFLINE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.TRANSFORMERS_OFFLINE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.PYTHONDONTWRITEBYTECODE, "1");
+    assert.equal(result.powerShellResult.run_calls[0].environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
   } finally {
     await cleanupHarness(result);
   }
@@ -1183,6 +1359,7 @@ test("publishes completion only after pinned environment verification", async ()
       assert.equal(call.environment.HF_HUB_OFFLINE, "1");
       assert.equal(call.environment.TRANSFORMERS_OFFLINE, "1");
       assert.equal(call.environment.PYTHONDONTWRITEBYTECODE, "1");
+      assert.equal(call.environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
       for (const key of ["UV_PYTHON_INSTALL_DIR", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "HF_HOME"]) {
         assert.equal(call.environment[key].startsWith(result.root), true);
       }
@@ -1339,6 +1516,18 @@ test("provisions after consent and starts managed Irodori with pinned offline se
   assert.equal(observations.start_environment.IRODORI_COMPILE_MODEL, "false");
   assert.equal(observations.start_environment.HF_HUB_OFFLINE, "1");
   assert.equal(observations.start_environment.TRANSFORMERS_OFFLINE, "1");
+  assert.equal(observations.start_environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
+  assert.match(observations.start_environment.UV_PROJECT_ENVIRONMENT, /runtime[\\/]2026-07-19\.1[\\/]env$/i);
+  assert.match(observations.start_environment.UV_PYTHON_INSTALL_DIR, /runtime[\\/]2026-07-19\.1[\\/]python$/i);
+  assert.match(observations.start_environment.UV_CACHE_DIR, /runtime[\\/]2026-07-19\.1[\\/]cache[\\/]uv$/i);
+  assert.equal(observations.start_environment.UV_NO_SYSTEM_CONFIG, "1");
+  assert.equal(observations.start_environment.PYTHONDONTWRITEBYTECODE, "1");
+  assert.equal(observations.app_environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
+  assert.equal(observations.app_environment.UV_PROJECT_ENVIRONMENT, observations.start_environment.UV_PROJECT_ENVIRONMENT);
+  assert.equal(observations.app_environment.UV_PYTHON_INSTALL_DIR, observations.start_environment.UV_PYTHON_INSTALL_DIR);
+  assert.equal(observations.app_environment.UV_CACHE_DIR, observations.start_environment.UV_CACHE_DIR);
+  assert.equal(observations.app_environment.UV_NO_SYSTEM_CONFIG, "1");
+  assert.equal(observations.app_environment.PYTHONDONTWRITEBYTECODE, "1");
   assert.equal(observations.app_environment.PW_TTS_ENGINE, "irodori");
   assert.match(observations.app_environment.PW_IRODORI_DIR, /server$/i);
   assert.equal(observations.app_calls, 1);
