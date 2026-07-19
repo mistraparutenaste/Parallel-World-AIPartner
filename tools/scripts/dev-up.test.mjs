@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -49,6 +50,55 @@ async function waitFor(check, timeoutMs = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   return false;
+}
+
+async function listenOnLoopback() {
+  const server = net.createServer();
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return server;
+}
+
+async function closeServer(server) {
+  if (!server.listening) return;
+  await new Promise((resolve) => server.close(resolve));
+}
+
+async function createCorepackHarness(exitCode = 0) {
+  const temp = await mkdtemp(path.join(os.tmpdir(), "pw-dev-up-"));
+  const marker = path.join(temp, "app-called.txt");
+  const shim = path.join(temp, "corepack.cmd");
+  await writeFile(
+    shim,
+    `@echo off\r\necho called>"%PW_TEST_APP_MARKER%"\r\nexit /b %PW_TEST_APP_EXIT%\r\n`,
+    "utf8",
+  );
+  return {
+    temp,
+    marker,
+    env: {
+      ...process.env,
+      PATH: `${temp}${path.delimiter}${process.env.PATH ?? ""}`,
+      PW_TEST_APP_MARKER: marker,
+      PW_TEST_APP_EXIT: String(exitCode),
+      APPDATA: path.join(temp, "appdata"),
+    },
+  };
+}
+
+function runDevUp(env) {
+  return spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+    {
+      cwd: repositoryRoot,
+      env,
+      encoding: "utf8",
+      timeout: 20_000,
+    },
+  );
 }
 
 test("defaults to the backward-compatible Aivis startup path", () => {
@@ -100,6 +150,9 @@ test("TTS ownership uses a kill-on-close Job and suspended assignment", async ()
   assert.match(moduleSource, /session_id/);
   assert.match(moduleSource, /start_time_utc_ticks/);
   assert.match(moduleSource, /executable_path/);
+  assert.match(moduleSource, /CleanupFailures/);
+  assert.match(moduleSource, /TryTerminateProcess/);
+  assert.match(moduleSource, /TryCloseHandle/);
 });
 
 test("dev-up preserves pre-open TTS and never manages LLM", () => {
@@ -111,6 +164,82 @@ test("dev-up preserves pre-open TTS and never manages LLM", () => {
   assert.doesNotMatch(source, /Start-ManagedProcess[^\r\n]*(?:llm|PW_LLAMA_SERVER)/i);
   assert.doesNotMatch(source, /taskkill|Get-Process\s+-Name/i);
 });
+
+test(
+  "Aivis start failure degrades to app startup without touching external LLM",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const closedPortProbe = await listenOnLoopback();
+    const ttsPort = closedPortProbe.address().port;
+    await closeServer(closedPortProbe);
+    const externalLlm = await listenOnLoopback();
+    const invalidEngine = path.join(harness.temp, "not-an-executable.txt");
+    await writeFile(invalidEngine, "invalid", "utf8");
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "aivis",
+        PW_TTS_PORT: String(ttsPort),
+        PW_AIVIS_ENGINE: invalidEngine,
+        PW_LLM_PORT: String(externalLlm.address().port),
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+      assert.equal(externalLlm.listening, true);
+      assert.match(result.stdout, /AivisSpeech Engine.*起動できません/);
+    } finally {
+      await closeServer(externalLlm);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "returns the native tauri exit code after owned TTS cleanup",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(7);
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "unsupported-for-test",
+        PW_TTS_PORT: "49151",
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 7, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+    } finally {
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "does not claim or stop a TTS listener that was already open",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const externalTts = await listenOnLoopback();
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "aivis",
+        PW_TTS_PORT: String(externalTts.address().port),
+        PW_AIVIS_ENGINE: path.join(harness.temp, "must-not-start.exe"),
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+      assert.equal(externalTts.listening, true);
+      assert.match(result.stdout, /AivisSpeech Engine: .*port/);
+      assert.doesNotMatch(result.stdout, /AivisSpeech Engineを起動します/);
+    } finally {
+      await closeServer(externalTts);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
 
 test(
   "stops owned root and descendant while preserving external TTS and LLM",

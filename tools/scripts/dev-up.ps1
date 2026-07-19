@@ -85,11 +85,23 @@ function Invoke-IrodoriWarmUp {
     }
 }
 
+function Stop-FailedTtsJob {
+    param($Job, [string]$EngineName)
+    if ($null -eq $Job) { return }
+    try {
+        Stop-ManagedProcessJob -Job $Job -GraceSeconds 0
+    } catch {
+        Write-Host "[TTS] $EngineName の起動失敗後cleanupにも失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
 $ttsEngine = (Get-EnvOrDefault 'PW_TTS_ENGINE' 'aivis').ToLowerInvariant()
 $defaultTtsPort = if ($ttsEngine -eq 'irodori') { '8088' } else { '10101' }
 $ttsPort = [int](Get-EnvOrDefault 'PW_TTS_PORT' $defaultTtsPort)
 $llmPort = [int](Get-EnvOrDefault 'PW_LLM_PORT' '1234')
 $ttsJob = $null
+$appExitCode = 0
+$appInvoked = $false
 
 try {
     # --- 1. TTS engine ------------------------------------------------------
@@ -116,18 +128,30 @@ try {
             Write-Host "      実行ファイルの場所が分かる場合は `$env:PW_AIVIS_ENGINE で指定できます。" -ForegroundColor Yellow
         } else {
             Write-Host "[TTS] AivisSpeech Engineを起動します: $engine" -ForegroundColor Cyan
-            $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
-            Start-ManagedProcess -Job $ttsJob -FilePath $engine -ArgumentList @('--host', '127.0.0.1', '--port', "$ttsPort") -WorkingDirectory $repoRoot | Out-Null
-            $deadline = (Get-Date).AddSeconds(60)
-            while (-not (Test-Port $ttsPort)) {
-                if ((Get-Date) -gt $deadline) {
-                    Write-Host "[TTS] 60秒待ちましたが port $ttsPort が開きません。読み上げは縮退動作になります。" -ForegroundColor Yellow
-                    break
-                }
-                Start-Sleep -Milliseconds 500
+            $aivisStarted = $false
+            try {
+                $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
+                Start-ManagedProcess -Job $ttsJob -FilePath $engine -ArgumentList @('--host', '127.0.0.1', '--port', "$ttsPort") -WorkingDirectory $repoRoot | Out-Null
+                $aivisStarted = $true
+            } catch {
+                $startError = $_.Exception.Message
+                $failedJob = $ttsJob
+                $ttsJob = $null
+                Stop-FailedTtsJob -Job $failedJob -EngineName 'AivisSpeech Engine'
+                Write-Host "[TTS] AivisSpeech Engineを起動できません。読み上げは縮退動作になります: $startError" -ForegroundColor Yellow
             }
-            if (Test-Port $ttsPort) {
-                Write-Host "[TTS] 起動を確認しました (port $ttsPort)" -ForegroundColor Green
+            if ($aivisStarted) {
+                $deadline = (Get-Date).AddSeconds(60)
+                while (-not (Test-Port $ttsPort)) {
+                    if ((Get-Date) -gt $deadline) {
+                        Write-Host "[TTS] 60秒待ちましたが port $ttsPort が開きません。読み上げは縮退動作になります。" -ForegroundColor Yellow
+                        break
+                    }
+                    Start-Sleep -Milliseconds 500
+                }
+                if (Test-Port $ttsPort) {
+                    Write-Host "[TTS] 起動を確認しました (port $ttsPort)" -ForegroundColor Green
+                }
             }
         }
     }
@@ -161,7 +185,11 @@ try {
                     Invoke-IrodoriWarmUp $ttsPort
                 }
             } catch {
-                Write-Host "[TTS] Irodori-TTS Serverを起動できません。読み上げは縮退動作になります: $($_.Exception.Message)" -ForegroundColor Yellow
+                $startError = $_.Exception.Message
+                $failedJob = $ttsJob
+                $ttsJob = $null
+                Stop-FailedTtsJob -Job $failedJob -EngineName 'Irodori-TTS Server'
+                Write-Host "[TTS] Irodori-TTS Serverを起動できません。読み上げは縮退動作になります: $startError" -ForegroundColor Yellow
             }
         }
     }
@@ -190,8 +218,13 @@ try {
     # --- 4. アプリ起動 -------------------------------------------------------
     Write-Host "[APP] tauri dev を起動します…" -ForegroundColor Cyan
     corepack pnpm --filter @parallel-world/desktop tauri dev
+    $appExitCode = $LASTEXITCODE
+    $appInvoked = $true
 } finally {
     if ($null -ne $ttsJob) {
         Stop-ManagedProcessJob -Job $ttsJob -GraceSeconds 5
     }
+}
+if ($appInvoked) {
+    exit $appExitCode
 }

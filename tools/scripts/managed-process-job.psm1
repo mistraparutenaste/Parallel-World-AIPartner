@@ -4,6 +4,8 @@ $ErrorActionPreference = 'Stop'
 if ($null -eq ('ParallelWorld.Runtime.ManagedProcessJobNative' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
+using System.Collections.Generic;
+using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
@@ -162,6 +164,28 @@ namespace ParallelWorld.Runtime {
             return DateTime.FromFileTimeUtc(fileTime).Ticks;
         }
 
+        private static void TryTerminateProcess(IntPtr process, List<string> cleanupFailures) {
+            if (process == IntPtr.Zero) return;
+            if (!TerminateProcess(process, 1)) {
+                int error = Marshal.GetLastWin32Error();
+                cleanupFailures.Add("TerminateProcess failed: " + new Win32Exception(error).Message);
+            }
+        }
+
+        private static void TryCloseHandle(IntPtr handle, string label, List<string> cleanupFailures) {
+            if (handle == IntPtr.Zero) return;
+            if (!CloseNativeHandle(handle)) {
+                int error = Marshal.GetLastWin32Error();
+                cleanupFailures.Add("CloseHandle(" + label + ") failed: " + new Win32Exception(error).Message);
+            }
+        }
+
+        private static void AttachCleanupFailures(Exception exception, List<string> cleanupFailures) {
+            if (cleanupFailures.Count > 0) {
+                exception.Data["CleanupFailures"] = cleanupFailures.ToArray();
+            }
+        }
+
         public static StartedProcessIdentity StartSuspendedInJob(JobHandle job, string executable, string commandLine, string currentDirectory) {
             var startup = new StartupInformation();
             startup.Size = (uint)Marshal.SizeOf(typeof(StartupInformation));
@@ -172,6 +196,9 @@ namespace ParallelWorld.Runtime {
                 CreateSuspended | CreateNoWindow, IntPtr.Zero, currentDirectory, ref startup, out process)) {
                 ThrowLastError("CreateProcessW failed");
             }
+            StartedProcessIdentity result = null;
+            Exception primaryFailure = null;
+            var cleanupFailures = new List<string>();
             try {
                 FileTime creation;
                 FileTime exit;
@@ -179,24 +206,34 @@ namespace ParallelWorld.Runtime {
                 FileTime user;
                 if (!GetProcessTimes(process.Process, out creation, out exit, out kernel, out user)) {
                     int error = Marshal.GetLastWin32Error();
-                    TerminateProcess(process.Process, 1);
                     throw new System.ComponentModel.Win32Exception(error, "GetProcessTimes failed");
                 }
                 if (!AssignProcessToJobObject(job, process.Process)) {
                     int error = Marshal.GetLastWin32Error();
-                    TerminateProcess(process.Process, 1);
                     throw new System.ComponentModel.Win32Exception(error, "AssignProcessToJobObject failed");
                 }
                 if (ResumeThread(process.Thread) == UInt32.MaxValue) {
                     int error = Marshal.GetLastWin32Error();
-                    TerminateProcess(process.Process, 1);
                     throw new System.ComponentModel.Win32Exception(error, "ResumeThread failed");
                 }
-                return new StartedProcessIdentity((int)process.ProcessId, ToDateTimeTicks(creation));
+                result = new StartedProcessIdentity((int)process.ProcessId, ToDateTimeTicks(creation));
+            } catch (Exception exception) {
+                primaryFailure = exception;
+                TryTerminateProcess(process.Process, cleanupFailures);
             } finally {
-                CloseNativeHandle(process.Thread);
-                CloseNativeHandle(process.Process);
+                TryCloseHandle(process.Thread, "thread", cleanupFailures);
+                TryCloseHandle(process.Process, "process", cleanupFailures);
             }
+            if (primaryFailure != null) {
+                AttachCleanupFailures(primaryFailure, cleanupFailures);
+                throw primaryFailure;
+            }
+            if (cleanupFailures.Count > 0) {
+                var cleanupFailure = new InvalidOperationException("Process started, but native handle cleanup failed.");
+                AttachCleanupFailures(cleanupFailure, cleanupFailures);
+                throw cleanupFailure;
+            }
+            return result;
         }
 
         public static void Terminate(JobHandle job) {
