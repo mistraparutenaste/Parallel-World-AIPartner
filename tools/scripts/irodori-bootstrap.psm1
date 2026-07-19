@@ -403,7 +403,7 @@ function Assert-IrodoriTransactionPaths {
     foreach ($field in @('schema_version', 'manifest_version', 'backend', 'phase', 'staging_path', 'runtime_path', 'backup_path')) {
         if ($Transaction.PSObject.Properties.Name -notcontains $field) { throw 'Irodori transaction is missing required fields.' }
     }
-    $expectedName = $Transaction.manifest_version + '-' + $Transaction.backend + '.json'
+    $expectedName = $Transaction.manifest_version + '.json'
     if ($Transaction.schema_version -ne 1 -or $Transaction.manifest_version -ne [IO.Path]::GetFileName($Layout.runtime) -or $Transaction.backend -notin $AllowedBackends -or [IO.Path]::GetFileName($TransactionPath) -ne $expectedName -or $Transaction.phase -notin @('building', 'staged', 'promoting', 'constructing', 'publishing', 'committing', 'complete') -or (Get-IrodoriCanonicalPath $Transaction.runtime_path) -ne (Get-IrodoriCanonicalPath $Layout.runtime)) { throw 'Irodori transaction does not match the runtime.' }
     foreach ($pair in @(@($Transaction.staging_path, '.staging-'), @($Transaction.backup_path, '.backup-'))) {
         $candidate = Get-IrodoriCanonicalPath $pair[0]
@@ -594,7 +594,7 @@ function Invoke-IrodoriProvisionLocked {
     [void] [IO.Directory]::CreateDirectory($Layout.root)
     [void] [IO.Directory]::CreateDirectory($Layout.runtime_root)
     [void] [IO.Directory]::CreateDirectory($Layout.transactions)
-    $transactionPath = Join-Path $Layout.transactions ($Manifest.manifest_version + '-' + $Backend + '.json')
+    $transactionPath = Join-Path $Layout.transactions ($Manifest.manifest_version + '.json')
     Recover-IrodoriTransaction -Layout $Layout -TransactionPath $transactionPath
     $verifiedArtifacts = @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)
     $tokenizerArtifacts = @($tokenizerModel, $tokenizerConfig, $modelConfig)

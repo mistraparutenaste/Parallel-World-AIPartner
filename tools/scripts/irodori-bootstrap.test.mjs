@@ -94,6 +94,15 @@ async function pathExists(target) {
   }
 }
 
+async function readJsonOrNull(target) {
+  if (!await pathExists(target)) return null;
+  try {
+    return JSON.parse(await readFile(target, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
 async function invokePowerShell(expression) {
   const command = [
     `$ErrorActionPreference = 'Stop'`,
@@ -155,7 +164,7 @@ function fixtureArtifacts(serverZip) {
   return { artifacts, payloads };
 }
 
-async function prepareCompleteRuntime(root, manifest, payloads, label = "current-runtime") {
+async function prepareCompleteRuntime(root, manifest, payloads, label = "current-runtime", backend = "cpu") {
   const runtime = path.join(root, "runtime", manifest.manifest_version);
   const revision = "5fb086c49f49824cfc93f09cc4ed5cd5917bef3d";
   const snapshot = path.join(
@@ -198,14 +207,14 @@ async function prepareCompleteRuntime(root, manifest, payloads, label = "current
   await writeFile(path.join(runtime, "completion.json"), JSON.stringify({
     schema_version: 1,
     manifest_version: manifest.manifest_version,
-    backend: "cpu",
+    backend,
     python_version: manifest.python_version,
     completed_at: completedAt,
   }), "utf8");
   await writeFile(path.join(root, "runtime", "active.json"), JSON.stringify({
     schema_version: 1,
     manifest_version: manifest.manifest_version,
-    backend: "cpu",
+    backend,
     runtime_path: runtime,
     completed_at: completedAt,
   }), "utf8");
@@ -257,9 +266,10 @@ async function runProvisionHarness(scenario = "success", options = {}) {
   await writeFile(voicesSentinel, Buffer.from([0, 1, 2, 255]));
   await writeFile(lorasSentinel, Buffer.from([255, 2, 1, 0]));
 
+  const crashBackend = options.crashBackend ?? "cpu";
   let preparedRuntime = null;
   if (options.precompleteRuntime || options.crashPhase) {
-    preparedRuntime = await prepareCompleteRuntime(root, manifest, payloads);
+    preparedRuntime = await prepareCompleteRuntime(root, manifest, payloads, "current-runtime", crashBackend);
   }
   if (options.corruptRuntime === "uv") {
     await rm(path.join(preparedRuntime, "tools", "uv", "uv.exe"), { force: true });
@@ -303,12 +313,12 @@ async function runProvisionHarness(scenario = "success", options = {}) {
   }
 
   const staleStage = path.join(root, "runtime", ".staging-stale");
-  const transactionFile = path.join(root, "transactions", "2026-07-19.1-cpu.json");
+  const transactionFile = path.join(root, "transactions", "2026-07-19.1.json");
   if (options.incompleteTransaction || options.crashPhase) {
     await mkdir(staleStage, { recursive: true });
     await writeFile(path.join(staleStage, "stale.txt"), "stale", "utf8");
     await mkdir(path.dirname(transactionFile), { recursive: true });
-    const backupPath = path.join(root, "runtime", ".backup-2026-07-19.1-cpu");
+    const backupPath = path.join(root, "runtime", `.backup-2026-07-19.1-${crashBackend}`);
     if (options.crashPhase && !["building", "staged"].includes(options.crashPhase)) {
       await cp(preparedRuntime, backupPath, { recursive: true });
       await writeFile(path.join(backupPath, "runtime-label.txt"), "old-runtime", "utf8");
@@ -322,7 +332,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     await writeFile(transactionFile, JSON.stringify({
       schema_version: 1,
       manifest_version: "2026-07-19.1",
-      backend: "cpu",
+      backend: crashBackend,
       phase: options.crashPhase === "committing_active" ? "committing" : (options.crashPhase ?? "building"),
       staging_path: staleStage,
       runtime_path: path.join(root, "runtime", "2026-07-19.1"),
@@ -445,7 +455,9 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     const completionMarker = path.join(layoutRoot, "runtime", "2026-07-19.1", "completion.json");
     const installedModel = path.join(layoutRoot, "runtime", "2026-07-19.1", "models", "model.safetensors");
     const runtimeLabel = path.join(layoutRoot, "runtime", "2026-07-19.1", "runtime-label.txt");
-    const backupPath = path.join(layoutRoot, "runtime", ".backup-2026-07-19.1-cpu");
+    const backupPath = path.join(layoutRoot, "runtime", `.backup-2026-07-19.1-${crashBackend}`);
+    const active = await readJsonOrNull(activeMarker);
+    const completion = await readJsonOrNull(completionMarker);
     return {
       root,
       manifest,
@@ -460,6 +472,8 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       installedModelBytes: await pathExists(installedModel) ? await readFile(installedModel) : null,
       runtimeLabel: await pathExists(runtimeLabel) ? await readFile(runtimeLabel, "utf8") : null,
       backupExists: await pathExists(backupPath),
+      activeBackend: active?.backend ?? null,
+      completionBackend: completion?.backend ?? null,
       junctionPath,
       outsideRoot,
       outsideEntries: outsideRoot ? await readdir(outsideRoot) : [],
@@ -961,6 +975,30 @@ for (const [phase, expectedLabel] of [
       await cleanupHarness(result);
     }
   });
+}
+
+for (const [crashBackend, targetBackend] of [["cpu", "cu128"], ["cu128", "cpu"]]) {
+  for (const phase of ["constructing", "publishing", "committing"]) {
+    test(`recovers ${crashBackend} ${phase} journal before provisioning ${targetBackend}`, async () => {
+      const result = await runProvisionHarness("success", {
+        crashPhase: phase,
+        crashBackend,
+        backend: targetBackend,
+      });
+      try {
+        assert.equal(result.powerShellResult.failure, null);
+        assert.equal(result.powerShellResult.first.status, "provisioned");
+        assert.equal(result.transactionExists, false);
+        assert.equal(result.staleStageExists, false);
+        assert.equal(result.backupExists, false);
+        assert.equal(result.runtimeLabel, null);
+        assert.equal(result.activeBackend, targetBackend);
+        assert.equal(result.completionBackend, targetBackend);
+      } finally {
+        await cleanupHarness(result);
+      }
+    });
+  }
 }
 
 test("reuses only after offline import verification of a complete runtime", async () => {
