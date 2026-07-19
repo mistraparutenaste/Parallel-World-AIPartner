@@ -14,14 +14,14 @@ use pw_application::recovery::{
 use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue};
 use pw_contracts::{
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
-    SpeechStopEventDto, TtsSettingsDto, TtsStateEventDto,
+    SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
 };
 use pw_domain::reply::TurnId;
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_platform::paths::AppDataLayout;
 use pw_tts::{
-    AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, SynthesisParams,
-    TtsClientConfig, WavCache,
+    AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, EngineClient,
+    IrodoriTtsClient, SynthesisParams, TtsClientConfig, WavCache,
 };
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
@@ -149,6 +149,7 @@ impl Worker {
 /// sentences at or below it before synthesizing them.
 pub struct TtsService {
     worker: Mutex<Option<Worker>>,
+    settings_fingerprint: Mutex<Option<String>>,
     latest_turn: AtomicU64,
     invalid_up_to: Arc<AtomicU64>,
     event_gate: Arc<Mutex<()>>,
@@ -162,6 +163,7 @@ impl Default for TtsService {
     fn default() -> Self {
         Self {
             worker: Mutex::new(None),
+            settings_fingerprint: Mutex::new(None),
             latest_turn: AtomicU64::new(0),
             invalid_up_to: Arc::new(AtomicU64::new(0)),
             event_gate: Arc::new(Mutex::new(())),
@@ -178,13 +180,80 @@ impl Default for TtsService {
 }
 
 fn fingerprint(settings: &TtsSettingsDto) -> String {
-    format!(
-        "{}|{}|{}|{}",
-        settings.base_url, settings.style_id, settings.volume, settings.speed
-    )
+    let engine = match settings.engine {
+        TtsEngineKind::Aivis => "aivis",
+        TtsEngineKind::Irodori => "irodori",
+    };
+    let volume = settings.volume.to_bits().to_string();
+    let speed = settings.speed.to_bits().to_string();
+    let mut result = String::new();
+    for field in [
+        engine,
+        settings.base_url.as_str(),
+        settings.voice_id.as_str(),
+        settings.irodori_lora_adapter.as_str(),
+        volume.as_str(),
+        speed.as_str(),
+    ] {
+        result.push_str(&field.len().to_string());
+        result.push(':');
+        result.push_str(field);
+    }
+    result
+}
+
+fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
+    let config = TtsClientConfig {
+        base_url: settings.base_url.clone(),
+        timeout: ADAPTER_TIMEOUT,
+    };
+    match settings.engine {
+        TtsEngineKind::Aivis => AivisSpeechClient::new(&config)
+            .map(EngineClient::Aivis)
+            .map_err(|error| error.to_string()),
+        TtsEngineKind::Irodori => {
+            let client = if settings.irodori_lora_adapter.trim().is_empty() {
+                IrodoriTtsClient::new(&config)
+            } else {
+                IrodoriTtsClient::with_lora_adapter(&config, &settings.irodori_lora_adapter)
+            };
+            client
+                .map(EngineClient::Irodori)
+                .map_err(|error| error.to_string())
+        }
+    }
 }
 
 impl TtsService {
+    /// Stops work tied to an old engine configuration and gives the new
+    /// configuration an independent health circuit. Repeated submissions with
+    /// the same fingerprint retain their current backoff state.
+    fn refresh_configuration(&self, wanted: &str) {
+        let mut current = self
+            .settings_fingerprint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.as_deref() == Some(wanted) {
+            return;
+        }
+
+        let mut worker = self.lock();
+        if let Some(stale) = worker.take() {
+            stale.shutdown();
+        }
+        self.queue_metrics.reset_depth();
+        self.text_only_turn.store(0, Ordering::Relaxed);
+        *self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = FeatureHealthSupervisor::new(
+            RuntimeFeature::TextToSpeech,
+            SystemClock,
+            TimeJitter::default(),
+        );
+        *current = Some(wanted.to_owned());
+    }
+
     /// Clears the application-owned TTS circuit.
     ///
     /// # Errors
@@ -287,6 +356,8 @@ impl TtsService {
         if !settings.enabled {
             return;
         }
+        let wanted = fingerprint(&settings);
+        self.refresh_configuration(&wanted);
         if !self
             .health
             .lock()
@@ -301,7 +372,6 @@ impl TtsService {
             );
             return;
         }
-        let wanted = fingerprint(&settings);
         let mut guard = self.lock();
         self.register_turn_locked_with(&guard, turn, || emit_stop(app));
         if turn.value() <= self.invalid_up_to.load(Ordering::SeqCst) {
@@ -414,17 +484,13 @@ impl TtsService {
         app: AppHandle<R>,
         settings: &TtsSettingsDto,
     ) -> Result<Worker, String> {
-        let client = AivisSpeechClient::new(&TtsClientConfig {
-            base_url: settings.base_url.clone(),
-            timeout: ADAPTER_TIMEOUT,
-        })
-        .map_err(|error| error.to_string())?;
+        let client = engine_client(settings)?;
         let layout = app.state::<AppDataLayout>();
         let cache = WavCache::new(layout.cache.join("tts"), DEFAULT_MAX_ENTRIES);
         let synthesizer = CachedSpeechSynthesizer::new(
             client,
             cache,
-            settings.style_id,
+            &settings.voice_id,
             SynthesisParams {
                 volume: settings.volume,
                 speed: settings.speed,
@@ -565,6 +631,72 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_fingerprint_changes_for_engine_or_voice() {
+        let base = crate::tts::settings::default_tts_settings();
+        let mut changed_engine = base.clone();
+        changed_engine.engine = pw_contracts::TtsEngineKind::Irodori;
+        let mut changed_voice = base.clone();
+        changed_voice.voice_id = "different".to_owned();
+        let mut changed_lora = base.clone();
+        changed_lora.engine = pw_contracts::TtsEngineKind::Irodori;
+        changed_lora.irodori_lora_adapter = "adapters/character-a".to_owned();
+
+        assert_ne!(fingerprint(&base), fingerprint(&changed_engine));
+        assert_ne!(fingerprint(&base), fingerprint(&changed_voice));
+        assert_ne!(fingerprint(&changed_engine), fingerprint(&changed_lora));
+    }
+
+    #[test]
+    fn worker_fingerprint_separates_fields_containing_the_old_delimiter() {
+        let mut left = crate::tts::settings::default_tts_settings();
+        left.engine = TtsEngineKind::Irodori;
+        left.voice_id = "x".to_owned();
+        left.irodori_lora_adapter = "y|z".to_owned();
+        let mut right = left.clone();
+        right.voice_id = "x|y".to_owned();
+        right.irodori_lora_adapter = "z".to_owned();
+
+        assert_ne!(fingerprint(&left), fingerprint(&right));
+    }
+
+    #[test]
+    fn engine_change_rearms_an_open_aivis_circuit_before_the_next_attempt() {
+        let service = TtsService::default();
+        let aivis = crate::tts::settings::default_tts_settings();
+        let mut irodori = aivis.clone();
+        irodori.engine = TtsEngineKind::Irodori;
+        irodori.base_url = crate::tts::settings::default_base_url(TtsEngineKind::Irodori).into();
+        irodori.voice_id = "voice-a".into();
+
+        service.refresh_configuration(&fingerprint(&aivis));
+        {
+            let mut health = service.health.lock().unwrap();
+            health.record_failure(RuntimeFailure::permanent(FailureCode::Unavailable));
+            assert!(!health.can_attempt());
+        }
+
+        service.refresh_configuration(&fingerprint(&irodori));
+
+        assert!(service.health.lock().unwrap().can_attempt());
+    }
+
+    #[test]
+    fn same_configuration_preserves_health_backoff() {
+        let service = TtsService::default();
+        let wanted = fingerprint(&crate::tts::settings::default_tts_settings());
+        service.refresh_configuration(&wanted);
+        service
+            .health
+            .lock()
+            .unwrap()
+            .record_failure(RuntimeFailure::permanent(FailureCode::Unavailable));
+
+        service.refresh_configuration(&wanted);
+
+        assert!(!service.health.lock().unwrap().can_attempt());
+    }
 
     #[test]
     fn production_tts_timeout_covers_slow_local_synthesis_without_extending_backpressure() {

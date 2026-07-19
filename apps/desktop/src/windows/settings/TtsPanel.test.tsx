@@ -1,9 +1,9 @@
 import type {
   TtsSettingsDto,
-  TtsSpeakerDto,
+  TtsVoiceDto,
   UserDictWordDto,
 } from '@parallel-world/contracts';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TtsPanel } from './TtsPanel';
 
@@ -12,94 +12,277 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
 }));
 
-const SETTINGS: TtsSettingsDto = {
+const AIVIS_SETTINGS: TtsSettingsDto = {
   schema_version: 1,
   enabled: true,
   base_url: 'http://127.0.0.1:10101',
+  engine: 'aivis',
+  voice_id: '888753760',
+  irodori_lora_adapter: '',
   style_id: 888753760,
   volume: 1,
   speed: 1,
 };
 
-const SPEAKERS: TtsSpeakerDto[] = [
-  { name: 'Anneli', style_name: 'ノーマル', style_id: 888753760 },
-  { name: 'White', style_name: 'ノーマル', style_id: 706073888 },
+const VOICES: TtsVoiceDto[] = [
+  { id: '888753760', label: 'Anneli / ノーマル' },
+  { id: 'irodori-voice', label: 'Irodori Voice' },
 ];
 
 const WORDS: UserDictWordDto[] = [
   {
     uuid: 'aaaa-bbbb',
-    surface: 'ＬＬＭ',
+    surface: 'LLM',
     pronunciation: 'エルエルエム',
     accent_type: 1,
   },
 ];
 
+function mockSettings(settings: TtsSettingsDto = AIVIS_SETTINGS) {
+  invokeMock.mockImplementation((command: string) => {
+    switch (command) {
+      case 'get_tts_settings':
+        return Promise.resolve(settings);
+      case 'list_tts_voices':
+        return Promise.resolve(VOICES);
+      case 'list_user_dict':
+        return Promise.resolve(WORDS);
+      case 'add_user_dict_word':
+        return Promise.resolve('new-uuid');
+      default:
+        return Promise.resolve(null);
+    }
+  });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('TtsPanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
-    invokeMock.mockImplementation((command: string) => {
-      switch (command) {
-        case 'get_tts_settings':
-          return Promise.resolve(SETTINGS);
-        case 'list_tts_speakers':
-          return Promise.resolve(SPEAKERS);
-        case 'list_user_dict':
-          return Promise.resolve(WORDS);
-        case 'add_user_dict_word':
-          return Promise.resolve('new-uuid');
-        default:
-          return Promise.resolve(null);
-      }
+    mockSettings();
+  });
+
+  it('loads persisted Aivis settings and shows its dictionary', async () => {
+    render(<TtsPanel />);
+
+    expect(await screen.findByLabelText('TTSエンジン')).toHaveValue('aivis');
+    expect(screen.getByLabelText('接続先 (AivisSpeech Engine)')).toHaveValue(
+      'http://127.0.0.1:10101',
+    );
+    expect(screen.getByRole('heading', { name: 'ユーザー辞書' })).toBeVisible();
+  });
+
+  it('switches an engine default URL and resets the selected voice', async () => {
+    render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+
+    expect(screen.getByLabelText('接続先 (irodori-TTS)')).toHaveValue(
+      'http://127.0.0.1:8088',
+    );
+    expect(screen.getByLabelText('音声')).toHaveValue('');
+    expect(screen.queryByRole('heading', { name: 'ユーザー辞書' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:8088',
     });
   });
 
-  it('loads and shows the persisted settings', async () => {
+  it('switches the irodori default URL back to the Aivis default', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
     render(<TtsPanel />);
-    expect(
-      await screen.findByLabelText('接続先 (AivisSpeech Engine)'),
-    ).toHaveValue('http://127.0.0.1:10101');
-    expect(screen.getByLabelText('音声で読み上げる')).toBeChecked();
-  });
 
-  it('saves edited settings through set_tts_settings', async () => {
-    render(<TtsPanel />);
-    const enabled = await screen.findByLabelText('音声で読み上げる');
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'aivis' },
+    });
 
-    fireEvent.click(enabled);
-    fireEvent.click(screen.getByRole('button', { name: '保存' }));
-
-    expect(invokeMock).toHaveBeenCalledWith('set_tts_settings', {
-      settings: { ...SETTINGS, enabled: false },
+    expect(screen.getByLabelText('接続先 (AivisSpeech Engine)')).toHaveValue(
+      'http://127.0.0.1:10101',
+    );
+    expect(screen.getByLabelText('音声')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
     });
   });
 
-  it('fetches speakers and selects a style', async () => {
+  it('preserves a custom URL when switching engines', async () => {
+    mockSettings({ ...AIVIS_SETTINGS, base_url: 'http://127.0.0.1:18080' });
     render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+
+    expect(screen.getByLabelText('接続先 (irodori-TTS)')).toHaveValue(
+      'http://127.0.0.1:18080',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:18080',
+    });
+  });
+
+  it('fetches normalized voices and saves the selected irodori string id', async () => {
+    render(<TtsPanel />);
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
     fireEvent.click(
-      await screen.findByRole('button', { name: '話者一覧を取得' }),
+      screen.getByRole('button', { name: '音声一覧を取得' }),
     );
 
     expect(
-      await screen.findByRole('option', { name: 'White / ノーマル' }),
+      await screen.findByRole('option', { name: 'Irodori Voice' }),
     ).toBeInTheDocument();
-
-    fireEvent.change(screen.getByLabelText('話者スタイル'), {
-      target: { value: '706073888' },
+    fireEvent.change(screen.getByLabelText('音声'), {
+      target: { value: 'irodori-voice' },
+    });
+    fireEvent.change(screen.getByLabelText('LoRA adapter path'), {
+      target: { value: 'C:/models/adapters/character-a' },
     });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     expect(invokeMock).toHaveBeenCalledWith('set_tts_settings', {
-      settings: { ...SETTINGS, style_id: 706073888 },
+      settings: {
+        ...AIVIS_SETTINGS,
+        engine: 'irodori',
+        base_url: 'http://127.0.0.1:8088',
+        voice_id: 'irodori-voice',
+        irodori_lora_adapter: 'C:/models/adapters/character-a',
+      },
+    });
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:8088',
     });
   });
 
-  it('lists, adds and deletes user dictionary words', async () => {
+  it('ignores an old Aivis voice response after switching to irodori', async () => {
+    const aivisVoices = deferred<TtsVoiceDto[]>();
+    invokeMock.mockImplementation((command: string, args?: unknown) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve(AIVIS_SETTINGS);
+      }
+      if (command === 'list_tts_voices') {
+        const target = args as { engine: string };
+        return target.engine === 'aivis'
+          ? aivisVoices.promise
+          : Promise.resolve([{ id: 'irodori-voice', label: 'Irodori Voice' }]);
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '音声一覧を取得' }),
+    );
+    fireEvent.change(screen.getByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: '音声一覧を取得' }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'Irodori Voice' }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      aivisVoices.resolve([{ id: 'old-aivis', label: 'Old Aivis Voice' }]);
+      await aivisVoices.promise;
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('option', { name: 'Old Aivis Voice' }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows the backend error when saving irodori without a voice', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve(AIVIS_SETTINGS);
+      }
+      if (command === 'set_tts_settings') {
+        return Promise.reject(new Error('voice_id must not be empty'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'voice_id must not be empty',
+    );
+  });
+
+  it('shows the irodori operational and consent notices', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    render(<TtsPanel />);
+
+    await screen.findByLabelText('接続先 (irodori-TTS)');
+    expect(screen.getByText(/GPUを推奨/)).toBeVisible();
+    expect(screen.getByText(/初回の音声合成.*モデル.*時間/)).toBeVisible();
+    expect(screen.getByText(/IRODORI_COMPILE_MODEL=false/)).toBeVisible();
+    expect(screen.getByText(/同意を得た参照音声のみ/)).toBeVisible();
+  });
+
+  it('uses an engine-specific voice error message', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve({
+          ...AIVIS_SETTINGS,
+          engine: 'irodori',
+          base_url: 'http://127.0.0.1:8088',
+        });
+      }
+      if (command === 'list_tts_voices') {
+        return Promise.reject(new Error('offline'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+    fireEvent.click(
+      await screen.findByRole('button', { name: '音声一覧を取得' }),
+    );
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'irodori-TTS の音声一覧を取得できません',
+    );
+  });
+
+  it('lists, adds and deletes Aivis user dictionary words', async () => {
     render(<TtsPanel />);
     fireEvent.click(
       await screen.findByRole('button', { name: '辞書を読み込む' }),
     );
-    expect(await screen.findByText(/ＬＬＭ（エルエルエム）/)).toBeInTheDocument();
+    expect(await screen.findByText(/LLM（エルエルエム）/)).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('単語'), {
       target: { value: 'STT' },
@@ -109,13 +292,63 @@ describe('TtsPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '単語を追加' }));
     expect(invokeMock).toHaveBeenCalledWith('add_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
       surface: 'STT',
       pronunciation: 'エスティーティー',
       accentType: 0,
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'ＬＬＭを削除' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LLMを削除' }));
     expect(invokeMock).toHaveBeenCalledWith('delete_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
+      uuid: 'aaaa-bbbb',
+    });
+  });
+
+  it('uses unsaved Aivis connection values for dictionary commands', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'aivis' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: '辞書を読み込む' }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('list_user_dict', {
+        engine: 'aivis',
+        baseUrl: 'http://127.0.0.1:10101',
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText('単語'), {
+      target: { value: 'API' },
+    });
+    fireEvent.change(screen.getByLabelText('読み（カタカナ）'), {
+      target: { value: 'エーピーアイ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '単語を追加' }));
+    expect(invokeMock).toHaveBeenCalledWith('add_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
+      surface: 'API',
+      pronunciation: 'エーピーアイ',
+      accentType: 0,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'LLMを削除' }));
+    expect(invokeMock).toHaveBeenCalledWith('delete_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
       uuid: 'aaaa-bbbb',
     });
   });

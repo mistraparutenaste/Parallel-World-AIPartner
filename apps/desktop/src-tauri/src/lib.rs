@@ -85,7 +85,7 @@ pub fn run() {
             commands::ui::set_chat_placement,
             commands::tts::get_tts_settings,
             commands::tts::set_tts_settings,
-            commands::tts::list_tts_speakers,
+            commands::tts::list_tts_voices,
             commands::tts::list_user_dict,
             commands::tts::add_user_dict_word,
             commands::tts::delete_user_dict_word,

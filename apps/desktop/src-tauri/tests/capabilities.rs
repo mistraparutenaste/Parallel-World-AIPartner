@@ -150,7 +150,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-resume-dark-expression",
             "allow-get-tts-settings",
             "allow-set-tts-settings",
-            "allow-list-tts-speakers",
+            "allow-list-tts-voices",
             "allow-list-user-dict",
             "allow-add-user-dict-word",
             "allow-delete-user-dict-word",

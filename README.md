@@ -5,7 +5,7 @@
 # Parallel World
 
 Parallel Worldは、Live2Dまたは静止画のキャラクターと、テキスト・音声で会話するローカル優先のデスクトップAIコンパニオンです。
-Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカル音声認識、AivisSpeechによる読み上げ、SQLiteの会話履歴・記憶を一つのアプリに統合しています。
+Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカル音声認識、AivisSpeech / Irodori-TTSによる読み上げ、SQLiteの会話履歴・記憶を一つのアプリに統合しています。
 
 現在は開発版です。日常利用に必要な会話、キャラクター表示、音声、履歴、設定、診断の主要機能は実装済みですが、一般配布用の署名・updater・モデル配布と、自発発話ランタイムの完成は今後の作業です。
 
@@ -17,7 +17,7 @@ Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカ�
 - **キャラクター表示**: 透明・最前面のLive2D表示と、PNG / 非アニメーションWebPによる静止画キャラクターに対応
 - **音声入力**: `cpal`、Silero VAD、ReazonSpeech + `sherpa-onnx`によるローカル日本語STT
 - **LLM会話**: OpenAI互換Chat Completions API、ストリーミング応答、キャンセル、文章分割、キャラクター制御JSON
-- **音声合成**: AivisSpeech Engine、話者・スタイル・音量・話速設定、文単位キュー、WAVキャッシュ、実再生開始に同期したキャラクター動作
+- **音声合成**: AivisSpeech / Irodori-TTSの選択、voice・スタイル・音量・話速設定、文単位キュー、WAVキャッシュ、実再生開始に同期したキャラクター動作
 - **履歴と記憶**: SQLiteへの会話履歴、要約、長期記憶、FTS5検索、バックアップ、削除、データ使用量表示
 - **キャラクター別の性格**: 自由記述、会話傾向、複数の性格スライダーをキャラクター単位で保存
 - **安全設定**: 強いダーク表現の明示同意、ユーザー共通セーフワード、生成・TTSの即時停止と停止状態の永続化
@@ -53,7 +53,7 @@ Tauri 2 desktop application
    ├─ pw-audio           microphone capture and resampling
    ├─ pw-stt-sherpa      VAD / STT adapter
    ├─ pw-llm             OpenAI-compatible HTTP / SSE client
-   ├─ pw-tts             AivisSpeech adapter and audio cache
+   ├─ pw-tts             TTS engine adapters and audio cache
    ├─ pw-storage         SQLite history and memory storage
    ├─ pw-platform        app data, logging and process supervision
    └─ desktop Tauri      commands, windows and capabilities
@@ -99,7 +99,7 @@ AivisSpeech Engineの起動確認、LLMと開発用アセットの確認もま�
 powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 ```
 
-`dev-up.ps1`はTTSを`127.0.0.1:10101`、LLMを`127.0.0.1:1234`で確認します。`PW_TTS_PORT`、`PW_LLM_PORT`、`PW_AIVIS_ENGINE`で変更できます。アプリ本体のLLM初期値は`http://127.0.0.1:8080/v1`なので、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
+`dev-up.ps1`は既定でAivisSpeechを`127.0.0.1:10101`、LLMを`127.0.0.1:1234`で確認します。`PW_TTS_ENGINE`、`PW_TTS_PORT`、`PW_LLM_PORT`、`PW_AIVIS_ENGINE`で変更できます。Irodoriのopt-in起動は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。アプリ本体のLLM初期値は`http://127.0.0.1:8080/v1`なので、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
 
 ## 外部モデルとサービス
 
@@ -116,6 +116,10 @@ http://127.0.0.1:8080/v1
 ### AivisSpeech
 
 読み上げにはローカルのAivisSpeech Engineを使用します。既定値は`http://127.0.0.1:10101`です。未起動の場合は読み上げだけが無効になります。
+
+### Irodori-TTS
+
+ユーザーが別途管理するIrodori-TTS-Serverも選択でき、server側のdynamic LoRA adapter pathを設定できます。サーバー、Python/CUDA環境、モデル、LoRA、参照音声は同梱・自動インストールしません。Windows 11での準備、安全な音声利用、LoRA、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
 ### VAD / STT
 
@@ -217,7 +221,7 @@ crates/pw-application/        use cases, policies, memory and recovery
 crates/pw-audio/              microphone capture and audio processing
 crates/pw-stt-sherpa/         VAD / STT adapter
 crates/pw-llm/                OpenAI-compatible LLM adapter
-crates/pw-tts/                AivisSpeech adapter
+crates/pw-tts/                TTS engine adapters
 crates/pw-storage/            SQLite history and memory storage
 crates/pw-platform/           OS paths, logging and process supervision
 content/model-manifests/      external model metadata and checksums

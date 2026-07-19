@@ -53,7 +53,8 @@ fn main() {
             "set_speech_playback",
             "get_tts_settings",
             "set_tts_settings",
-            "list_tts_speakers",
+            // The settings window normalizes both engine APIs to this command.
+            "list_tts_voices",
             "list_user_dict",
             "add_user_dict_word",
             "delete_user_dict_word",

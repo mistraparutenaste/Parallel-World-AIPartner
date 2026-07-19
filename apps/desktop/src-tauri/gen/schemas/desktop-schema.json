@@ -357,10 +357,10 @@
           "markdownDescription": "Enables the list_microphones command without any pre-configured scope."
         },
         {
-          "description": "Enables the list_tts_speakers command without any pre-configured scope.",
+          "description": "Enables the list_tts_voices command without any pre-configured scope.",
           "type": "string",
-          "const": "allow-list-tts-speakers",
-          "markdownDescription": "Enables the list_tts_speakers command without any pre-configured scope."
+          "const": "allow-list-tts-voices",
+          "markdownDescription": "Enables the list_tts_voices command without any pre-configured scope."
         },
         {
           "description": "Enables the list_user_dict command without any pre-configured scope.",
@@ -699,10 +699,10 @@
           "markdownDescription": "Denies the list_microphones command without any pre-configured scope."
         },
         {
-          "description": "Denies the list_tts_speakers command without any pre-configured scope.",
+          "description": "Denies the list_tts_voices command without any pre-configured scope.",
           "type": "string",
-          "const": "deny-list-tts-speakers",
-          "markdownDescription": "Denies the list_tts_speakers command without any pre-configured scope."
+          "const": "deny-list-tts-voices",
+          "markdownDescription": "Denies the list_tts_voices command without any pre-configured scope."
         },
         {
           "description": "Denies the list_user_dict command without any pre-configured scope.",

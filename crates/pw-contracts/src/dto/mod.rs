@@ -63,8 +63,8 @@ pub use safety::{
     SafewordTriggeredEventDto,
 };
 pub use tts::{
-    SpeechAudioEventDto, SpeechStopEventDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UserDictWordDto,
+    SpeechAudioEventDto, SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
+    TtsVoiceDto, UserDictWordDto,
 };
 pub use ui::{ChatPlacementDto, ThemePreferenceDto, UiPreferencesDto};
 pub use update::{UpdateStateDto, UpdateStatusDto};
