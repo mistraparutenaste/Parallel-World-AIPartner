@@ -48,7 +48,7 @@ backendは自動検出した推奨値を確認画面へ表示する。対応状�
 
 `content/runtime-manifests/irodori/windows-x86_64.json` は、Windows x86_64 の直接取得物、サイズ、SHA-256、導入先相対パス、ライセンスIDおよび上流ライセンスURLを固定する。schema version は `1`、manifest version は `2026-07-19.1`、Python は `3.10.20`、backend は `cpu` と `cu128` のみとする。
 
-bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`、`Get-IrodoriBackend`、`Test-IrodoriCompletion` とする。既定layout rootは `%LOCALAPPDATA%\com.parallelworld.desktop\irodori` であり、`runtime/<manifest-version>`、`cache/downloads`、`transactions`、`user/voices`、`user/loras` を返す。completion marker は `runtime/<manifest-version>/completion.json` に置き、`{ schema_version: 1, manifest_version, backend, python_version, completed_at }` と完全一致した場合だけ有効とする。
+bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`、`Get-IrodoriBackend`、`Test-IrodoriCompletion -ExpectedBackend <cpu|cu128>` とする。既定layout rootは `%LOCALAPPDATA%\com.parallelworld.desktop\irodori` であり、`runtime/<manifest-version>`、`cache/downloads`、`transactions`、`user/voices`、`user/loras` を返す。completion marker は `runtime/<manifest-version>/completion.json` に置き、`schema_version`、manifest、Python、および選択済み`ExpectedBackend`まで完全一致した場合だけ有効とする。
 
 ## Download and Installation Safety
 

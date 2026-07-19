@@ -23,6 +23,19 @@ function Test-IrodoriRelativePath {
     return @($Path -split '[\\/]' | Where-Object { $_ -in @('', '.', '..') }).Count -eq 0
 }
 
+function Test-IrodoriString {
+    param([object] $Value)
+    return $Value -is [string]
+}
+
+function Test-IrodoriPositiveInteger {
+    param([object] $Value)
+    if ($Value -isnot [byte] -and $Value -isnot [sbyte] -and $Value -isnot [int16] -and $Value -isnot [uint16] -and $Value -isnot [int32] -and $Value -isnot [uint32] -and $Value -isnot [int64] -and $Value -isnot [uint64]) {
+        return $false
+    }
+    return $Value -gt 0
+}
+
 function Test-IrodoriHttpsUrl {
     param([string] $Url)
     $uri = $null
@@ -45,13 +58,13 @@ function Import-IrodoriManifest {
     $installPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($artifact in @($manifest.artifacts)) {
         Assert-IrodoriExactFields $artifact $AllowedArtifactFields 'Irodori artifact'
-        if ([string]::IsNullOrWhiteSpace($artifact.id) -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be unique: $($artifact.id)" }
-        if (-not (Test-IrodoriHttpsUrl $artifact.url)) { throw "Irodori artifact URL must use HTTPS: $($artifact.id)" }
-        if ($artifact.size -isnot [ValueType] -or [int64]$artifact.size -le 0) { throw "Irodori artifact size must be positive: $($artifact.id)" }
-        if ($artifact.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Irodori artifact sha256 must be lowercase 64-hex: $($artifact.id)" }
-        if (-not (Test-IrodoriRelativePath $artifact.install_relative_path) -or -not $installPaths.Add($artifact.install_relative_path)) { throw "Irodori artifact install_relative_path must be unique and relative: $($artifact.id)" }
-        if ($artifact.license_id -notin $AllowedLicenseIds) { throw "Irodori artifact license_id is not supported: $($artifact.id)" }
-        if (-not (Test-IrodoriHttpsUrl $artifact.license_url)) { throw "Irodori artifact license_url must use HTTPS: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.id) -or [string]::IsNullOrWhiteSpace($artifact.id) -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be a unique string: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.url) -or -not (Test-IrodoriHttpsUrl $artifact.url)) { throw "Irodori artifact URL must be an HTTPS string: $($artifact.id)" }
+        if (-not (Test-IrodoriPositiveInteger $artifact.size)) { throw "Irodori artifact size must be a positive integer: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.sha256) -or $artifact.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Irodori artifact sha256 must be a lowercase 64-hex string: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.install_relative_path) -or -not (Test-IrodoriRelativePath $artifact.install_relative_path) -or -not $installPaths.Add($artifact.install_relative_path)) { throw "Irodori artifact install_relative_path must be a unique relative string: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.license_id) -or $artifact.license_id -notin $AllowedLicenseIds) { throw "Irodori artifact license_id is not supported: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.license_url) -or -not (Test-IrodoriHttpsUrl $artifact.license_url)) { throw "Irodori artifact license_url must be an HTTPS string: $($artifact.id)" }
     }
     return $manifest
 }
@@ -82,14 +95,18 @@ function Get-IrodoriBackend {
 }
 
 function Test-IrodoriCompletion {
-    param([hashtable] $Layout, [psobject] $Manifest)
+    param(
+        [hashtable] $Layout,
+        [psobject] $Manifest,
+        [Parameter(Mandatory)] [ValidateSet('cpu', 'cu128')] [string] $ExpectedBackend
+    )
     if (-not $Layout.ContainsKey('completion_marker') -or -not (Test-Path -LiteralPath $Layout.completion_marker -PathType Leaf)) { return $false }
     try {
         $completion = Get-Content -LiteralPath $Layout.completion_marker -Raw | ConvertFrom-Json -ErrorAction Stop
         Assert-IrodoriExactFields $completion @('schema_version', 'manifest_version', 'backend', 'python_version', 'completed_at') 'Irodori completion marker'
         [DateTimeOffset]::Parse($completion.completed_at) | Out-Null
     } catch { return $false }
-    return $completion.schema_version -eq 1 -and $completion.manifest_version -eq $Manifest.manifest_version -and $completion.backend -in @($Manifest.backends) -and $completion.python_version -eq $Manifest.python_version
+    return $completion.schema_version -eq 1 -and $completion.manifest_version -eq $Manifest.manifest_version -and $completion.backend -in @($Manifest.backends) -and $completion.backend -eq $ExpectedBackend -and $completion.python_version -eq $Manifest.python_version
 }
 
 Export-ModuleMember -Function Import-IrodoriManifest, Get-IrodoriLayout, Get-IrodoriBackend, Test-IrodoriCompletion

@@ -54,7 +54,7 @@ async function invokePowerShell(expression) {
   });
 }
 
-async function inspectCompletion(marker) {
+async function inspectCompletion(marker, expectedBackend) {
   const root = await mkdtemp(path.join(os.tmpdir(), "irodori-bootstrap-"));
   try {
     const layout = await invokePowerShell(
@@ -65,7 +65,7 @@ async function inspectCompletion(marker) {
     return await invokePowerShell(
       `$layout = Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion '2026-07-19.1'; ` +
         `$manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestPath)}; ` +
-        `Test-IrodoriCompletion -Layout $layout -Manifest $manifest`,
+        `Test-IrodoriCompletion -Layout $layout -Manifest $manifest -ExpectedBackend ${quotePowerShell(expectedBackend)}`,
     );
   } finally {
     await rm(root, { force: true, recursive: true });
@@ -208,6 +208,32 @@ test("rejects malformed HTTPS artifact URLs when importing a manifest", async ()
   }
 });
 
+test("rejects manifest artifact fields with malformed JSON types", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-manifest-"));
+  try {
+    const malformedFields = [
+      ["size", 1.5],
+      ["id", 42],
+      ["install_relative_path", 42],
+      ["license_id", 42],
+      ["url", 42],
+      ["sha256", 42],
+    ];
+
+    for (const [field, value] of malformedFields) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.artifacts[0][field] = value;
+      const invalidManifestPath = path.join(temporaryDirectory, `${field}.json`);
+      await writeFile(invalidManifestPath, JSON.stringify(manifest), "utf8");
+      await assert.rejects(
+        invokePowerShell(`Import-IrodoriManifest -Path ${quotePowerShell(invalidManifestPath)}`),
+      );
+    }
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test("rejects a completion marker for another manifest or backend", async () => {
   const result = await inspectCompletion({
     schema_version: 1,
@@ -215,7 +241,18 @@ test("rejects a completion marker for another manifest or backend", async () => 
     backend: "cpu",
     python_version: "3.10.20",
     completed_at: "2026-07-19T00:00:00Z",
-  });
+  }, "cpu");
+  assert.equal(result, false);
+});
+
+test("rejects a matching manifest marker when its backend differs from the expected backend", async () => {
+  const result = await inspectCompletion({
+    schema_version: 1,
+    manifest_version: "2026-07-19.1",
+    backend: "cpu",
+    python_version: "3.10.20",
+    completed_at: "2026-07-19T00:00:00Z",
+  }, "cu128");
   assert.equal(result, false);
 });
 
@@ -226,6 +263,6 @@ test("accepts a completion marker only when it matches the imported manifest", a
     backend: "cu128",
     python_version: "3.10.20",
     completed_at: "2026-07-19T00:00:00Z",
-  });
+  }, "cu128");
   assert.equal(result, true);
 });
