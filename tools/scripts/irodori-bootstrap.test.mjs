@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
@@ -155,8 +155,63 @@ function fixtureArtifacts(serverZip) {
   return { artifacts, payloads };
 }
 
+async function prepareCompleteRuntime(root, manifest, payloads, label = "current-runtime") {
+  const runtime = path.join(root, "runtime", manifest.manifest_version);
+  const revision = "5fb086c49f49824cfc93f09cc4ed5cd5917bef3d";
+  const snapshot = path.join(
+    runtime,
+    "hf",
+    "hub",
+    "models--sbintuitions--sarashina2.2-0.5b",
+    "snapshots",
+    revision,
+  );
+  await mkdir(path.join(runtime, "tools", "uv"), { recursive: true });
+  await mkdir(path.join(runtime, "server"), { recursive: true });
+  await mkdir(snapshot, { recursive: true });
+  await mkdir(path.join(path.dirname(snapshot), "..", "..", "refs"), { recursive: true });
+  await writeFile(path.join(runtime, "tools", "uv", "uv.exe"), "fixture uv", "utf8");
+  await writeFile(path.join(runtime, "server", "pyproject.toml"), "[project]\nname='fixture'\n", "utf8");
+  await writeFile(path.join(runtime, "server", "uv.lock"), "version = 1\n", "utf8");
+  for (const artifact of manifest.artifacts.filter(({ id }) => !["uv-windows-x86_64", "irodori-server"].includes(id))) {
+    const destination = path.join(runtime, ...artifact.install_relative_path.split("/"));
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, payloads.get(artifact.id));
+  }
+  for (const [id, filename] of [
+    ["sarashina-tokenizer-model", "tokenizer.model"],
+    ["sarashina-tokenizer-config", "tokenizer_config.json"],
+    ["sarashina-config", "config.json"],
+  ]) {
+    await writeFile(path.join(snapshot, filename), payloads.get(id));
+  }
+  const hfRepository = path.join(runtime, "hf", "hub", "models--sbintuitions--sarashina2.2-0.5b");
+  await mkdir(path.join(hfRepository, "refs"), { recursive: true });
+  await writeFile(path.join(hfRepository, "refs", "main"), revision, "utf8");
+  await writeFile(path.join(runtime, "runtime-label.txt"), label, "utf8");
+  const completedAt = "2026-07-19T00:00:00.0000000+00:00";
+  await writeFile(path.join(runtime, "completion.json"), JSON.stringify({
+    schema_version: 1,
+    manifest_version: manifest.manifest_version,
+    backend: "cpu",
+    python_version: manifest.python_version,
+    completed_at: completedAt,
+  }), "utf8");
+  await writeFile(path.join(root, "runtime", "active.json"), JSON.stringify({
+    schema_version: 1,
+    manifest_version: manifest.manifest_version,
+    backend: "cpu",
+    runtime_path: runtime,
+    completed_at: completedAt,
+  }), "utf8");
+  return runtime;
+}
+
 async function runProvisionHarness(scenario = "success", options = {}) {
   const root = await mkdtemp(path.join(os.tmpdir(), "irodori-provision-"));
+  let layoutRoot = root;
+  let junctionPath = null;
+  let outsideRoot = null;
   const revision = "5fb086c49f49824cfc93f09cc4ed5cd5917bef3d";
   let serverEntries = [
     { name: "Irodori-fixture/", data: "" },
@@ -197,6 +252,28 @@ async function runProvisionHarness(scenario = "success", options = {}) {
   await writeFile(voicesSentinel, Buffer.from([0, 1, 2, 255]));
   await writeFile(lorasSentinel, Buffer.from([255, 2, 1, 0]));
 
+  let preparedRuntime = null;
+  if (options.precompleteRuntime || options.crashPhase) {
+    preparedRuntime = await prepareCompleteRuntime(root, manifest, payloads);
+  }
+  if (options.corruptRuntime === "uv") {
+    await rm(path.join(preparedRuntime, "tools", "uv", "uv.exe"), { force: true });
+  } else if (options.corruptRuntime === "server") {
+    await rm(path.join(preparedRuntime, "server", "pyproject.toml"), { force: true });
+  } else if (options.corruptRuntime === "model") {
+    await writeFile(path.join(preparedRuntime, "models", "model.safetensors"), "tampered", "utf8");
+  } else if (options.corruptRuntime === "hf") {
+    await writeFile(path.join(
+      preparedRuntime,
+      "hf",
+      "hub",
+      "models--sbintuitions--sarashina2.2-0.5b",
+      "snapshots",
+      revision,
+      "tokenizer.model",
+    ), "tampered", "utf8");
+  }
+
   if (options.preseedArtifact) {
     const cached = path.join(root, "cache", "downloads", `${options.preseedArtifact}.artifact`);
     await mkdir(path.dirname(cached), { recursive: true });
@@ -205,32 +282,56 @@ async function runProvisionHarness(scenario = "success", options = {}) {
 
   const staleStage = path.join(root, "runtime", ".staging-stale");
   const transactionFile = path.join(root, "transactions", "2026-07-19.1-cpu.json");
-  if (options.incompleteTransaction) {
+  if (options.incompleteTransaction || options.crashPhase) {
     await mkdir(staleStage, { recursive: true });
     await writeFile(path.join(staleStage, "stale.txt"), "stale", "utf8");
     await mkdir(path.dirname(transactionFile), { recursive: true });
+    const backupPath = path.join(root, "runtime", ".backup-2026-07-19.1-cpu");
+    if (options.crashPhase && !["building", "staged"].includes(options.crashPhase)) {
+      await cp(preparedRuntime, backupPath, { recursive: true });
+      await writeFile(path.join(backupPath, "runtime-label.txt"), "old-runtime", "utf8");
+      if (["promoting", "constructing", "publishing", "committing", "committing_active", "complete"].includes(options.crashPhase)) {
+        await rm(staleStage, { force: true, recursive: true });
+      }
+      if (options.crashPhase === "committing") {
+        await writeFile(activeMarker, "old-active", "utf8");
+      }
+    }
     await writeFile(transactionFile, JSON.stringify({
       schema_version: 1,
       manifest_version: "2026-07-19.1",
       backend: "cpu",
-      phase: "building",
+      phase: options.crashPhase === "committing_active" ? "committing" : (options.crashPhase ?? "building"),
       staging_path: staleStage,
       runtime_path: path.join(root, "runtime", "2026-07-19.1"),
-      backup_path: path.join(root, "runtime", ".backup-2026-07-19.1-cpu"),
+      backup_path: backupPath,
     }), "utf8");
   }
+
+  if (options.reparseAt) {
+    outsideRoot = await mkdtemp(path.join(os.tmpdir(), "irodori-reparse-target-"));
+    if (options.reparseAt === "root") {
+      layoutRoot = `${root}-junction`;
+      junctionPath = layoutRoot;
+    } else {
+      junctionPath = path.join(root, ...options.reparseAt.split("/"));
+      await mkdir(path.dirname(junctionPath), { recursive: true });
+    }
+    await symlink(options.reparseAt === "root" ? root : outsideRoot, junctionPath, "junction");
+  }
+  if (options.beforeInvoke) await options.beforeInvoke({ root: layoutRoot, manifest });
 
   const payloadObject = Object.fromEntries(
     [...payloads].map(([id, bytes]) => [id, bytes.toString("base64")]),
   );
   const expression = `
     $manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestFile)}
-    $layout = Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion $manifest.manifest_version
+    $layout = Get-IrodoriLayout -Root ${quotePowerShell(layoutRoot)} -ManifestVersion $manifest.manifest_version
     $payloads = ${quotePowerShell(JSON.stringify(payloadObject))} | ConvertFrom-Json
     $scenario = ${quotePowerShell(scenario)}
     $downloadCalls = [System.Collections.ArrayList]::new()
     $runCalls = [System.Collections.ArrayList]::new()
-    $observations = @{ completion_during_verification = $null; tampered = $false; tampered_length = $null }
+    $observations = @{ completion_during_verification = $null; tampered = $false; tampered_length = $null; verification_count = 0 }
     $download = {
       param($Artifact, $PartialPath, $MaximumBytes)
       [void] $downloadCalls.Add($Artifact.id)
@@ -256,6 +357,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       param($Executable, [string[]] $Arguments, $WorkingDirectory, [hashtable] $Environment)
       $isVerification = $Arguments.Count -gt 0 -and $Arguments[0] -eq 'run'
       if ($isVerification) {
+        $observations.verification_count += 1
         $observations.completion_during_verification = Test-Path -LiteralPath $layout.completion_marker
       }
       [void] $runCalls.Add([pscustomobject]@{
@@ -268,6 +370,9 @@ async function runProvisionHarness(scenario = "success", options = {}) {
         return [pscustomobject]@{ exit_code = 1; cancelled = $true }
       }
       if ($scenario -eq 'verification_failure' -and $isVerification) {
+        return [pscustomobject]@{ exit_code = 1; cancelled = $false }
+      }
+      if ($scenario -eq 'reuse_verification_failure' -and $isVerification -and $observations.verification_count -eq 1) {
         return [pscustomobject]@{ exit_code = 1; cancelled = $false }
       }
       if ($scenario -eq 'installed_hash_mismatch' -and $Arguments.Count -gt 0 -and $Arguments[0] -eq 'sync') {
@@ -283,6 +388,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       GetFreeBytes = $getFreeBytes
       RunApp = $runApp
       WriteProgress = { param($Stage, $Message) }
+      ${options.lockTimeoutMs === undefined ? "" : `LockTimeoutMilliseconds = ${Number(options.lockTimeoutMs)}`}
     }
     $first = $null
     $second = $null
@@ -307,13 +413,16 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       completion_during_verification = $observations.completion_during_verification
       tampered = $observations.tampered
       tampered_length = $observations.tampered_length
+      verification_count = $observations.verification_count
     }
   `;
 
   try {
     const powerShellResult = await invokePowerShell(expression);
-    const completionMarker = path.join(root, "runtime", "2026-07-19.1", "completion.json");
-    const installedModel = path.join(root, "runtime", "2026-07-19.1", "models", "model.safetensors");
+    const completionMarker = path.join(layoutRoot, "runtime", "2026-07-19.1", "completion.json");
+    const installedModel = path.join(layoutRoot, "runtime", "2026-07-19.1", "models", "model.safetensors");
+    const runtimeLabel = path.join(layoutRoot, "runtime", "2026-07-19.1", "runtime-label.txt");
+    const backupPath = path.join(layoutRoot, "runtime", ".backup-2026-07-19.1-cpu");
     return {
       root,
       manifest,
@@ -326,6 +435,11 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       staleStageExists: await pathExists(staleStage),
       transactionExists: await pathExists(transactionFile),
       installedModelBytes: await pathExists(installedModel) ? await readFile(installedModel) : null,
+      runtimeLabel: await pathExists(runtimeLabel) ? await readFile(runtimeLabel, "utf8") : null,
+      backupExists: await pathExists(backupPath),
+      junctionPath,
+      outsideRoot,
+      outsideEntries: outsideRoot ? await readdir(outsideRoot) : [],
     };
   } catch (error) {
     await rm(root, { force: true, recursive: true });
@@ -334,7 +448,80 @@ async function runProvisionHarness(scenario = "success", options = {}) {
 }
 
 async function cleanupHarness(result) {
+  if (result.junctionPath && await pathExists(result.junctionPath)) {
+    await unlink(result.junctionPath);
+  }
+  if (result.outsideRoot) await rm(result.outsideRoot, { force: true, recursive: true });
   await rm(result.root, { force: true, recursive: true });
+}
+
+function provisionMutexName(root, manifestVersion = "2026-07-19.1", backend = "cpu") {
+  const canonicalRoot = path.resolve(root).replace(/[\\/]+$/, "").toLowerCase();
+  const digest = sha256(Buffer.from(`${canonicalRoot}|${manifestVersion}|${backend}`, "utf8"));
+  return `Local\\ParallelWorld.Irodori.Provision.${digest}`;
+}
+
+async function holdNamedMutex(name) {
+  const command = [
+    `$mutex = [Threading.Mutex]::new($false, ${quotePowerShell(name)})`,
+    `$acquired = $mutex.WaitOne()`,
+    `[Console]::Out.WriteLine('LOCKED')`,
+    `[Console]::Out.Flush()`,
+    `[void] [Console]::In.ReadLine()`,
+    `if ($acquired) { $mutex.ReleaseMutex() }`,
+    `$mutex.Dispose()`,
+  ].join("; ");
+  const child = spawn(powerShell, ["-NoProfile", "-NonInteractive", "-Command", command], {
+    windowsHide: true,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const closed = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  await new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => reject(new Error(`mutex holder timeout: ${stderr}`)), 5000);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.includes("LOCKED")) {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (!stdout.includes("LOCKED")) {
+        clearTimeout(timeout);
+        reject(new Error(`mutex holder exited with ${code}: ${stderr}`));
+      }
+    });
+  });
+  return {
+    child,
+    closed,
+    async release() {
+      child.stdin.write("release\n");
+      await closed;
+    },
+  };
+}
+
+async function probeNamedMutex(name, timeoutMilliseconds = 500) {
+  return invokePowerShell(`
+    $mutex = [Threading.Mutex]::new($false, ${quotePowerShell(name)})
+    $acquired = $false
+    try {
+      try { $acquired = $mutex.WaitOne(${timeoutMilliseconds}) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+      if ($acquired) { $mutex.ReleaseMutex() }
+      $acquired
+    } finally { $mutex.Dispose() }
+  `);
 }
 
 async function inspectCompletion(marker, expectedBackend) {
@@ -517,6 +704,68 @@ test("rejects manifest artifact fields with malformed JSON types", async () => {
   }
 });
 
+test("rejects artifact ids that are not safe lowercase cache basenames", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-manifest-id-"));
+  try {
+    for (const [index, id] of ["../escape", "a/b", "a\\b", ".", "..", "UPPER"].entries()) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.artifacts[0].id = id;
+      const invalidManifestPath = path.join(temporaryDirectory, `${index}.json`);
+      await writeFile(invalidManifestPath, JSON.stringify(manifest), "utf8");
+      await assert.rejects(
+        invokePowerShell(`Import-IrodoriManifest -Path ${quotePowerShell(invalidManifestPath)}`),
+        /artifact id/i,
+      );
+    }
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test("default downloader rejects HTTP before creating a partial file", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-default-download-"));
+  try {
+    const partialPath = path.join(temporaryDirectory, "artifact.partial");
+    await assert.rejects(
+      invokePowerShell(`
+        & (Get-Module irodori-bootstrap) {
+          $artifact = [pscustomobject]@{ url = 'http://fixtures.invalid/artifact' }
+          Invoke-IrodoriHttpDownload -Artifact $artifact -PartialPath ${quotePowerShell(partialPath)} -MaximumBytes 1
+        }
+      `),
+      /HTTPS/i,
+    );
+    assert.equal(await pathExists(partialPath), false);
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test("default runner scopes environment and working directory then restores it", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-default-runner-"));
+  try {
+    const probeScript = path.join(temporaryDirectory, "probe.ps1");
+    await writeFile(probeScript, [
+      "if ($env:IRODORI_TEST_MARKER -ne 'scoped') { exit 7 }",
+      `if ((Get-Location).Path -ne ${quotePowerShell(temporaryDirectory)}) { exit 8 }`,
+      "exit 0",
+    ].join("\n"), "utf8");
+    const result = await invokePowerShell(`
+      $before = [Environment]::GetEnvironmentVariable('IRODORI_TEST_MARKER', 'Process')
+      $run = & (Get-Module irodori-bootstrap) {
+        Invoke-IrodoriDefaultRunApp -Executable ${quotePowerShell(powerShell)} -Arguments @('-NoProfile', '-NonInteractive', '-File', ${quotePowerShell(probeScript)}) -WorkingDirectory ${quotePowerShell(temporaryDirectory)} -Environment @{ IRODORI_TEST_MARKER = 'scoped' }
+      }
+      [pscustomobject]@{
+        exit_code = $run.exit_code
+        restored = [Environment]::GetEnvironmentVariable('IRODORI_TEST_MARKER', 'Process') -eq $before
+      }
+    `);
+    assert.deepEqual(result, { exit_code: 0, restored: true });
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test("rejects a completion marker for another manifest or backend", async () => {
   const result = await inspectCompletion({
     schema_version: 1,
@@ -603,6 +852,24 @@ test("reuses a verified artifact cache by hash during provision", async () => {
   }
 });
 
+for (const reparseAt of ["root", "cache", "cache/downloads", "transactions"]) {
+  test(`fails before managed writes when ${reparseAt} is a junction`, async () => {
+    const result = await runProvisionHarness("success", { reparseAt });
+    try {
+      assert.equal(result.completionExists, false);
+      assert.equal(result.powerShellResult.download_calls.length, 0);
+      assert.equal(typeof result.powerShellResult.failure, "string");
+      assert.match(
+        Buffer.from(result.powerShellResult.failure_detail, "base64").toString("utf8"),
+        /reparse point/i,
+      );
+      assert.deepEqual(result.outsideEntries, []);
+    } finally {
+      await cleanupHarness(result);
+    }
+  });
+}
+
 test("keeps user voices and loras byte-identical during provision", async () => {
   const result = await runProvisionHarness();
   try {
@@ -621,6 +888,77 @@ test("recovers an incomplete transaction before provision", async () => {
     assert.equal(result.staleStageExists, false);
     assert.equal(result.transactionExists, false);
     assert.equal(result.completionExists, true);
+  } finally {
+    await cleanupHarness(result);
+  }
+});
+
+for (const [phase, expectedLabel] of [
+  ["building", "current-runtime"],
+  ["staged", "current-runtime"],
+  ["promoting", "old-runtime"],
+  ["constructing", "old-runtime"],
+  ["publishing", "old-runtime"],
+  ["committing", "old-runtime"],
+  ["committing_active", "current-runtime"],
+  ["complete", "current-runtime"],
+]) {
+  test(`recovers ${phase} transaction before considering completion reuse`, async () => {
+    const result = await runProvisionHarness("success", { crashPhase: phase });
+    try {
+      assert.equal(result.powerShellResult.failure, null);
+      assert.equal(result.powerShellResult.first.status, "reused");
+      assert.equal(result.runtimeLabel, expectedLabel);
+      assert.equal(result.transactionExists, false);
+      assert.equal(result.staleStageExists, false);
+      assert.equal(result.backupExists, false);
+      assert.deepEqual(result.powerShellResult.run_calls.map((call) => call.arguments), [
+        ["run", "--no-sync", "python", "-c", "import irodori_openai_tts"],
+      ]);
+      if (phase === "committing") assert.equal(result.oldActivePreserved, true);
+    } finally {
+      await cleanupHarness(result);
+    }
+  });
+}
+
+test("reuses only after offline import verification of a complete runtime", async () => {
+  const result = await runProvisionHarness("success", { precompleteRuntime: true });
+  try {
+    assert.equal(result.powerShellResult.first.status, "reused");
+    assert.equal(result.powerShellResult.download_calls.length, 0);
+    assert.deepEqual(result.powerShellResult.run_calls.map((call) => call.arguments), [
+      ["run", "--no-sync", "python", "-c", "import irodori_openai_tts"],
+    ]);
+    assert.equal(result.powerShellResult.run_calls[0].environment.HF_HUB_OFFLINE, "1");
+    assert.equal(result.powerShellResult.run_calls[0].environment.TRANSFORMERS_OFFLINE, "1");
+  } finally {
+    await cleanupHarness(result);
+  }
+});
+
+for (const corruption of ["uv", "server", "model", "hf"]) {
+  test(`reprovisions instead of reusing a runtime with corrupt ${corruption}`, async () => {
+    const result = await runProvisionHarness("success", {
+      precompleteRuntime: true,
+      corruptRuntime: corruption,
+    });
+    try {
+      assert.equal(result.powerShellResult.first.status, "provisioned");
+      assert.equal(result.powerShellResult.download_calls.length, result.manifest.artifacts.length);
+      assert.equal(result.completionExists, true);
+    } finally {
+      await cleanupHarness(result);
+    }
+  });
+}
+
+test("reprovisions when reuse offline import verification fails", async () => {
+  const result = await runProvisionHarness("reuse_verification_failure", { precompleteRuntime: true });
+  try {
+    assert.equal(result.powerShellResult.first.status, "provisioned");
+    assert.equal(result.powerShellResult.verification_count, 2);
+    assert.equal(result.powerShellResult.run_calls.length, 4);
   } finally {
     await cleanupHarness(result);
   }
@@ -707,13 +1045,45 @@ test("does not publish completion when an installed artifact changes before veri
   }
 });
 
+test("times out before provisioning while another process owns the runtime mutex", async () => {
+  let holder = null;
+  let result = null;
+  try {
+    result = await runProvisionHarness("success", {
+      lockTimeoutMs: 150,
+      beforeInvoke: async ({ root }) => {
+        holder = await holdNamedMutex(provisionMutexName(root));
+      },
+    });
+    assert.equal(result.completionExists, false);
+    assert.equal(result.powerShellResult.download_calls.length, 0);
+    assert.match(
+      Buffer.from(result.powerShellResult.failure_detail, "base64").toString("utf8"),
+      /lock.*timeout|timeout.*lock/i,
+    );
+  } finally {
+    if (holder) await holder.release();
+    if (result) await cleanupHarness(result);
+  }
+});
+
+test("releases the runtime mutex after successful provisioning", async () => {
+  const result = await runProvisionHarness();
+  try {
+    assert.equal(result.powerShellResult.first.status, "provisioned");
+    assert.equal(await probeNamedMutex(provisionMutexName(result.root)), true);
+  } finally {
+    await cleanupHarness(result);
+  }
+});
+
 test("returns reused without downloading or rebuilding an idempotent provision", async () => {
   const result = await runProvisionHarness("success", { repeat: true });
   try {
     assert.equal(result.powerShellResult.first.status, "provisioned");
     assert.equal(result.powerShellResult.second.status, "reused");
     assert.equal(result.powerShellResult.download_calls.length, result.manifest.artifacts.length);
-    assert.equal(result.powerShellResult.run_calls.length, 3);
+    assert.equal(result.powerShellResult.run_calls.length, 4);
   } finally {
     await cleanupHarness(result);
   }

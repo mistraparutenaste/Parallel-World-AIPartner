@@ -58,7 +58,7 @@ function Import-IrodoriManifest {
     $installPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($artifact in @($manifest.artifacts)) {
         Assert-IrodoriExactFields $artifact $AllowedArtifactFields 'Irodori artifact'
-        if (-not (Test-IrodoriString $artifact.id) -or [string]::IsNullOrWhiteSpace($artifact.id) -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be a unique string: $($artifact.id)" }
+        if (-not (Test-IrodoriString $artifact.id) -or $artifact.id -cnotmatch '^[a-z0-9][a-z0-9._-]*$' -or $artifact.id -in @('.', '..') -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be a unique safe lowercase basename: $($artifact.id)" }
         if (-not (Test-IrodoriString $artifact.url) -or -not (Test-IrodoriHttpsUrl $artifact.url)) { throw "Irodori artifact URL must be an HTTPS string: $($artifact.id)" }
         if (-not (Test-IrodoriPositiveInteger $artifact.size)) { throw "Irodori artifact size must be a positive integer: $($artifact.id)" }
         if (-not (Test-IrodoriString $artifact.sha256) -or $artifact.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Irodori artifact sha256 must be a lowercase 64-hex string: $($artifact.id)" }
@@ -150,7 +150,8 @@ function Remove-IrodoriManagedItem {
 }
 
 function Write-IrodoriAtomicText {
-    param([string] $Path, [string] $Text)
+    param([hashtable] $Layout, [string] $Path, [string] $Text)
+    Assert-IrodoriCleanupTarget -Root $Layout.root -Target $Path
     $directory = [IO.Path]::GetDirectoryName($Path)
     [void] [IO.Directory]::CreateDirectory($directory)
     $temporary = Join-Path $directory ('.atomic-' + [Guid]::NewGuid().ToString('N') + '.tmp')
@@ -176,8 +177,8 @@ function Write-IrodoriAtomicText {
 }
 
 function Write-IrodoriJson {
-    param([string] $Path, [object] $Value)
-    Write-IrodoriAtomicText -Path $Path -Text ($Value | ConvertTo-Json -Depth 10 -Compress)
+    param([hashtable] $Layout, [string] $Path, [object] $Value)
+    Write-IrodoriAtomicText -Layout $Layout -Path $Path -Text ($Value | ConvertTo-Json -Depth 10 -Compress)
 }
 
 function Test-IrodoriVerifiedFile {
@@ -242,11 +243,14 @@ function Get-IrodoriArtifactCachePath {
 
 function Get-IrodoriVerifiedArtifact {
     param([hashtable] $Layout, [psobject] $Artifact, [scriptblock] $DownloadAdapter)
+    Assert-IrodoriCleanupTarget -Root $Layout.root -Target $Layout.downloads
     [void] [IO.Directory]::CreateDirectory($Layout.downloads)
     $cachePath = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $Artifact
+    Assert-IrodoriCleanupTarget -Root $Layout.root -Target $cachePath
     if (Test-IrodoriVerifiedFile -Path $cachePath -Artifact $Artifact) { return $cachePath }
     if (Test-Path -LiteralPath $cachePath) { Remove-IrodoriManagedItem -Layout $Layout -Path $cachePath }
     $partialPath = $cachePath + '.partial'
+    Assert-IrodoriCleanupTarget -Root $Layout.root -Target $partialPath
     if (Test-Path -LiteralPath $partialPath) { Remove-IrodoriManagedItem -Layout $Layout -Path $partialPath }
     try {
         if (-not (Test-IrodoriHttpsUrl $Artifact.url)) { throw 'Irodori artifact URL must use HTTPS.' }
@@ -414,7 +418,77 @@ function Get-IrodoriArtifactById {
     return $matches[0]
 }
 
-function Invoke-IrodoriProvision {
+function Get-IrodoriRuntimeEnvironment {
+    param([hashtable] $Layout)
+    return @{
+        UV_PYTHON_INSTALL_DIR = Join-Path $Layout.runtime 'python'
+        UV_PROJECT_ENVIRONMENT = Join-Path $Layout.runtime 'env'
+        UV_CACHE_DIR = Join-Path $Layout.runtime 'cache\uv'
+        HF_HOME = Join-Path $Layout.runtime 'hf'
+        UV_NO_SYSTEM_CONFIG = '1'
+        HF_HUB_OFFLINE = '1'
+        TRANSFORMERS_OFFLINE = '1'
+    }
+}
+
+function Test-IrodoriReusableRuntime {
+    param(
+        [hashtable] $Layout,
+        [psobject] $Manifest,
+        [string] $Backend,
+        [psobject] $UvArtifact,
+        [psobject] $ServerArtifact,
+        [psobject[]] $VerifiedArtifacts,
+        [psobject[]] $TokenizerArtifacts,
+        [scriptblock] $RunAdapter
+    )
+    if (-not (Test-IrodoriCompletion -Layout $Layout -Manifest $Manifest -ExpectedBackend $Backend)) { return $false }
+    try {
+        $uvPath = Join-Path $Layout.runtime $UvArtifact.install_relative_path
+        $serverPath = Join-Path $Layout.runtime $ServerArtifact.install_relative_path
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $uvPath
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $serverPath
+        if (-not (Test-Path -LiteralPath $uvPath -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $serverPath 'pyproject.toml') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $serverPath 'uv.lock') -PathType Leaf)) { return $false }
+        foreach ($artifact in $VerifiedArtifacts) {
+            if (-not (Test-IrodoriVerifiedFile -Path (Join-Path $Layout.runtime $artifact.install_relative_path) -Artifact $artifact)) { return $false }
+        }
+        $revision = '5fb086c49f49824cfc93f09cc4ed5cd5917bef3d'
+        $snapshot = Join-Path $Layout.runtime ('hf\hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\' + $revision)
+        $snapshotNames = @('tokenizer.model', 'tokenizer_config.json', 'config.json')
+        for ($index = 0; $index -lt $TokenizerArtifacts.Count; $index++) {
+            if (-not (Test-IrodoriVerifiedFile -Path (Join-Path $snapshot $snapshotNames[$index]) -Artifact $TokenizerArtifacts[$index])) { return $false }
+        }
+        $referencePath = Join-Path $Layout.runtime 'hf\hub\models--sbintuitions--sarashina2.2-0.5b\refs\main'
+        if (-not (Test-Path -LiteralPath $referencePath -PathType Leaf) -or (Get-Content -LiteralPath $referencePath -Raw).Trim() -ne $revision) { return $false }
+        $verification = & $RunAdapter $uvPath @('run', '--no-sync', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout)
+        Assert-IrodoriRunSucceeded -Result $verification -Stage 'reuse environment verification'
+        return $true
+    } catch { return $false }
+}
+
+function Get-IrodoriProvisionMutexName {
+    param([string] $Root, [string] $ManifestVersion, [string] $Backend)
+    $material = (Get-IrodoriCanonicalPath $Root).ToLowerInvariant() + '|' + $ManifestVersion + '|' + $Backend
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try { $hash = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($material))).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose() }
+    return 'Local\ParallelWorld.Irodori.Provision.' + $hash
+}
+
+function Enter-IrodoriProvisionMutex {
+    param([string] $Name, [int] $TimeoutMilliseconds)
+    $mutex = [Threading.Mutex]::new($false, $Name)
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne($TimeoutMilliseconds) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Irodori provisioning lock timeout.' }
+        return $mutex
+    } catch {
+        $mutex.Dispose()
+        throw
+    }
+}
+
+function Invoke-IrodoriProvisionLocked {
     param(
         [psobject] $Manifest,
         [hashtable] $Layout,
@@ -428,6 +502,9 @@ function Invoke-IrodoriProvision {
         if (-not $Layout.ContainsKey($key) -or (Get-IrodoriCanonicalPath $Layout[$key]) -ne (Get-IrodoriCanonicalPath $expectedLayout[$key])) { throw "Irodori layout path is missing or invalid: $key" }
     }
     Assert-IrodoriCleanupTarget -Root $Layout.root -Target $Layout.runtime
+    foreach ($managedPath in @($Layout.cache_root, $Layout.downloads, $Layout.transactions)) {
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $managedPath
+    }
     $uvArtifact = Get-IrodoriArtifactById $Manifest 'uv-windows-x86_64'
     $serverArtifact = Get-IrodoriArtifactById $Manifest 'irodori-server'
     $modelArtifact = Get-IrodoriArtifactById $Manifest 'irodori-model'
@@ -436,14 +513,19 @@ function Invoke-IrodoriProvision {
     $tokenizerConfig = Get-IrodoriArtifactById $Manifest 'sarashina-tokenizer-config'
     $modelConfig = Get-IrodoriArtifactById $Manifest 'sarashina-config'
 
-    if (Test-IrodoriCompletion -Layout $Layout -Manifest $Manifest -ExpectedBackend $Backend) {
-        return [pscustomobject]@{ status = 'reused'; runtime_path = $Layout.runtime; uv_path = Join-Path $Layout.runtime $uvArtifact.install_relative_path }
+    $runAdapter = if ($Adapters.ContainsKey('RunApp')) { $Adapters.RunApp } else {
+        { param($Executable, $Arguments, $WorkingDirectory, $Environment) Invoke-IrodoriDefaultRunApp -Executable $Executable -Arguments $Arguments -WorkingDirectory $WorkingDirectory -Environment $Environment }
     }
     [void] [IO.Directory]::CreateDirectory($Layout.root)
     [void] [IO.Directory]::CreateDirectory($Layout.runtime_root)
     [void] [IO.Directory]::CreateDirectory($Layout.transactions)
     $transactionPath = Join-Path $Layout.transactions ($Manifest.manifest_version + '-' + $Backend + '.json')
     Recover-IrodoriTransaction -Layout $Layout -TransactionPath $transactionPath
+    $verifiedArtifacts = @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)
+    $tokenizerArtifacts = @($tokenizerModel, $tokenizerConfig, $modelConfig)
+    if (Test-IrodoriReusableRuntime -Layout $Layout -Manifest $Manifest -Backend $Backend -UvArtifact $uvArtifact -ServerArtifact $serverArtifact -VerifiedArtifacts $verifiedArtifacts -TokenizerArtifacts $tokenizerArtifacts -RunAdapter $runAdapter) {
+        return [pscustomobject]@{ status = 'reused'; runtime_path = $Layout.runtime; uv_path = Join-Path $Layout.runtime $uvArtifact.install_relative_path }
+    }
 
     [int64] $artifactBytes = 0
     foreach ($artifact in @($Manifest.artifacts)) {
@@ -460,9 +542,6 @@ function Invoke-IrodoriProvision {
     $downloadAdapter = if ($Adapters.ContainsKey('DownloadArtifact')) { $Adapters.DownloadArtifact } else {
         { param($Artifact, $PartialPath, $MaximumBytes) Invoke-IrodoriHttpDownload -Artifact $Artifact -PartialPath $PartialPath -MaximumBytes $MaximumBytes }
     }
-    $runAdapter = if ($Adapters.ContainsKey('RunApp')) { $Adapters.RunApp } else {
-        { param($Executable, $Arguments, $WorkingDirectory, $Environment) Invoke-IrodoriDefaultRunApp -Executable $Executable -Arguments $Arguments -WorkingDirectory $WorkingDirectory -Environment $Environment }
-    }
     $writeProgress = if ($Adapters.ContainsKey('WriteProgress')) { $Adapters.WriteProgress } else { { param($Stage, $Message) Write-Verbose "[$Stage] $Message" } }
 
     $nonce = [Guid]::NewGuid().ToString('N')
@@ -472,8 +551,9 @@ function Invoke-IrodoriProvision {
         schema_version = 1; manifest_version = $Manifest.manifest_version; backend = $Backend; phase = 'building'
         staging_path = $stagingPath; runtime_path = $Layout.runtime; backup_path = $backupPath
     }
-    Write-IrodoriJson -Path $transactionPath -Value $transaction
+    Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
     try {
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $stagingPath
         [void] [IO.Directory]::CreateDirectory($stagingPath)
         $cached = @{}
         foreach ($artifact in @($Manifest.artifacts)) {
@@ -487,6 +567,7 @@ function Invoke-IrodoriProvision {
         foreach ($artifact in @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)) {
             $destination = Join-Path $stagingPath $artifact.install_relative_path
             if (-not (Test-IrodoriDescendantPath $stagingPath $destination)) { throw 'Irodori artifact install path escapes staging.' }
+            Assert-IrodoriCleanupTarget -Root $Layout.root -Target $destination
             [void] [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))
             [IO.File]::Copy($cached[$artifact.id], $destination, $false)
         }
@@ -497,30 +578,22 @@ function Invoke-IrodoriProvision {
         [IO.File]::Copy((Join-Path $stagingPath $tokenizerModel.install_relative_path), (Join-Path $snapshot 'tokenizer.model'), $false)
         [IO.File]::Copy((Join-Path $stagingPath $tokenizerConfig.install_relative_path), (Join-Path $snapshot 'tokenizer_config.json'), $false)
         [IO.File]::Copy((Join-Path $stagingPath $modelConfig.install_relative_path), (Join-Path $snapshot 'config.json'), $false)
-        Write-IrodoriAtomicText -Path (Join-Path $hfRepository 'refs\main') -Text $revision
+        Write-IrodoriAtomicText -Layout $Layout -Path (Join-Path $hfRepository 'refs\main') -Text $revision
 
         $transaction.phase = 'staged'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
         $transaction.phase = 'promoting'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
         if (Test-Path -LiteralPath $backupPath) { Remove-IrodoriManagedItem -Layout $Layout -Path $backupPath }
         if (Test-Path -LiteralPath $Layout.runtime) { Move-Item -LiteralPath $Layout.runtime -Destination $backupPath }
         Move-Item -LiteralPath $stagingPath -Destination $Layout.runtime
         $transaction.phase = 'constructing'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
 
         $uvPath = Join-Path $Layout.runtime $uvArtifact.install_relative_path
         $serverPath = Join-Path $Layout.runtime $serverArtifact.install_relative_path
         if (-not (Test-Path -LiteralPath $uvPath -PathType Leaf) -or -not (Test-IrodoriDescendantPath $Layout.runtime $uvPath)) { throw 'Verified managed uv.exe is missing.' }
-        $environment = @{
-            UV_PYTHON_INSTALL_DIR = Join-Path $Layout.runtime 'python'
-            UV_PROJECT_ENVIRONMENT = Join-Path $Layout.runtime 'env'
-            UV_CACHE_DIR = Join-Path $Layout.runtime 'cache\uv'
-            HF_HOME = Join-Path $Layout.runtime 'hf'
-            UV_NO_SYSTEM_CONFIG = '1'
-            HF_HUB_OFFLINE = '1'
-            TRANSFORMERS_OFFLINE = '1'
-        }
+        $environment = Get-IrodoriRuntimeEnvironment -Layout $Layout
         $pythonInstall = & $runAdapter $uvPath @('python', 'install', $Manifest.python_version) $serverPath $environment
         Assert-IrodoriRunSucceeded -Result $pythonInstall -Stage 'Python installation'
         $sync = & $runAdapter $uvPath @('sync', '--frozen', '--extra', $Backend, '--python', $Manifest.python_version, '--managed-python') $serverPath $environment
@@ -535,27 +608,46 @@ function Invoke-IrodoriProvision {
         Assert-IrodoriRunSucceeded -Result $verification -Stage 'environment verification'
 
         $transaction.phase = 'publishing'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
         $completedAt = [DateTimeOffset]::UtcNow.ToString('o')
-        Write-IrodoriJson -Path $Layout.completion_marker -Value ([ordered]@{
+        Write-IrodoriJson -Layout $Layout -Path $Layout.completion_marker -Value ([ordered]@{
             schema_version = 1; manifest_version = $Manifest.manifest_version; backend = $Backend
             python_version = $Manifest.python_version; completed_at = $completedAt
         })
         if (-not (Test-IrodoriCompletion -Layout $Layout -Manifest $Manifest -ExpectedBackend $Backend)) { throw 'Irodori completion verification failed.' }
         $transaction.phase = 'committing'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
-        Write-IrodoriJson -Path $Layout.active_marker -Value ([ordered]@{
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $Layout.active_marker -Value ([ordered]@{
             schema_version = 1; manifest_version = $Manifest.manifest_version; backend = $Backend
             runtime_path = $Layout.runtime; completed_at = $completedAt
         })
         $transaction.phase = 'complete'
-        Write-IrodoriJson -Path $transactionPath -Value $transaction
+        Write-IrodoriJson -Layout $Layout -Path $transactionPath -Value $transaction
         if (Test-Path -LiteralPath $backupPath) { Remove-IrodoriManagedItem -Layout $Layout -Path $backupPath }
         Remove-IrodoriManagedItem -Layout $Layout -Path $transactionPath
         return [pscustomobject]@{ status = 'provisioned'; runtime_path = $Layout.runtime; uv_path = $uvPath }
     } catch {
         try { Recover-IrodoriTransaction -Layout $Layout -TransactionPath $transactionPath } catch { }
         throw
+    }
+}
+
+function Invoke-IrodoriProvision {
+    param(
+        [psobject] $Manifest,
+        [hashtable] $Layout,
+        [Parameter(Mandatory)] [ValidateSet('cpu', 'cu128')] [string] $Backend,
+        [hashtable] $Adapters = @{}
+    )
+    if (-not $Layout.ContainsKey('root') -or $Manifest.manifest_version -notmatch '^\d{4}-\d{2}-\d{2}\.\d+$' -or $Backend -notin @($Manifest.backends)) { throw 'Irodori provisioning lock inputs are invalid.' }
+    $timeoutMilliseconds = if ($Adapters.ContainsKey('LockTimeoutMilliseconds')) { [int] $Adapters.LockTimeoutMilliseconds } else { 30000 }
+    if ($timeoutMilliseconds -lt 0 -or $timeoutMilliseconds -gt 600000) { throw 'Irodori provisioning lock timeout must be between 0 and 600000 milliseconds.' }
+    $mutexName = Get-IrodoriProvisionMutexName -Root $Layout.root -ManifestVersion $Manifest.manifest_version -Backend $Backend
+    $mutex = Enter-IrodoriProvisionMutex -Name $mutexName -TimeoutMilliseconds $timeoutMilliseconds
+    try {
+        return Invoke-IrodoriProvisionLocked -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $Adapters
+    } finally {
+        try { $mutex.ReleaseMutex() } finally { $mutex.Dispose() }
     }
 }
 
