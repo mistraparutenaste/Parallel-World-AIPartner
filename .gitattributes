@@ -1,5 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 
+# cmd batch scripts break when checked out with LF line endings
+*.bat text eol=crlf
+
 # Updater fixtures are signature-verified byte-for-byte; never normalize them
 tools/fixtures/updater/** -text
