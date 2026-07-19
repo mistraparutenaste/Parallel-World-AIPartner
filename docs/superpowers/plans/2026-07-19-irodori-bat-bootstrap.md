@@ -47,7 +47,7 @@
 - Produces: `Import-IrodoriManifest -Path <string>`, `Get-IrodoriLayout -Root <string> -ManifestVersion <string>`, `Get-IrodoriBackend -GpuNames <string[]>`, `Test-IrodoriCompletion -Layout <hashtable> -Manifest <object>`.
 - Completion schema: `{ schema_version: 1, manifest_version, backend, python_version, completed_at }`.
 
-- [ ] **Step 1: Write failing manifest and backend tests**
+- [x] **Step 1: Write failing manifest and backend tests**
 
 Create Node tests that invoke PowerShell asynchronously and parse JSON:
 
@@ -121,13 +121,13 @@ Assert the production manifest contains these exact direct artifacts:
 
 Every artifact also records `install_relative_path`, `license_id`, and `license_url`. Use `Apache-2.0 OR MIT` for uv and `MIT` for server/model/codec/tokenizer, with the corresponding upstream license page. The manifest rejects missing or unknown license fields.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs`
 
 Expected: FAIL because module and manifest do not exist.
 
-- [ ] **Step 3: Implement minimal pure functions and manifest parsing**
+- [x] **Step 3: Implement minimal pure functions and manifest parsing**
 
 Use strict mode and exports:
 
@@ -147,7 +147,7 @@ Export-ModuleMember -Function Import-IrodoriManifest, Get-IrodoriLayout,
 
 The layout root is exactly `%LOCALAPPDATA%\com.parallelworld.desktop\irodori`; tests pass a temporary root explicitly. Validate `schema_version == 1`, HTTPS URLs, lowercase 64-hex SHA-256, positive size, unique IDs/paths, relative install paths, and the exact backend set `cpu|cu128`.
 
-- [ ] **Step 4: Run GREEN and commit**
+- [x] **Step 4: Run GREEN and commit**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs`
 
@@ -173,7 +173,7 @@ git commit -m "feat(tts): define managed Irodori runtime manifest"
 - Produces: `Invoke-IrodoriProvision -Manifest <object> -Layout <hashtable> -Backend <cpu|cu128> -Adapters <hashtable>` returning `{ status, runtime_path, uv_path }`.
 - Adapter keys shared through Tasks 2-4: `PromptConsent`, `DownloadArtifact`, `GetFreeBytes`, `DetectGpuNames`, `StartOwnedProcess`, `StopOwnedProcess`, `RunApp`, `InvokeHttp`, `Sleep`, `WriteProgress`.
 
-- [ ] **Step 1: Add RED tests for fail-closed installation**
+- [x] **Step 1: Add RED tests for fail-closed installation**
 
 Use fixture bytes and injected adapters; do not connect to external URLs. Cover:
 
@@ -192,19 +192,19 @@ for (const scenario of [
 
 Add success/idempotence tests: verified artifacts are reused by hash, user `voices`/`loras` sentinels remain byte-identical, incomplete transaction is recovered, and completion is published only after environment verification.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs --test-name-pattern="publish|artifact|transaction|provision"`
 
 Expected: FAIL because provisioning is absent.
 
-- [ ] **Step 3: Implement streaming verifier and safe ZIP extraction**
+- [x] **Step 3: Implement streaming verifier and safe ZIP extraction**
 
 `DownloadArtifact` writes `<cache>.partial`, enforces HTTPS before and after redirects, caps bytes at manifest size, flushes, then verifies exact length and `Get-FileHash -Algorithm SHA256`. `Expand-VerifiedZip` opens `System.IO.Compression.ZipArchive`, validates every entry before extracting, and rejects `..`, rooted paths, ADS `:`, duplicate case-folded targets, symlink attributes, and reparse points.
 
 Use a transaction file in `transactions\<manifest-version>-<backend>.json`. Never delete outside canonical `irodori` root. Cleanup targets must be literal, canonical descendants and must not be reparse points.
 
-- [ ] **Step 4: Implement pinned environment construction**
+- [x] **Step 4: Implement pinned environment construction**
 
 Execute only the verified managed `uv.exe` with argument arrays:
 
@@ -217,7 +217,7 @@ Set `UV_PYTHON_INSTALL_DIR`, `UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`, `HF_HOME`
 
 Verify `uv run --no-sync python -c` can import `irodori_openai_tts`, confirm the exact checkpoint/codec/tokenizer files and hashes again, then atomically replace `complete.json`. Do not require a voice at provisioning time.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs`
 
@@ -244,7 +244,7 @@ git commit -m "feat(tts): provision verified Irodori runtime"
 - Produces: `New-ManagedProcessJob -SessionId <guid>`, `Start-ManagedProcess -Job <object> -FilePath <absolute> -ArgumentList <string[]> -WorkingDirectory <absolute>`, `Stop-ManagedProcessJob -Job <object> -GraceSeconds <int>`.
 - Owned identity: `{ session_id, pid, start_time_utc_ticks, executable_path }`.
 
-- [ ] **Step 1: Write RED ownership tests**
+- [x] **Step 1: Write RED ownership tests**
 
 Add source and Windows-only behavior tests:
 
@@ -267,19 +267,19 @@ test('stops owned root and descendant while preserving external TTS and LLM',
 
 Test stale PID identity by changing `start_time_utc_ticks`; it must not be stopped. Test bootstrap crash: closing the parent Job handle kills owned descendants only.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs tools/scripts/dev-up.test.mjs --test-name-pattern="owned|external|process|LLM"`
 
 Expected: FAIL because Job module and `-PassThru` ownership are absent.
 
-- [ ] **Step 3: Implement Job Object boundary**
+- [x] **Step 3: Implement Job Object boundary**
 
 Reuse the audited P/Invoke pattern from `tools/scripts/soak-test.ps1`: create a Job with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, create process suspended, assign it before resume, and retain the safe handle. Never use broad process-name matching or unverified `taskkill /T`.
 
 Before graceful stop, compare PID start ticks and canonical executable path with the recorded identity. On mismatch, release ownership without killing. Close the Job handle in `finally`.
 
-- [ ] **Step 4: Integrate TTS ownership into dev-up**
+- [x] **Step 4: Integrate TTS ownership into dev-up**
 
 Keep the existing pre-open-port external behavior. For Aivis/Irodori started by this invocation, use the Job module. Wrap foreground app execution:
 
@@ -295,7 +295,7 @@ try {
 
 Do not start, register, enumerate, or stop the LLM process. Existing in-process STT requires no BAT process code and ends with Tauri.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs tools/scripts/dev-up.test.mjs`
 
@@ -323,7 +323,7 @@ git commit -m "fix(runtime): stop only owned TTS process trees"
 - `irodori-bootstrap.ps1 -ManifestPath <path> -DataRoot <path>`; production BAT omits both and receives safe defaults.
 - `Invoke-IrodoriBootstrap -ManifestPath -DataRoot -Adapters` always invokes the app runner unless the user cancels the entire BAT with Ctrl+C.
 
-- [ ] **Step 1: Write RED orchestration tests**
+- [x] **Step 1: Write RED orchestration tests**
 
 Cover no environment + reject, no environment + accept + success, provisioning failure, ready environment reuse, voice 0, voice present + valid RIFF/WAVE, invalid WAV, port conflict, and explicit `PW_TTS_ENGINE=aivis` override.
 
@@ -343,13 +343,13 @@ test('reports ready_without_voice and still starts the app', async () => {
 
 Assert only `ParallelWorld_run.bat` calls `irodori-bootstrap.ps1`; `dev-up.bat` still calls `dev-up.ps1` directly.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs tools/scripts/dev-up.test.mjs`
 
 Expected: FAIL because entry and launcher integration do not exist.
 
-- [ ] **Step 3: Implement interactive flow**
+- [x] **Step 3: Implement interactive flow**
 
 Prompt before network access with backend, exact direct-download bytes plus a conservative environment/peak-space estimate, LocalAppData path, MIT licenses, and voice cloning warning. Choices are `Y` and `N`; `N` continues to the app and prompts again next BAT launch.
 
@@ -363,7 +363,7 @@ uv run --no-sync python -m irodori_openai_tts --host 127.0.0.1 --port 8088
 
 Set `IRODORI_CHECKPOINT`, `IRODORI_CODEC_REPO`, `IRODORI_VOICES_DIR`, `IRODORI_COMPILE_MODEL=false`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. `/health` success is required. List voices; if empty, return `ready_without_voice`. If a voice exists, perform current RIFF/WAVE warm-up.
 
-- [ ] **Step 4: Apply minimal launcher replacement**
+- [x] **Step 4: Apply minimal launcher replacement**
 
 Preserve the existing user-provided `ParallelWorld_run.bat` encoding and comments; change only the PowerShell target:
 
@@ -373,7 +373,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "tools\scripts\irodori-boots
 
 Do not add model/runtime files to the repository.
 
-- [ ] **Step 5: Run GREEN and commit**
+- [x] **Step 5: Run GREEN and commit**
 
 Run: `node --test tools/scripts/irodori-bootstrap.test.mjs tools/scripts/dev-up.test.mjs`
 
@@ -402,11 +402,11 @@ git commit -m "feat(tts): bootstrap Irodori from Windows launcher"
 - Documents managed BAT setup separately from user-managed external Irodori.
 - Acceptance records automated evidence and external real-environment gates without claiming them complete.
 
-- [ ] **Step 1: Update documentation**
+- [x] **Step 1: Update documentation**
 
 Document exact LocalAppData layout, downloads/revisions, NVIDIA/CPU selection, Windows Radeon deferral, setup prompt, `ready_without_voice`, LoRA/voice retention, explicit external server override, cancellation/retry, and owned-only TTS shutdown. State that LLM is not managed by bootstrap and that STT is in-process.
 
-- [ ] **Step 2: Add opt-in real acceptance commands**
+- [x] **Step 2: Add opt-in real acceptance commands**
 
 Record commands that require explicit environment preparation:
 
@@ -420,6 +420,8 @@ cargo test -p pw-tts --test real_engine irodori_real_server_synthesizes_installe
 The acceptance document must leave clean-VM provisioning, real CUDA/CPU latency, real audio, and Ctrl+C/crash Job cleanup as unchecked until actually run.
 
 - [ ] **Step 3: Run complete automated verification**
+
+2026-07-19実測: offline script tests 118/118と`cargo fmt`、`git diff --check`はPASS。pnpm 3コマンドは2つのnpm package cache不足、Rust clippy/testは`sherpa-onnx-sys` native archive cache不足のため、外部取得禁止環境ではBLOCKED。詳細は[`irodori-bootstrap-acceptance.md`](../../development/irodori-bootstrap-acceptance.md)を参照。未実行項目をPASSとは扱わない。
 
 Run:
 

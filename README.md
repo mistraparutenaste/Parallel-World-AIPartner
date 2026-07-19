@@ -101,6 +101,8 @@ powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 
 `dev-up.ps1`は既定でAivisSpeechを`127.0.0.1:10101`、LLMを`127.0.0.1:1234`で確認します。`PW_TTS_ENGINE`、`PW_TTS_PORT`、`PW_LLM_PORT`、`PW_AIVIS_ENGINE`で変更できます。Irodoriのopt-in起動は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。アプリ本体のLLM初期値は`http://127.0.0.1:8080/v1`なので、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
 
+Windowsで`ParallelWorld_run.bat`を使う場合は、managed Irodori環境を`%LOCALAPPDATA%\com.parallelworld.desktop\irodori`で確認し、未構築または破損時だけ構築するか尋ねます。リポジトリ内やsystem Pythonへ環境は作りません。外部のuser-managed Irodoriを使う場合は`PW_TTS_ENGINE`と`PW_IRODORI_DIR`を設定して`dev-up.ps1`を直接起動します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
+
 ## 外部モデルとサービス
 
 ### LLM
@@ -119,7 +121,7 @@ http://127.0.0.1:8080/v1
 
 ### Irodori-TTS
 
-ユーザーが別途管理するIrodori-TTS-Serverも選択でき、server側のdynamic LoRA adapter pathを設定できます。サーバー、Python/CUDA環境、モデル、LoRA、参照音声は同梱・自動インストールしません。Windows 11での準備、安全な音声利用、LoRA、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
+Windowsの`ParallelWorld_run.bat`は、明示同意後に検証済み成果物からuser data配下へmanaged Irodori環境を構築できます。NVIDIAはCUDA 12.8、Radeon・IntelはCPUを選択し、Windows RadeonのWSL/ROCmとApple MPSは後日対応です。外部のuser-managed serverも選択でき、server側のdynamic LoRA adapter pathを設定できます。LoRAと参照音声は同梱・自動取得せず、repair後も保持します。安全な音声利用、固定成果物、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
 ### VAD / STT
 

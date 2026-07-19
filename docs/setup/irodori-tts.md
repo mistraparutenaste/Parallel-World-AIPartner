@@ -1,95 +1,94 @@
 # Irodori-TTS セットアップ（Windows 11）
 
-Parallel Worldは、ユーザーが別途管理する[Irodori-TTS-Server](https://github.com/Aratako/Irodori-TTS-Server)へloopback接続できます。サーバー、Python環境、CUDA、モデル、参照音声はこのリポジトリへ同梱せず、起動スクリプトもclone、install、`uv sync`、モデル取得を自動実行しません。
+Parallel Worldには、`ParallelWorld_run.bat`が管理するIrodori環境と、ユーザーが別途管理するIrodori-TTS-Serverへ接続する方法があります。どちらもリポジトリ内やsystem PythonへPython環境・モデルを作りません。
 
-Irodori-TTS-500M-v3は日本語専用です。CPUでも動作しますが、実用的な速度にはCUDA対応GPUが推奨されています。
+Irodori-TTS-500M-v3は日本語専用です。参照音声による音声クローニングや第三者の声の利用は、話者本人の明示的な同意を得た場合だけ行ってください。生成物の利用者は適用法令と[Irodori-TTS-500M-v3のモデルカード](https://huggingface.co/Aratako/Irodori-TTS-500M-v3)を確認する責任があります。
 
-## 安全な利用
+## A. `ParallelWorld_run.bat`によるmanaged setup
 
-参照音声による音声クローニングや他者の声の模倣には、本人の明示的な同意が必要です。声優、著名人、公人を含む第三者の声を無断で模倣しないでください。人を欺く合成音声、偽情報、deepfakeの作成・拡散には使用しないでください。利用者は適用される法令と[Irodori-TTS-500M-v3のモデルカード](https://huggingface.co/Aratako/Irodori-TTS-500M-v3)を確認し、生成物の利用について責任を負います。
+Windows x86_64でリポジトリルートの`ParallelWorld_run.bat`を実行すると、既定でIrodoriを選択します。ただし、起動前から`PW_TTS_ENGINE`が設定されている場合はその値を維持します。従来の`dev-up.bat` / `dev-up.ps1`の既定はAivisSpeechのままです。
 
-## 1. 外部サーバーをユーザー領域へ準備する
+managed環境がない、壊れている、またはbackendが変わった場合は、ネットワーク接続前に次の情報を表示して`Y` / `N`を確認します。
 
-次の操作はParallel Worldの外で、ユーザー自身が管理する任意のディレクトリに対して実行します。2026-07-19時点でupstreamにrelease/tagがないため、動作確認済みcommit `1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce`へ固定します。
+- 選択backend（NVIDIA GPUは`cu128`、Radeon・Intel・不明なGPUは`cpu`）
+- direct download合計`2,505,659,887` bytesと、保守的なpeak空き容量見積り`7,158,803,422` bytes
+- 保存先、ライセンス、音声クローニングに関する注意
 
-```powershell
-git clone https://github.com/Aratako/Irodori-TTS-Server.git C:\Users\YOUR_NAME\source\Irodori-TTS-Server
-Set-Location C:\Users\YOUR_NAME\source\Irodori-TTS-Server
-git checkout 1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce
+`N`は構築せず、TTSを縮退させてアプリ起動を続行します。次回BAT起動時に再確認します。構築失敗時もcompletion markerを公開せず、次回起動でrepairを再確認します。構築中のCtrl+Cはsetupをcancelし、アプリを起動しません。
+
+初期対応はWindows x86_64だけです。Windows Radeon向けWSL/ROCm、Linux ROCm、Apple Silicon MPSは後日対応です。Radeon環境を誤ってCUDA backendへ割り当てることはありません。
+
+### 保存先
+
+managed環境は次のユーザーデータ領域にだけ作成します。
+
+```text
+%LOCALAPPDATA%\com.parallelworld.desktop\irodori\
+├─ runtime\
+│  ├─ active.json
+│  └─ 2026-07-19.1\
+│     ├─ completion.json
+│     └─ verified uv / Python / env / server / model
+├─ cache\downloads\       verified download cache
+├─ transactions\          incomplete setup recovery journal
+└─ user\
+   ├─ voices\              consented reference WAV files
+   └─ loras\               user-managed LoRA adapters
 ```
 
-upstream要件はPython 3.10と[uv](https://docs.astral.sh/uv/)です。NVIDIA CUDA 12.8を使う場合は次をユーザー自身で実行します。
+`user\voices`と`user\loras`はruntimeのrepair・再構築対象から分離され、保持されます。参照音声を追加した次回起動からvoice IDとして利用できます。LoRAは設定画面の「LoRA adapter path」にserverから参照できるadapterディレクトリを指定します。
 
-```powershell
-uv sync --extra cu128
+managed serverはdynamic LoRAのため常に`IRODORI_COMPILE_MODEL=false`、モデル取得を防ぐため`HF_HUB_OFFLINE=1`と`TRANSFORMERS_OFFLINE=1`で起動します。Parallel WorldはLoRAの作成、取得、変換、mergeを行いません。
+
+### 固定成果物
+
+manifestは各成果物のHTTPS URL、install先、bytes、SHA-256、ライセンスを固定します。構築時はsizeとSHA-256を検証し、安全でないZIP entryを拒否します。
+
+| 成果物 | 固定version / revision | bytes | license |
+| --- | --- | ---: | --- |
+| uv Windows x86_64 | `0.11.29` | 25,534,683 | Apache-2.0 OR MIT |
+| Irodori-TTS-Server | `1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce` | 399,078 | MIT |
+| Irodori-TTS-500M-v3 `model.safetensors` | `236c1e56591279fc24e3c1bf6609fc06e48dde28` | 2,048,269,748 | MIT |
+| Semantic-DACVAE `weights.pth` | `47376ee24834d7a05a48ebabfe3cde29b3c5e214` | 429,620,065 | MIT |
+| Sarashina tokenizer model | `5fb086c49f49824cfc93f09cc4ed5cd5917bef3d` | 1,831,879 | MIT |
+| Sarashina tokenizer config | 同上 | 3,777 | MIT |
+| Sarashina model config | 同上 | 657 | MIT |
+
+CPythonはuv-managedの`3.10.20`へ固定し、server dependencyはupstreamのlockfileから次の引数で構築します。`<backend>`は`cpu`または`cu128`の一方です。
+
+```text
+uv python install 3.10.20
+uv sync --frozen --extra <backend> --python 3.10.20 --managed-python
 ```
 
-CPUのみで動かす場合は、代わりに次を実行します。backend extraは相互排他なので、`cu128`と`cpu`を同時に指定しません。
+system Python、system Git、repository-local venvは使いません。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
 
-```powershell
-uv sync --extra cpu
-```
+### 起動状態と終了処理
 
-FFmpegはMP3、FLACなどの圧縮形式を扱う場合に必要です。Parallel WorldはWAVを要求するため、参照音声もWAVだけを使う構成ではFFmpegは任意です。
+`/health`の後にvoice一覧を確認します。voiceが0件なら`ready_without_voice`としてアプリを起動し、`user\voices`への配置を案内します。voiceがあれば短いRIFF/WAVE warm-upを行い、失敗時は`warmup_failed`としてTTSのみ縮退させます。
 
-## 2. 設定と参照音声
+このBAT sessionが起動したIrodoriまたはAivisSpeechだけをWindows Job Objectで所有し、アプリ終了時にそのprocess treeだけを停止します。起動前からportを使用していた外部TTSは所有・停止しません。LLMはユーザー管理のため起動も停止もせず、STTはTauri process内で動作してアプリ終了とともに解放されます。
 
-upstreamの`.env.example`を`.env`へコピーし、必要な`IRODORI_`設定だけを変更します。秘密情報をこのリポジトリへ保存しないでください。
+## B. 外部のuser-managed Irodoriを使う
 
-```powershell
-Copy-Item .env.example .env
-```
-
-最小構成では`IRODORI_VOICES_DIR=voices`を使用できます。必要なら`IRODORI_DEFAULT_VOICE=sample`も指定します。現在のParallel Worldは認証付きTTS接続を設定しないため、`IRODORI_API_KEY`は設定せず、serverを`127.0.0.1`だけで公開してください。`dev-up.ps1`の起動コマンドはhostとportを明示的に上書きします。
-
-参照音声をサーバーディレクトリの`voices\`へ置きます。たとえば`voices\sample.wav`のvoice IDは`sample`です。本人の明示的な同意を得た音声だけを使用してください。別ディレクトリを使う場合は`.env`の`IRODORI_VOICES_DIR`を設定します。
-
-初回合成時、既定設定ではHugging Faceからモデルがダウンロードされます。完全にユーザー管理のローカルcheckpointを使う場合は、`.env`で`IRODORI_CHECKPOINT`を指定してください。
-
-## 3. 単独で疎通確認する
-
-選択したbackendを保つため、起動時は必ず`--no-sync`を付けます。
-
-```powershell
-uv run --no-sync python -m irodori_openai_tts --host 127.0.0.1 --port 8088
-```
-
-別のPowerShellからhealthとvoice一覧を確認できます。`/health`はモデルをロードしません。
-
-```powershell
-Invoke-RestMethod http://127.0.0.1:8088/health
-Invoke-RestMethod http://127.0.0.1:8088/v1/audio/voices
-```
-
-## 4. Parallel Worldから起動する
-
-`dev-up.ps1`に外部ディレクトリとvoice IDを渡します。Irodori選択時の既定portは`8088`です。スクリプトは既存環境を`--no-sync`で起動し、`/health`と短いWAV warm-upを確認します。外部環境やserverを利用できない場合も、TTSだけを縮退させてアプリ起動を継続します。
+既存のIrodori環境、別ドライブ、Dockerなどを完全にユーザー管理する場合は、`ParallelWorld_run.bat`ではなく`dev-up.ps1`を直接起動します。この経路はclone、install、`uv sync`、モデル取得を行いません。
 
 ```powershell
 $env:PW_TTS_ENGINE = 'irodori'
 $env:PW_IRODORI_DIR = 'C:\Users\YOUR_NAME\source\Irodori-TTS-Server'
 $env:PW_IRODORI_VOICE = 'sample'
-powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
+$env:IRODORI_COMPILE_MODEL = 'false'
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 ```
 
-portを変更する場合は、server側の`.env`または起動設定と合わせて`PW_TTS_PORT`も指定します。アプリの設定画面ではエンジンを`Irodori`、接続先を`http://127.0.0.1:8088`、voiceを参照音声のIDへ設定してください。
+`PW_IRODORI_DIR`は`pyproject.toml`と構築済みuv環境があるserver directoryです。`dev-up.ps1`は`uv run --no-sync python -m irodori_openai_tts --host 127.0.0.1 --port 8088`で起動を試みます。既に`127.0.0.1:8088`でIrodoriが応答する場合はその外部processへ接続し、停止しません。別portを使う場合は`PW_TTS_PORT`も合わせて設定してください。
 
-通常のAivisSpeech起動は従来どおり既定です。`PW_TTS_ENGINE`を設定しない場合、`dev-up.ps1`はAivisSpeechを`127.0.0.1:10101`で確認します。
+外部環境の準備はupstreamの説明に従い、動作確認済みserver commit `1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce`、Python 3.10、`uv sync --extra cu128`または`uv sync --extra cpu`を使用してください。`cu128`と`cpu`は同時指定しません。参照音声は外部serverの`IRODORI_VOICES_DIR`へ配置します。
 
-## 5. Dynamic LoRAを使用する
+`PW_TTS_ENGINE=aivis`などIrodori以外を明示して`ParallelWorld_run.bat`を起動した場合、managed Irodoriの確認・download・起動は行いません。
 
-Irodori-TTS-Serverは、合成リクエストごとにPEFT LoRA adapterディレクトリを動的に指定できます。Parallel Worldの設定画面でTTSエンジンを`irodori-TTS`にし、「LoRA adapter path」へ**Irodoriサーバープロセスから参照できるディレクトリ**を入力してください。空欄の場合はbase modelを使用します。
+## Dynamic LoRAの注意
 
-例:
+設定画面でTTS engineをIrodoriにし、「LoRA adapter path」へIrodori server processから参照できるディレクトリを入力します。空欄はbase modelです。指定値は`POST /v1/audio/speech`の`irodori.lora_adapter`としてloopback serverへ渡されます。Dockerではhost pathではなくcontainer内のpathを指定してください。
 
-```text
-C:\Users\YOUR_NAME\source\Irodori-TTS\outputs\irodori_tts_lora\checkpoint_final
-```
-
-このパスはParallel Worldが読み込むファイルではなく、`POST /v1/audio/speech`の`irodori.lora_adapter`としてloopback上のIrodoriサーバーへ渡されます。Dockerでサーバーを実行する場合は、Windowsホスト側ではなくコンテナ内から参照できるパスを指定してください。
-
-Dynamic LoRA使用時は`.env`で`IRODORI_COMPILE_MODEL=false`を維持してください。`IRODORI_COMPILE_MODEL=true`とは併用できません。adapterの初回リクエストではメモリへの読み込み時間が発生し、同じserver process内の後続リクエストではcacheされたadapterが再利用されます。
-
-同じpathのadapter内容を更新しても、Irodoriサーバーのadapter cacheとParallel WorldのWAV cacheには以前の結果が残ります。更新時は新しいpathを指定するか、Irodoriサーバーを再起動したうえで設定画面のデータ管理からTTS音声cacheを消去してください。
-
-Parallel WorldはLoRA adapterの作成、取得、変換、mergeを行いません。adapterとbase checkpointの互換性はIrodori-TTS側で確認し、本人の同意を得たデータだけで学習・利用してください。
+`IRODORI_COMPILE_MODEL=true`とは併用できません。adapter初回読込には時間がかかり、同じserver processではcacheされます。同じpathの内容を更新した場合はserverを再起動し、必要に応じて設定画面からTTS WAV cacheを消去してください。
