@@ -214,7 +214,7 @@ async function runBootstrapHarness(scenario) {
     $layout = Get-IrodoriLayout -Root $root -ManifestVersion $manifest.manifest_version
     if (${needsCompletion ? "$true" : "$false"}) {
       [void][IO.Directory]::CreateDirectory($layout.runtime)
-      @{ schema_version = 1; manifest_version = $manifest.manifest_version; backend = 'cpu'; python_version = $manifest.python_version; completed_at = [DateTimeOffset]::UtcNow.ToString('o') } |
+      @{ schema_version = 1; manifest_version = $manifest.manifest_version; backend = 'cpu'; python_version = $manifest.python_version; python_build = $manifest.python_build; completed_at = [DateTimeOffset]::UtcNow.ToString('o') } |
         ConvertTo-Json -Compress | Set-Content -LiteralPath $layout.completion_marker -Encoding UTF8
     }
     $observations = [ordered]@{ prompt_calls = 0; prompt_text = ''; provision_calls = 0; start_calls = 0; stop_calls = 0; app_calls = 0; health_calls = 0; voice_calls = 0; speech_calls = 0; start_arguments = @(); start_environment = @{}; app_environment = @{}; progress = [System.Collections.ArrayList]::new() }
@@ -264,7 +264,7 @@ async function runBootstrapHarness(scenario) {
         throw "unexpected fixture URI: $Uri"
       }
       Sleep = { param($Milliseconds) }
-      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; UV_PYTHON_CPYTHON_BUILD = $env:UV_PYTHON_CPYTHON_BUILD; UV_PROJECT_ENVIRONMENT = $env:UV_PROJECT_ENVIRONMENT; UV_PYTHON_INSTALL_DIR = $env:UV_PYTHON_INSTALL_DIR; UV_CACHE_DIR = $env:UV_CACHE_DIR; UV_NO_SYSTEM_CONFIG = $env:UV_NO_SYSTEM_CONFIG; PYTHONDONTWRITEBYTECODE = $env:PYTHONDONTWRITEBYTECODE; HF_HOME = $env:HF_HOME; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
+      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; UV_PYTHON_CPYTHON_BUILD = $env:UV_PYTHON_CPYTHON_BUILD; UV_PROJECT_ENVIRONMENT = $env:UV_PROJECT_ENVIRONMENT; UV_PYTHON_INSTALL_DIR = $env:UV_PYTHON_INSTALL_DIR; UV_CACHE_DIR = $env:UV_CACHE_DIR; UV_NO_SYSTEM_CONFIG = $env:UV_NO_SYSTEM_CONFIG; UV_MANAGED_PYTHON = $env:UV_MANAGED_PYTHON; UV_PYTHON_DOWNLOADS = $env:UV_PYTHON_DOWNLOADS; PYTHONDONTWRITEBYTECODE = $env:PYTHONDONTWRITEBYTECODE; HF_HOME = $env:HF_HOME; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
       WriteProgress = { param($Stage, $Message) [void] $observations.progress.Add("$Stage|$Message") }
     }
     $originalEnvironment = [ordered]@{}
@@ -274,7 +274,7 @@ async function runBootstrapHarness(scenario) {
         IRODORI_CHECKPOINT = 'original-checkpoint'; IRODORI_CODEC_REPO = 'original-codec'; IRODORI_VOICES_DIR = 'original-voices'; IRODORI_COMPILE_MODEL = 'original-compile';
         PW_IRODORI_SKIP_WARMUP = 'original-skip'; PW_IRODORI_BOOTSTRAP_STATUS = 'original-status';
         UV_PYTHON_CPYTHON_BUILD = 'original-python-build'; UV_PROJECT_ENVIRONMENT = 'original-project-env'; UV_PYTHON_INSTALL_DIR = 'original-python-dir';
-        UV_CACHE_DIR = 'original-uv-cache'; UV_NO_SYSTEM_CONFIG = 'original-no-system'; PYTHONDONTWRITEBYTECODE = 'original-no-bytecode';
+        UV_CACHE_DIR = 'original-uv-cache'; UV_NO_SYSTEM_CONFIG = 'original-no-system'; UV_MANAGED_PYTHON = 'original-managed'; UV_PYTHON_DOWNLOADS = 'original-downloads'; PYTHONDONTWRITEBYTECODE = 'original-no-bytecode';
         HF_HOME = 'original-hf'; HF_HUB_OFFLINE = 'original-hf-offline';
         TRANSFORMERS_OFFLINE = 'original-transformers-offline'
       }
@@ -296,6 +296,10 @@ async function runBootstrapHarness(scenario) {
 function fixtureArtifacts(serverZip) {
   const payloads = new Map([
     ["uv-windows-x86_64", createStoredZip([{ name: "uv.exe", data: "fixture uv" }])],
+    ["mingit-windows-x86_64", createStoredZip([
+      { name: "cmd/git.exe", data: "fixture git" },
+      { name: "mingw64/libexec/git-core/git.exe", data: "fixture git core" },
+    ])],
     ["irodori-server", serverZip],
     ["irodori-model", Buffer.from("fixture model")],
     ["irodori-codec", Buffer.from("fixture codec")],
@@ -305,6 +309,7 @@ function fixtureArtifacts(serverZip) {
   ]);
   const installPaths = new Map([
     ["uv-windows-x86_64", "tools/uv/uv.exe"],
+    ["mingit-windows-x86_64", "tools/git"],
     ["irodori-server", "server"],
     ["irodori-model", "models/model.safetensors"],
     ["irodori-codec", "models/codec/weights.pth"],
@@ -318,7 +323,9 @@ function fixtureArtifacts(serverZip) {
     size: bytes.length,
     sha256: sha256(bytes),
     install_relative_path: installPaths.get(id),
-    license_id: id === "uv-windows-x86_64" ? "Apache-2.0 OR MIT" : "MIT",
+    license_id: id === "uv-windows-x86_64" ? "Apache-2.0 OR MIT"
+      : id === "mingit-windows-x86_64" ? "GPL-2.0-only"
+        : "MIT",
     license_url: "https://fixtures.invalid/license",
   }));
   return { artifacts, payloads };
@@ -336,18 +343,22 @@ async function prepareCompleteRuntime(root, manifest, payloads, label = "current
     revision,
   );
   await mkdir(path.join(runtime, "tools", "uv"), { recursive: true });
+  await mkdir(path.join(runtime, "tools", "git", "cmd"), { recursive: true });
+  await mkdir(path.join(runtime, "tools", "git", "mingw64", "libexec", "git-core"), { recursive: true });
   await mkdir(path.join(runtime, "server", "irodori_openai_tts"), { recursive: true });
   await mkdir(snapshot, { recursive: true });
   await mkdir(path.join(path.dirname(snapshot), "..", "..", "refs"), { recursive: true });
   await writeFile(path.join(runtime, "tools", "uv", "uv.exe"), "fixture uv", "utf8");
+  await writeFile(path.join(runtime, "tools", "git", "cmd", "git.exe"), "fixture git", "utf8");
+  await writeFile(path.join(runtime, "tools", "git", "mingw64", "libexec", "git-core", "git.exe"), "fixture git core", "utf8");
   await writeFile(path.join(runtime, "server", "pyproject.toml"), "[project]\nname='fixture'\n", "utf8");
   await writeFile(path.join(runtime, "server", "uv.lock"), "version = 1\n", "utf8");
   await writeFile(path.join(runtime, "server", "irodori_openai_tts", "__init__.py"), "", "utf8");
   await mkdir(path.join(root, "cache", "downloads"), { recursive: true });
-  for (const id of ["uv-windows-x86_64", "irodori-server"]) {
+  for (const id of ["uv-windows-x86_64", "mingit-windows-x86_64", "irodori-server"]) {
     await writeFile(path.join(root, "cache", "downloads", `${id}.artifact`), payloads.get(id));
   }
-  for (const artifact of manifest.artifacts.filter(({ id }) => !["uv-windows-x86_64", "irodori-server"].includes(id))) {
+  for (const artifact of manifest.artifacts.filter(({ id }) => !["uv-windows-x86_64", "mingit-windows-x86_64", "irodori-server"].includes(id))) {
     const destination = path.join(runtime, ...artifact.install_relative_path.split("/"));
     await mkdir(path.dirname(destination), { recursive: true });
     await writeFile(destination, payloads.get(artifact.id));
@@ -369,6 +380,7 @@ async function prepareCompleteRuntime(root, manifest, payloads, label = "current
     manifest_version: manifest.manifest_version,
     backend,
     python_version: manifest.python_version,
+    python_build: manifest.python_build,
     completed_at: completedAt,
   }), "utf8");
   await writeFile(path.join(root, "runtime", "active.json"), JSON.stringify({
@@ -449,6 +461,10 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     await writeFile(target, bytes);
   } else if (options.corruptRuntime === "server_extra") {
     await writeFile(path.join(preparedRuntime, "server", "sitecustomize.py"), "raise SystemExit\n", "utf8");
+  } else if (options.corruptRuntime === "mingit") {
+    await writeFile(path.join(preparedRuntime, "tools", "git", "cmd", "git.exe"), "tampered git", "utf8");
+  } else if (options.corruptRuntime === "mingit_extra") {
+    await writeFile(path.join(preparedRuntime, "tools", "git", "system-git.exe"), "unverified", "utf8");
   } else if (options.corruptRuntime === "cache_zip") {
     const target = path.join(root, "cache", "downloads", "uv-windows-x86_64.artifact");
     const bytes = await readFile(target);
@@ -636,6 +652,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
       backupExists: await pathExists(backupPath),
       activeBackend: active?.backend ?? null,
       completionBackend: completion?.backend ?? null,
+      completionPythonBuild: completion?.python_build ?? null,
       junctionPath,
       outsideRoot,
       outsideEntries: outsideRoot ? await readdir(outsideRoot) : [],
@@ -727,12 +744,12 @@ async function inspectCompletion(marker, expectedBackend) {
   const root = await mkdtemp(path.join(os.tmpdir(), "irodori-bootstrap-"));
   try {
     const layout = await invokePowerShell(
-      `Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion '2026-07-19.1'`,
+      `Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion '2026-07-19.2'`,
     );
     await mkdir(path.dirname(layout.completion_marker), { recursive: true });
     await writeFile(layout.completion_marker, JSON.stringify(marker), "utf8");
     return await invokePowerShell(
-      `$layout = Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion '2026-07-19.1'; ` +
+      `$layout = Get-IrodoriLayout -Root ${quotePowerShell(root)} -ManifestVersion '2026-07-19.2'; ` +
         `$manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestPath)}; ` +
         `Test-IrodoriCompletion -Layout $layout -Manifest $manifest -ExpectedBackend ${quotePowerShell(expectedBackend)}`,
     );
@@ -744,7 +761,7 @@ async function inspectCompletion(marker, expectedBackend) {
 test("production manifest pins the direct Windows artifacts and their licenses", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   assert.equal(manifest.schema_version, 1);
-  assert.equal(manifest.manifest_version, "2026-07-19.1");
+  assert.equal(manifest.manifest_version, "2026-07-19.2");
   assert.equal(manifest.python_version, "3.10.20");
   assert.equal(manifest.python_build, "20260510");
   assert.equal(manifest.environment_reserve_bytes, 12884901888);
@@ -756,6 +773,12 @@ test("production manifest pins the direct Windows artifacts and their licenses",
         url: "https://releases.astral.sh/github/uv/releases/download/0.11.29/uv-x86_64-pc-windows-msvc.zip",
         size: 25534683,
         sha256: "a047d55651bc3e0ca24595b25ec4cfcb10f9dca9fb56514e661269b37d4fae68",
+      },
+      {
+        id: "mingit-windows-x86_64",
+        url: "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip",
+        size: 39989839,
+        sha256: "04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668",
       },
       {
         id: "irodori-server",
@@ -797,7 +820,7 @@ test("production manifest pins the direct Windows artifacts and their licenses",
   );
   for (const artifact of manifest.artifacts) {
     assert.equal(typeof artifact.install_relative_path, "string");
-    assert.match(artifact.license_id, /^(Apache-2\.0 OR MIT|MIT)$/);
+    assert.match(artifact.license_id, /^(Apache-2\.0 OR MIT|GPL-2\.0-only|MIT)$/);
     assert.match(artifact.license_url, /^https:\/\//);
   }
 });
@@ -837,7 +860,7 @@ test("uses one conservative disk requirement for prompt and provisioning", async
       Get-IrodoriRequiredBytes -Manifest $manifest
     }
   `);
-  assert.equal(requiredBytes, 17896221662);
+  assert.equal(requiredBytes, 17976201340);
   await assert.rejects(
     invokePowerShell(`
       & (Get-Module irodori-bootstrap) {
@@ -848,7 +871,10 @@ test("uses one conservative disk requirement for prompt and provisioning", async
     /overflow/i,
   );
   const declined = await runBootstrapHarness("decline");
-  assert.match(declined.observations.prompt_text, /17896221662 bytes/);
+  assert.match(declined.observations.prompt_text, /17976201340 bytes/);
+  assert.match(declined.observations.prompt_text, /2545649726 bytes/);
+  assert.match(declined.observations.prompt_text, /Artifacts: 8/);
+  assert.match(declined.observations.prompt_text, /GPL-2\.0-only/);
 
   const fixtureServer = createStoredZip([
     { name: "Irodori-fixture/", data: "" },
@@ -1162,6 +1188,7 @@ test("rejects a completion marker for another manifest or backend", async () => 
     manifest_version: "old",
     backend: "cpu",
     python_version: "3.10.20",
+    python_build: "20260510",
     completed_at: "2026-07-19T00:00:00Z",
   }, "cpu");
   assert.equal(result, false);
@@ -1170,9 +1197,10 @@ test("rejects a completion marker for another manifest or backend", async () => 
 test("rejects a matching manifest marker when its backend differs from the expected backend", async () => {
   const result = await inspectCompletion({
     schema_version: 1,
-    manifest_version: "2026-07-19.1",
+    manifest_version: "2026-07-19.2",
     backend: "cpu",
     python_version: "3.10.20",
+    python_build: "20260510",
     completed_at: "2026-07-19T00:00:00Z",
   }, "cu128");
   assert.equal(result, false);
@@ -1181,12 +1209,28 @@ test("rejects a matching manifest marker when its backend differs from the expec
 test("accepts a completion marker only when it matches the imported manifest", async () => {
   const result = await inspectCompletion({
     schema_version: 1,
-    manifest_version: "2026-07-19.1",
+    manifest_version: "2026-07-19.2",
     backend: "cu128",
     python_version: "3.10.20",
+    python_build: "20260510",
     completed_at: "2026-07-19T00:00:00Z",
   }, "cu128");
   assert.equal(result, true);
+});
+
+test("rejects legacy completion markers without the exact managed Python build", async () => {
+  for (const pythonBuild of [undefined, "20260511"]) {
+    const marker = {
+      schema_version: 1,
+      manifest_version: "2026-07-19.2",
+      backend: "cpu",
+      python_version: "3.10.20",
+      python_build: pythonBuild,
+      completed_at: "2026-07-19T00:00:00Z",
+    };
+    if (pythonBuild === undefined) delete marker.python_build;
+    assert.equal(await inspectCompletion(marker, "cpu"), false);
+  }
 });
 
 for (const scenario of [
@@ -1303,7 +1347,7 @@ for (const [phase, expectedLabel] of [
       assert.equal(result.staleStageExists, false);
       assert.equal(result.backupExists, false);
       assert.deepEqual(result.powerShellResult.run_calls.map((call) => call.arguments), [
-        ["run", "--no-sync", "python", "-c", "import irodori_openai_tts"],
+        ["run", "--no-sync", "--managed-python", "--no-python-downloads", "--offline", "python", "-c", "import irodori_openai_tts"],
       ]);
       if (phase === "committing") assert.equal(result.oldActivePreserved, true);
     } finally {
@@ -1342,18 +1386,20 @@ test("reuses only after offline import verification of a complete runtime", asyn
     assert.equal(result.powerShellResult.first.status, "reused");
     assert.equal(result.powerShellResult.download_calls.length, 0);
     assert.deepEqual(result.powerShellResult.run_calls.map((call) => call.arguments), [
-      ["run", "--no-sync", "python", "-c", "import irodori_openai_tts"],
+      ["run", "--no-sync", "--managed-python", "--no-python-downloads", "--offline", "python", "-c", "import irodori_openai_tts"],
     ]);
     assert.equal(result.powerShellResult.run_calls[0].environment.HF_HUB_OFFLINE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.TRANSFORMERS_OFFLINE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.PYTHONDONTWRITEBYTECODE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
+    assert.equal(result.powerShellResult.run_calls[0].environment.UV_MANAGED_PYTHON, "1");
+    assert.equal(result.powerShellResult.run_calls[0].environment.UV_PYTHON_DOWNLOADS, "never");
   } finally {
     await cleanupHarness(result);
   }
 });
 
-for (const corruption of ["uv", "server", "uv_same_length", "server_same_length", "server_extra", "cache_zip", "model", "hf"]) {
+for (const corruption of ["uv", "server", "uv_same_length", "server_same_length", "server_extra", "mingit", "mingit_extra", "cache_zip", "model", "hf"]) {
   test(`reprovisions instead of reusing a runtime with corrupt ${corruption}`, async () => {
     const result = await runProvisionHarness("success", {
       precompleteRuntime: true,
@@ -1361,7 +1407,7 @@ for (const corruption of ["uv", "server", "uv_same_length", "server_same_length"
     });
     try {
       assert.equal(result.powerShellResult.first.status, "provisioned");
-      const expectedDownloads = result.manifest.artifacts.length - 2 + (corruption === "cache_zip" ? 1 : 0);
+      const expectedDownloads = result.manifest.artifacts.length - 3 + (corruption === "cache_zip" ? 1 : 0);
       assert.equal(result.powerShellResult.download_calls.length, expectedDownloads);
       if (corruption === "cache_zip") {
         assert.equal(result.powerShellResult.download_calls.includes("uv-windows-x86_64"), true);
@@ -1377,6 +1423,7 @@ test("reprovisions when reuse offline import verification fails", async () => {
   const result = await runProvisionHarness("reuse_verification_failure", { precompleteRuntime: true });
   try {
     assert.equal(result.powerShellResult.first.status, "provisioned");
+    assert.equal(result.completionPythonBuild, "20260510");
     assert.equal(result.powerShellResult.verification_count, 2);
     assert.equal(result.powerShellResult.run_calls.length, 4);
   } finally {
@@ -1397,7 +1444,7 @@ test("publishes completion only after pinned environment verification", async ()
     assert.deepEqual(calls.map((call) => call.arguments), [
       ["python", "install", "3.10.20"],
       ["sync", "--frozen", "--extra", "cpu", "--python", "3.10.20", "--managed-python"],
-      ["run", "--no-sync", "python", "-c", "import irodori_openai_tts"],
+      ["run", "--no-sync", "--managed-python", "--no-python-downloads", "--offline", "python", "-c", "import irodori_openai_tts"],
     ]);
     for (const call of calls) {
       assert.equal(call.executable.startsWith(result.root), true);
@@ -1410,6 +1457,18 @@ test("publishes completion only after pinned environment verification", async ()
         assert.equal(call.environment[key].startsWith(result.root), true);
       }
     }
+    const syncCall = calls[1];
+    const managedGitCmd = path.join(result.root, "runtime", "2026-07-19.1", "tools", "git", "cmd");
+    assert.equal(syncCall.environment.PATH.split(path.delimiter)[0], managedGitCmd);
+    assert.equal(syncCall.environment.GIT_CONFIG_NOSYSTEM, "1");
+    assert.equal(syncCall.environment.GIT_TERMINAL_PROMPT, "0");
+    assert.equal(syncCall.environment.GCM_INTERACTIVE, "Never");
+    for (const call of [calls[0], calls[2]]) {
+      assert.equal(call.environment.PATH, undefined);
+      assert.equal(call.environment.GIT_CONFIG_NOSYSTEM, undefined);
+    }
+    assert.equal(calls[2].environment.UV_MANAGED_PYTHON, "1");
+    assert.equal(calls[2].environment.UV_PYTHON_DOWNLOADS, "never");
 
     const runtime = path.join(result.root, "runtime", "2026-07-19.1");
     const snapshot = path.join(
@@ -1578,23 +1637,27 @@ test("provisions after consent and starts managed Irodori with pinned offline se
   assert.equal(observations.provision_calls, 1);
   assert.equal(observations.start_calls, 1);
   assert.deepEqual(observations.start_arguments, [
-    "run", "--no-sync", "python", "-m", "irodori_openai_tts",
+    "run", "--no-sync", "--managed-python", "--no-python-downloads", "--offline", "python", "-m", "irodori_openai_tts",
     "--host", "127.0.0.1", "--port", "8088",
   ]);
   assert.equal(observations.start_environment.IRODORI_COMPILE_MODEL, "false");
   assert.equal(observations.start_environment.HF_HUB_OFFLINE, "1");
   assert.equal(observations.start_environment.TRANSFORMERS_OFFLINE, "1");
   assert.equal(observations.start_environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
-  assert.match(observations.start_environment.UV_PROJECT_ENVIRONMENT, /runtime[\\/]2026-07-19\.1[\\/]env$/i);
-  assert.match(observations.start_environment.UV_PYTHON_INSTALL_DIR, /runtime[\\/]2026-07-19\.1[\\/]python$/i);
-  assert.match(observations.start_environment.UV_CACHE_DIR, /runtime[\\/]2026-07-19\.1[\\/]cache[\\/]uv$/i);
+  assert.match(observations.start_environment.UV_PROJECT_ENVIRONMENT, /runtime[\\/]2026-07-19\.2[\\/]env$/i);
+  assert.match(observations.start_environment.UV_PYTHON_INSTALL_DIR, /runtime[\\/]2026-07-19\.2[\\/]python$/i);
+  assert.match(observations.start_environment.UV_CACHE_DIR, /runtime[\\/]2026-07-19\.2[\\/]cache[\\/]uv$/i);
   assert.equal(observations.start_environment.UV_NO_SYSTEM_CONFIG, "1");
+  assert.equal(observations.start_environment.UV_MANAGED_PYTHON, "1");
+  assert.equal(observations.start_environment.UV_PYTHON_DOWNLOADS, "never");
   assert.equal(observations.start_environment.PYTHONDONTWRITEBYTECODE, "1");
   assert.equal(observations.app_environment.UV_PYTHON_CPYTHON_BUILD, "20260510");
   assert.equal(observations.app_environment.UV_PROJECT_ENVIRONMENT, observations.start_environment.UV_PROJECT_ENVIRONMENT);
   assert.equal(observations.app_environment.UV_PYTHON_INSTALL_DIR, observations.start_environment.UV_PYTHON_INSTALL_DIR);
   assert.equal(observations.app_environment.UV_CACHE_DIR, observations.start_environment.UV_CACHE_DIR);
   assert.equal(observations.app_environment.UV_NO_SYSTEM_CONFIG, "1");
+  assert.equal(observations.app_environment.UV_MANAGED_PYTHON, "1");
+  assert.equal(observations.app_environment.UV_PYTHON_DOWNLOADS, "never");
   assert.equal(observations.app_environment.PYTHONDONTWRITEBYTECODE, "1");
   assert.equal(observations.app_environment.PW_TTS_ENGINE, "irodori");
   assert.match(observations.app_environment.PW_IRODORI_DIR, /server$/i);

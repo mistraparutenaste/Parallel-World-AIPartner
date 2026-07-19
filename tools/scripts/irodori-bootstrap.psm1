@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 
 $AllowedManifestFields = @('schema_version', 'manifest_version', 'python_version', 'python_build', 'environment_reserve_bytes', 'backends', 'artifacts')
 $AllowedArtifactFields = @('id', 'url', 'size', 'sha256', 'install_relative_path', 'license_id', 'license_url')
-$AllowedLicenseIds = @('Apache-2.0 OR MIT', 'MIT')
+$AllowedLicenseIds = @('Apache-2.0 OR MIT', 'GPL-2.0-only', 'MIT')
 $AllowedBackends = @('cpu', 'cu128')
 
 function Assert-IrodoriExactFields {
@@ -119,10 +119,10 @@ function Test-IrodoriCompletion {
     if (-not $Layout.ContainsKey('completion_marker') -or -not (Test-Path -LiteralPath $Layout.completion_marker -PathType Leaf)) { return $false }
     try {
         $completion = Get-Content -LiteralPath $Layout.completion_marker -Raw | ConvertFrom-Json -ErrorAction Stop
-        Assert-IrodoriExactFields $completion @('schema_version', 'manifest_version', 'backend', 'python_version', 'completed_at') 'Irodori completion marker'
+        Assert-IrodoriExactFields $completion @('schema_version', 'manifest_version', 'backend', 'python_version', 'python_build', 'completed_at') 'Irodori completion marker'
         [DateTimeOffset]::Parse($completion.completed_at) | Out-Null
     } catch { return $false }
-    return $completion.schema_version -eq 1 -and $completion.manifest_version -eq $Manifest.manifest_version -and $completion.backend -in @($Manifest.backends) -and $completion.backend -eq $ExpectedBackend -and $completion.python_version -eq $Manifest.python_version
+    return $completion.schema_version -eq 1 -and $completion.manifest_version -eq $Manifest.manifest_version -and $completion.backend -in @($Manifest.backends) -and $completion.backend -eq $ExpectedBackend -and $completion.python_version -eq $Manifest.python_version -and $completion.python_build -eq $Manifest.python_build
 }
 
 function Get-IrodoriCanonicalPath {
@@ -561,10 +561,32 @@ function Get-IrodoriRuntimeEnvironment {
         UV_CACHE_DIR = Join-Path $Layout.runtime 'cache\uv'
         HF_HOME = Join-Path $Layout.runtime 'hf'
         UV_NO_SYSTEM_CONFIG = '1'
+        UV_MANAGED_PYTHON = '1'
+        UV_PYTHON_DOWNLOADS = 'never'
         HF_HUB_OFFLINE = '1'
         TRANSFORMERS_OFFLINE = '1'
         PYTHONDONTWRITEBYTECODE = '1'
     }
+}
+
+function Get-IrodoriProvisionEnvironment {
+    param([hashtable] $Layout, [psobject] $Manifest)
+    $environment = Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest
+    [void] $environment.Remove('UV_MANAGED_PYTHON')
+    [void] $environment.Remove('UV_PYTHON_DOWNLOADS')
+    return $environment
+}
+
+function Get-IrodoriSyncEnvironment {
+    param([hashtable] $Layout, [psobject] $Manifest)
+    $environment = Get-IrodoriProvisionEnvironment -Layout $Layout -Manifest $Manifest
+    $gitCmd = Join-Path $Layout.runtime 'tools\git\cmd'
+    $processPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
+    $environment['PATH'] = $gitCmd + [IO.Path]::PathSeparator + $processPath
+    $environment['GIT_CONFIG_NOSYSTEM'] = '1'
+    $environment['GIT_TERMINAL_PROMPT'] = '0'
+    $environment['GCM_INTERACTIVE'] = 'Never'
+    return $environment
 }
 
 function Test-IrodoriReusableRuntime {
@@ -573,6 +595,7 @@ function Test-IrodoriReusableRuntime {
         [psobject] $Manifest,
         [string] $Backend,
         [psobject] $UvArtifact,
+        [psobject] $MinGitArtifact,
         [psobject] $ServerArtifact,
         [psobject[]] $VerifiedArtifacts,
         [psobject[]] $TokenizerArtifacts,
@@ -582,12 +605,15 @@ function Test-IrodoriReusableRuntime {
     try {
         $uvPath = Join-Path $Layout.runtime $UvArtifact.install_relative_path
         $serverPath = Join-Path $Layout.runtime $ServerArtifact.install_relative_path
+        $minGitPath = Join-Path $Layout.runtime $MinGitArtifact.install_relative_path
         Assert-IrodoriCleanupTarget -Root $Layout.root -Target $uvPath
         Assert-IrodoriCleanupTarget -Root $Layout.root -Target $serverPath
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $minGitPath
         $uvArchive = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $UvArtifact
         $serverArchive = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $ServerArtifact
+        $minGitArchive = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $MinGitArtifact
         $uvTree = Join-Path $Layout.runtime ([IO.Path]::GetDirectoryName($UvArtifact.install_relative_path))
-        if (-not (Test-IrodoriInstalledZipTree -ArchivePath $uvArchive -Artifact $UvArtifact -Destination $uvTree) -or -not (Test-IrodoriInstalledZipTree -ArchivePath $serverArchive -Artifact $ServerArtifact -Destination $serverPath -StripSingleRoot)) { return $false }
+        if (-not (Test-IrodoriInstalledZipTree -ArchivePath $uvArchive -Artifact $UvArtifact -Destination $uvTree) -or -not (Test-IrodoriInstalledZipTree -ArchivePath $minGitArchive -Artifact $MinGitArtifact -Destination $minGitPath) -or -not (Test-IrodoriInstalledZipTree -ArchivePath $serverArchive -Artifact $ServerArtifact -Destination $serverPath -StripSingleRoot)) { return $false }
         foreach ($artifact in $VerifiedArtifacts) {
             if (-not (Test-IrodoriVerifiedFile -Path (Join-Path $Layout.runtime $artifact.install_relative_path) -Artifact $artifact)) { return $false }
         }
@@ -599,7 +625,7 @@ function Test-IrodoriReusableRuntime {
         }
         $referencePath = Join-Path $Layout.runtime 'hf\hub\models--sbintuitions--sarashina2.2-0.5b\refs\main'
         if (-not (Test-Path -LiteralPath $referencePath -PathType Leaf) -or (Get-Content -LiteralPath $referencePath -Raw).Trim() -ne $revision) { return $false }
-        $verification = & $RunAdapter $uvPath @('run', '--no-sync', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest)
+        $verification = & $RunAdapter $uvPath @('run', '--no-sync', '--managed-python', '--no-python-downloads', '--offline', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest)
         Assert-IrodoriRunSucceeded -Result $verification -Stage 'reuse environment verification'
         return $true
     } catch { return $false }
@@ -645,6 +671,7 @@ function Invoke-IrodoriProvisionLocked {
         Assert-IrodoriCleanupTarget -Root $Layout.root -Target $managedPath
     }
     $uvArtifact = Get-IrodoriArtifactById $Manifest 'uv-windows-x86_64'
+    $minGitArtifact = Get-IrodoriArtifactById $Manifest 'mingit-windows-x86_64'
     $serverArtifact = Get-IrodoriArtifactById $Manifest 'irodori-server'
     $modelArtifact = Get-IrodoriArtifactById $Manifest 'irodori-model'
     $codecArtifact = Get-IrodoriArtifactById $Manifest 'irodori-codec'
@@ -662,7 +689,7 @@ function Invoke-IrodoriProvisionLocked {
     Recover-IrodoriTransaction -Layout $Layout -TransactionPath $transactionPath
     $verifiedArtifacts = @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)
     $tokenizerArtifacts = @($tokenizerModel, $tokenizerConfig, $modelConfig)
-    if (Test-IrodoriReusableRuntime -Layout $Layout -Manifest $Manifest -Backend $Backend -UvArtifact $uvArtifact -ServerArtifact $serverArtifact -VerifiedArtifacts $verifiedArtifacts -TokenizerArtifacts $tokenizerArtifacts -RunAdapter $runAdapter) {
+    if (Test-IrodoriReusableRuntime -Layout $Layout -Manifest $Manifest -Backend $Backend -UvArtifact $uvArtifact -MinGitArtifact $minGitArtifact -ServerArtifact $serverArtifact -VerifiedArtifacts $verifiedArtifacts -TokenizerArtifacts $tokenizerArtifacts -RunAdapter $runAdapter) {
         return [pscustomobject]@{ status = 'reused'; runtime_path = $Layout.runtime; uv_path = Join-Path $Layout.runtime $uvArtifact.install_relative_path }
     }
 
@@ -694,6 +721,8 @@ function Invoke-IrodoriProvisionLocked {
         }
         $uvDestination = Join-Path $stagingPath ([IO.Path]::GetDirectoryName($uvArtifact.install_relative_path))
         Expand-IrodoriVerifiedZip -ArchivePath $cached[$uvArtifact.id] -Destination $uvDestination
+        $minGitDestination = Join-Path $stagingPath $minGitArtifact.install_relative_path
+        Expand-IrodoriVerifiedZip -ArchivePath $cached[$minGitArtifact.id] -Destination $minGitDestination
         $serverDestination = Join-Path $stagingPath $serverArtifact.install_relative_path
         Expand-IrodoriVerifiedZip -ArchivePath $cached[$serverArtifact.id] -Destination $serverDestination -StripSingleRoot
         foreach ($artifact in @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)) {
@@ -725,10 +754,11 @@ function Invoke-IrodoriProvisionLocked {
         $uvPath = Join-Path $Layout.runtime $uvArtifact.install_relative_path
         $serverPath = Join-Path $Layout.runtime $serverArtifact.install_relative_path
         if (-not (Test-Path -LiteralPath $uvPath -PathType Leaf) -or -not (Test-IrodoriDescendantPath $Layout.runtime $uvPath)) { throw 'Verified managed uv.exe is missing.' }
-        $environment = Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest
-        $pythonInstall = & $runAdapter $uvPath @('python', 'install', $Manifest.python_version) $serverPath $environment
+        $provisionEnvironment = Get-IrodoriProvisionEnvironment -Layout $Layout -Manifest $Manifest
+        $pythonInstall = & $runAdapter $uvPath @('python', 'install', $Manifest.python_version) $serverPath $provisionEnvironment
         Assert-IrodoriRunSucceeded -Result $pythonInstall -Stage 'Python installation'
-        $sync = & $runAdapter $uvPath @('sync', '--frozen', '--extra', $Backend, '--python', $Manifest.python_version, '--managed-python') $serverPath $environment
+        $syncEnvironment = Get-IrodoriSyncEnvironment -Layout $Layout -Manifest $Manifest
+        $sync = & $runAdapter $uvPath @('sync', '--frozen', '--extra', $Backend, '--python', $Manifest.python_version, '--managed-python') $serverPath $syncEnvironment
         Assert-IrodoriRunSucceeded -Result $sync -Stage 'environment sync'
         foreach ($artifact in @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)) {
             if (-not (Test-IrodoriVerifiedFile -Path (Join-Path $Layout.runtime $artifact.install_relative_path) -Artifact $artifact)) { throw "Irodori installed artifact verification failed: $($artifact.id)" }
@@ -736,7 +766,7 @@ function Invoke-IrodoriProvisionLocked {
         foreach ($pair in @(@($tokenizerModel, 'tokenizer.model'), @($tokenizerConfig, 'tokenizer_config.json'), @($modelConfig, 'config.json'))) {
             if (-not (Test-IrodoriVerifiedFile -Path (Join-Path (Join-Path $Layout.runtime ('hf\hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\' + $revision)) $pair[1]) -Artifact $pair[0])) { throw 'Irodori tokenizer cache verification failed.' }
         }
-        $verification = & $runAdapter $uvPath @('run', '--no-sync', 'python', '-c', 'import irodori_openai_tts') $serverPath $environment
+        $verification = & $runAdapter $uvPath @('run', '--no-sync', '--managed-python', '--no-python-downloads', '--offline', 'python', '-c', 'import irodori_openai_tts') $serverPath (Get-IrodoriRuntimeEnvironment -Layout $Layout -Manifest $Manifest)
         Assert-IrodoriRunSucceeded -Result $verification -Stage 'environment verification'
 
         $transaction.phase = 'publishing'
@@ -744,7 +774,7 @@ function Invoke-IrodoriProvisionLocked {
         $completedAt = [DateTimeOffset]::UtcNow.ToString('o')
         Write-IrodoriJson -Layout $Layout -Path $Layout.completion_marker -Value ([ordered]@{
             schema_version = 1; manifest_version = $Manifest.manifest_version; backend = $Backend
-            python_version = $Manifest.python_version; completed_at = $completedAt
+            python_version = $Manifest.python_version; python_build = $Manifest.python_build; completed_at = $completedAt
         })
         if (-not (Test-IrodoriCompletion -Layout $Layout -Manifest $Manifest -ExpectedBackend $Backend)) { throw 'Irodori completion verification failed.' }
         $transaction.phase = 'committing'
@@ -842,6 +872,7 @@ function Test-IrodoriRuntimeReady {
     $transactionPath = Join-Path $Layout.transactions ($Manifest.manifest_version + '.json')
     if (Test-Path -LiteralPath $transactionPath) { return $false }
     $uvArtifact = Get-IrodoriArtifactById $Manifest 'uv-windows-x86_64'
+    $minGitArtifact = Get-IrodoriArtifactById $Manifest 'mingit-windows-x86_64'
     $serverArtifact = Get-IrodoriArtifactById $Manifest 'irodori-server'
     $modelArtifact = Get-IrodoriArtifactById $Manifest 'irodori-model'
     $codecArtifact = Get-IrodoriArtifactById $Manifest 'irodori-codec'
@@ -852,7 +883,7 @@ function Test-IrodoriRuntimeReady {
         { param($Executable, $Arguments, $WorkingDirectory, $Environment) Invoke-IrodoriDefaultRunApp -Executable $Executable -Arguments $Arguments -WorkingDirectory $WorkingDirectory -Environment $Environment }
     }
     return Test-IrodoriReusableRuntime -Layout $Layout -Manifest $Manifest -Backend $Backend `
-        -UvArtifact $uvArtifact -ServerArtifact $serverArtifact `
+        -UvArtifact $uvArtifact -MinGitArtifact $minGitArtifact -ServerArtifact $serverArtifact `
         -VerifiedArtifacts @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig) `
         -TokenizerArtifacts @($tokenizerModel, $tokenizerConfig, $modelConfig) -RunAdapter $runAdapter
 }
@@ -880,6 +911,7 @@ function Invoke-IrodoriBootstrap {
         'PATH', 'PW_TTS_ENGINE', 'PW_TTS_PORT', 'PW_IRODORI_DIR', 'IRODORI_CHECKPOINT',
         'PW_IRODORI_SKIP_WARMUP', 'PW_IRODORI_BOOTSTRAP_STATUS', 'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
         'UV_PYTHON_CPYTHON_BUILD', 'UV_PROJECT_ENVIRONMENT', 'UV_PYTHON_INSTALL_DIR', 'UV_CACHE_DIR', 'UV_NO_SYSTEM_CONFIG',
+        'UV_MANAGED_PYTHON', 'UV_PYTHON_DOWNLOADS',
         'PYTHONDONTWRITEBYTECODE', 'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
     )
     foreach ($name in $managedEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -909,7 +941,8 @@ Backend: $backend
 Direct downloads: $downloadBytes bytes
 Conservative peak free space: $peakBytes bytes
 Storage (LocalAppData): $storageDisplayPath
-Licenses: Irodori/model/codec/tokenizer MIT; uv Apache-2.0 OR MIT
+Artifacts: $(@($manifest.artifacts).Count)
+Licenses: Irodori/model/codec/tokenizer MIT; uv Apache-2.0 OR MIT; MinGit GPL-2.0-only
 Voice cloning / third-party voice: use only recordings with the speaker's explicit consent.
 Build now? [Y/N]
 "@
@@ -972,7 +1005,7 @@ Build now? [Y/N]
                                 } catch { Stop-ManagedProcessJob -Job $job -GraceSeconds 0; throw }
                             }
                         }
-                        $arguments = @('run', '--no-sync', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', '8088')
+                        $arguments = @('run', '--no-sync', '--managed-python', '--no-python-downloads', '--offline', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', '8088')
                         $owned = & $startOwned $uvPath $arguments $serverPath $runtimeEnvironment
                         $sleep = if ($Adapters.ContainsKey('Sleep')) { $Adapters.Sleep } else { { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds } }
                         $healthy = $false

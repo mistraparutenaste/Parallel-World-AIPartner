@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "manifest_version": "2026-07-19.1",
+  "manifest_version": "2026-07-19.2",
   "python_version": "3.10.20",
   "python_build": "20260510",
   "environment_reserve_bytes": 12884901888,
@@ -17,6 +17,15 @@
       "install_relative_path": "tools/uv/uv.exe",
       "license_id": "Apache-2.0 OR MIT",
       "license_url": "https://github.com/astral-sh/uv/blob/0.11.29/LICENSE-MIT"
+    },
+    {
+      "id": "mingit-windows-x86_64",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip",
+      "size": 39989839,
+      "sha256": "04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668",
+      "install_relative_path": "tools/git",
+      "license_id": "GPL-2.0-only",
+      "license_url": "https://github.com/git-for-windows/git/blob/v2.54.0.windows.1/COPYING"
     },
     {
       "id": "irodori-server",

@@ -163,7 +163,7 @@ test("Irodori startup is opt-in and never creates or synchronizes its environmen
   assert.match(source, /PW_IRODORI_DIR/);
   assert.match(
     source,
-    /@\('run', '--no-sync', 'python', '-m', 'irodori_openai_tts'/,
+    /@\('run', '--no-sync', '--managed-python', '--no-python-downloads', '--offline', 'python', '-m', 'irodori_openai_tts'/,
   );
   assert.doesNotMatch(source, /uv\s+sync|uv\s+venv|git\s+clone/i);
 });

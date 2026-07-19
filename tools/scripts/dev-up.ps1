@@ -215,7 +215,7 @@ try {
             Write-Host '[TTS] uvが見つかりません。Irodoriの環境を手動セットアップしてください。自動インストールは行いません（読み上げのみ縮退し、アプリは動作します）。' -ForegroundColor Yellow
         } else {
             Write-Host '[TTS] Irodori-TTS Serverを起動します。' -ForegroundColor Cyan
-            $irodoriArguments = @('run', '--no-sync', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', "$ttsPort")
+            $irodoriArguments = @('run', '--no-sync', '--managed-python', '--no-python-downloads', '--offline', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', "$ttsPort")
             try {
                 $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
                 Start-ManagedProcess -Job $ttsJob -FilePath $uv.Source -ArgumentList $irodoriArguments -WorkingDirectory $irodoriDir | Out-Null
