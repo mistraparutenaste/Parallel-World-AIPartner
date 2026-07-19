@@ -23,8 +23,9 @@ BLOCKED項目はコード失敗として扱わない一方、PASSとも扱わな
 
 - `ParallelWorld_run.bat`: 1,223 bytes、SHA-256 `d0b49500767c474a49968c904cd91127e5d2f4627be431d4ce9fe25aedfd87f7`、CP932 decode/encodeのbyte round-trip一致
 - launcher tests: Irodori defaultのASCII commentと、pause後の終了コード`7` / `130` / `1`、build failure `1`を確認
-- manifest: schema `1`、version `2026-07-19.1`、Python `3.10.20`、`python_build=20260510`、`environment_reserve_bytes=12,884,901,888`、backend `cpu|cu128`、7 direct artifacts合計`2,505,659,887` bytes、必要空き容量`17,896,221,662` bytes
-- supply contract: manifestが7 direct artifactsのsize/SHA-256を固定。検証済みuv `0.11.29`と`UV_PYTHON_CPYTHON_BUILD=20260510`がuv内蔵metadata/checksumからmanaged CPython buildを選択し、検証済みserver archive内`uv.lock`と`uv sync --frozen`がdependencyを固定
+- manifest: schema `1`、version `2026-07-19.2`、Python `3.10.20`、`python_build=20260510`、`environment_reserve_bytes=12,884,901,888`、backend `cpu|cu128`、8 direct artifacts合計`2,545,649,726` bytes、必要空き容量`17,976,201,340` bytes
+- supply contract: manifestが8 direct artifactsのsize/SHA-256を固定。MinGit `2.54.0.windows.1`（`39,989,839` bytes、SHA-256 `04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668`、GPL-2.0-only）は構築時の固定git dependency解決だけに使い、system Gitを参照しない。検証済みuv `0.11.29`と`UV_PYTHON_CPYTHON_BUILD=20260510`がuv内蔵metadata/checksumからmanaged CPython buildを選択し、検証済みserver archive内`uv.lock`と`uv sync --frozen`がdependencyを固定
+- reuse/runtime contract: completion markerは`python_build=20260510`まで厳密照合する。再検証と通常起動はmanaged Python限定、Python download禁止、Hugging Face/transformers/uv offlineとし、欠損環境からsystem Pythonやnetworkへfallbackしない
 - offline script testsは、hash/size不一致、HTTPS downgrade、危険なZIP、reparse point、transaction recovery、user voice/LoRA保持、外部TTS/LLM保持、owned process tree cleanupをfixtureで検証
 
 ## 実環境ゲート（未実施）
@@ -39,7 +40,7 @@ BLOCKED項目はコード失敗として扱わない一方、PASSとも扱わな
 
 ## 明示opt-in後に使うコマンド
 
-次のコマンドはこのTaskでは実行していない。voiceの権利・話者同意を確認し、実network downloadと`17,896,221,662` bytes以上の空き容量を許可できる隔離環境でのみ実行する。
+次のコマンドはこのTaskでは実行していない。voiceの権利・話者同意を確認し、実network downloadと`17,976,201,340` bytes以上の空き容量を許可できる隔離環境でのみ実行する。
 
 ```powershell
 $env:PW_IRODORI_ACCEPT_REAL = '1'

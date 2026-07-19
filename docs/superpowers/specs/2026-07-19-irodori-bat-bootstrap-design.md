@@ -35,7 +35,7 @@ Irodori環境はrepository内ではなく、`%LOCALAPPDATA%\com.parallelworld.de
 
 参照音声とLoRAはmanaged runtimeとは別directoryに置き、runtimeの修復・更新・削除対象に含めない。Dynamic LoRAを有効にするため、managed serverは常に `IRODORI_COMPILE_MODEL=false` で起動する。
 
-system Python、Git、repository-local virtual environmentは使用しない。manifestはportable `uv`、server archive、model、codec、`sbintuitions/sarashina2.2-0.5b` tokenizerの7直接取得物をsize/SHA-256で固定する。CPython archiveのSHAをmanifestへ重複記載せず、検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡し、uv binary内蔵のmanaged-Python metadata/checksumからCPython `3.10.20` buildを選択する。dependencyは検証済みserver archive内の`uv.lock`と`uv sync --frozen`で固定する。起動時はHugging Faceをoffline modeにし、未固定revisionからの暗黙downloadを拒否する。
+system Python、system Git、repository-local virtual environmentは使用しない。manifestはportable `uv`、Git for Windows MinGit、server archive、model、codec、`sbintuitions/sarashina2.2-0.5b` tokenizerの8直接取得物をsize/SHA-256で固定する。MinGitはmanaged rootへ展開し、serverの固定git dependencyを解決する`uv sync --frozen`の間だけPATHへ追加する。CPython archiveのSHAをmanifestへ重複記載せず、検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡し、uv binary内蔵のmanaged-Python metadata/checksumからCPython `3.10.20` buildを選択する。再検証と通常起動はmanaged Python限定、Python download禁止、uv/Hugging Face offlineとし、system Pythonまたはnetworkへのfallbackを拒否する。
 
 ## Windows Backend Selection
 
@@ -46,9 +46,9 @@ backendは自動検出した推奨値を確認画面へ表示する。対応状�
 
 ## Bootstrap Manifest Contract
 
-`content/runtime-manifests/irodori/windows-x86_64.json` は、Windows x86_64 の7直接取得物、サイズ、SHA-256、導入先相対パス、ライセンスIDおよび上流ライセンスURLを固定する。schema version は `1`、manifest version は `2026-07-19.1`、Python は `3.10.20`、`python_build`は`20260510`、`environment_reserve_bytes`は`12,884,901,888`、backendは`cpu`と`cu128`のみとする。直接取得物は合計`2,505,659,887` bytesで、開始前に要求する保守的な空き容量は`(direct artifacts × 2) + environment reserve = 17,896,221,662` bytesとする。これは事前チェック値であり、全環境での最大使用量を保証する上限ではない。
+`content/runtime-manifests/irodori/windows-x86_64.json` は、Windows x86_64 の8直接取得物、サイズ、SHA-256、導入先相対パス、ライセンスIDおよび上流ライセンスURLを固定する。schema version は `1`、manifest version は `2026-07-19.2`、Python は `3.10.20`、`python_build`は`20260510`、`environment_reserve_bytes`は`12,884,901,888`、backendは`cpu`と`cu128`のみとする。直接取得物は合計`2,545,649,726` bytesで、開始前に要求する保守的な空き容量は`(direct artifacts × 2) + environment reserve = 17,976,201,340` bytesとする。これは事前チェック値であり、全環境での最大使用量を保証する上限ではない。MinGit `2.54.0.windows.1`は`39,989,839` bytes、SHA-256 `04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668`、license `GPL-2.0-only`として固定する。
 
-bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`、`Get-IrodoriBackend`、`Test-IrodoriCompletion -ExpectedBackend <cpu|cu128>` とする。既定layout rootは `%LOCALAPPDATA%\com.parallelworld.desktop\irodori` であり、`runtime/<manifest-version>`、`cache/downloads`、`transactions`、`user/voices`、`user/loras` を返す。completion marker は `runtime/<manifest-version>/completion.json` に置き、`schema_version`、manifest、Python、および選択済み`ExpectedBackend`まで完全一致した場合だけ有効とする。
+bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`、`Get-IrodoriBackend`、`Test-IrodoriCompletion -ExpectedBackend <cpu|cu128>` とする。既定layout rootは `%LOCALAPPDATA%\com.parallelworld.desktop\irodori` であり、`runtime/<manifest-version>`、`cache/downloads`、`transactions`、`user/voices`、`user/loras` を返す。completion marker は `runtime/<manifest-version>/completion.json` に置き、`schema_version`、manifest、Python version、`python_build`、および選択済み`ExpectedBackend`まで型を含め完全一致した場合だけ有効とする。
 
 ## Download and Installation Safety
 

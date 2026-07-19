@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- repository内、system Python、system Git、CUDA Toolkit、GPU driver、WSLへ依存環境を作成しない。
+- repository内、system Python、system Git、CUDA Toolkit、GPU driver、WSLへ依存環境を作成しない。固定git dependencyの構築にはmanifestで検証したmanaged MinGitだけを使用する。
 - 実装対象はWindows x86_64。NVIDIAは`cu128`、Radeon/Intel/unknownは`cpu`。Windows Radeon ROCm、Linux ROCm、Apple MPSはdeferred。
 - `ParallelWorld_run.bat`だけがbootstrapを有効化し、既存`dev-up.bat` / `dev-up.ps1`の既定Aivis動作を維持する。
 - 通常テストはexternal API、実model、有料serviceへ接続しない。
@@ -45,7 +45,7 @@
 
 **Interfaces:**
 - Produces: `Import-IrodoriManifest -Path <string>`, `Get-IrodoriLayout -Root <string> -ManifestVersion <string>`, `Get-IrodoriBackend -GpuNames <string[]>`, `Test-IrodoriCompletion -Layout <hashtable> -Manifest <object>`.
-- Completion schema: `{ schema_version: 1, manifest_version, backend, python_version, completed_at }`.
+- Completion schema: `{ schema_version: 1, manifest_version, backend, python_version, python_build, completed_at }`.
 
 - [x] **Step 1: Write failing manifest and backend tests**
 
@@ -70,7 +70,7 @@ Assert the production manifest contains these exact direct artifacts:
 ```json
 {
   "schema_version": 1,
-  "manifest_version": "2026-07-19.1",
+  "manifest_version": "2026-07-19.2",
   "python_version": "3.10.20",
   "python_build": "20260510",
   "environment_reserve_bytes": 12884901888,
@@ -80,6 +80,12 @@ Assert the production manifest contains these exact direct artifacts:
       "url": "https://releases.astral.sh/github/uv/releases/download/0.11.29/uv-x86_64-pc-windows-msvc.zip",
       "size": 25534683,
       "sha256": "a047d55651bc3e0ca24595b25ec4cfcb10f9dca9fb56514e661269b37d4fae68"
+    },
+    {
+      "id": "mingit-windows-x86_64",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip",
+      "size": 39989839,
+      "sha256": "04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668"
     },
     {
       "id": "irodori-server",
@@ -121,7 +127,7 @@ Assert the production manifest contains these exact direct artifacts:
 }
 ```
 
-Every artifact also records `install_relative_path`, `license_id`, and `license_url`. Use `Apache-2.0 OR MIT` for uv and `MIT` for server/model/codec/tokenizer, with the corresponding upstream license page. The manifest rejects missing or unknown license fields.
+Every artifact also records `install_relative_path`, `license_id`, and `license_url`. Use `Apache-2.0 OR MIT` for uv, `GPL-2.0-only` for Git for Windows MinGit, and `MIT` for server/model/codec/tokenizer, with the corresponding upstream license page. The manifest rejects missing or unknown license fields.
 
 - [x] **Step 2: Run RED**
 
@@ -215,9 +221,9 @@ Execute only the verified managed `uv.exe` with argument arrays:
 & $uv sync --frozen --extra $Backend --python 3.10.20 --managed-python
 ```
 
-Set `UV_PYTHON_CPYTHON_BUILD=20260510`, `UV_PYTHON_INSTALL_DIR`, `UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`, `HF_HOME`, `UV_NO_SYSTEM_CONFIG=1`, and `PYTHONDONTWRITEBYTECODE=1` under the managed root. The verified uv binary's embedded managed-Python metadata/checksum selects CPython 3.10.20 build 20260510; the manifest does not duplicate the Python archive SHA. The verified server archive contains `uv.lock`, and `uv sync --frozen` consumes that dependency lock/hash contract. Place model, codec, and tokenizer at manifest paths. Build the Hugging Face tokenizer cache at `hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\5fb086c49f49824cfc93f09cc4ed5cd5917bef3d` and write `refs\main` with that exact revision; set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` for verification and runtime.
+Set `UV_PYTHON_CPYTHON_BUILD=20260510`, `UV_PYTHON_INSTALL_DIR`, `UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`, `HF_HOME`, `UV_NO_SYSTEM_CONFIG=1`, and `PYTHONDONTWRITEBYTECODE=1` under the managed root. The verified uv binary's embedded managed-Python metadata/checksum selects CPython 3.10.20 build 20260510; the manifest does not duplicate the Python archive SHA. The verified server archive contains `uv.lock`; prepend only the verified managed MinGit `cmd` directory while `uv sync --frozen` consumes its dependency lock/hash contract, and do not consult system Git. Place model, codec, and tokenizer at manifest paths. Build the Hugging Face tokenizer cache at `hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\5fb086c49f49824cfc93f09cc4ed5cd5917bef3d` and write `refs\main` with that exact revision; set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` for verification and runtime.
 
-Verify `uv run --no-sync python -c` can import `irodori_openai_tts`, confirm the exact checkpoint/codec/tokenizer files and hashes again, then atomically replace `complete.json`. Do not require a voice at provisioning time.
+Verify `uv run --no-sync --managed-python --no-python-downloads --offline python -c` can import `irodori_openai_tts`, confirm `python_build=20260510` and the exact MinGit/checkpoint/codec/tokenizer files and hashes again, then atomically replace `completion.json`. Do not require a voice at provisioning time. Set `UV_MANAGED_PYTHON=1` and `UV_PYTHON_DOWNLOADS=never` during verification and runtime so a broken environment cannot fall back to system Python or network download.
 
 - [x] **Step 5: Run GREEN and commit**
 
@@ -353,14 +359,14 @@ Expected: FAIL because entry and launcher integration do not exist.
 
 - [x] **Step 3: Implement interactive flow**
 
-Prompt before network access with backend, exact direct-download bytes (`2,505,659,887`) plus manifest reserve and conservative required free space (`17,896,221,662`), redacted LocalAppData path, MIT licenses, and voice cloning warning. Choices are `Y` and `N`; `N` continues to the app and prompts again next BAT launch. Downloads accept Ctrl+C cancellation and apply a 30-second default timeout to each stream read.
+Prompt before network access with backend, exact direct-download bytes (`2,545,649,726`) plus manifest reserve and conservative required free space (`17,976,201,340`), redacted LocalAppData path, artifact licenses including MinGit's GPL-2.0-only, and voice cloning warning. Choices are `Y` and `N`; `N` continues to the app and prompts again next BAT launch. Downloads accept Ctrl+C cancellation and apply a 30-second default timeout to each stream read.
 
 On a ready environment, prepend managed uv to this process's `PATH`, set `PW_IRODORI_DIR`, preserve an explicitly supplied `PW_TTS_ENGINE`, and otherwise set it to `irodori`. Invoke `dev-up.ps1` in the same PowerShell process so environment and process ownership are scoped to this BAT session.
 
 Start managed Irodori with:
 
 ```powershell
-uv run --no-sync python -m irodori_openai_tts --host 127.0.0.1 --port 8088
+uv run --no-sync --managed-python --no-python-downloads --offline python -m irodori_openai_tts --host 127.0.0.1 --port 8088
 ```
 
 Set `IRODORI_CHECKPOINT`, `IRODORI_CODEC_REPO`, `IRODORI_VOICES_DIR`, `IRODORI_COMPILE_MODEL=false`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. `/health` success is required. List voices; if empty, return `ready_without_voice`. Voice-list, synthesis, or WAV validation errors become `warmup_failed`; cancellation and pipeline stop propagate. The launcher preserves the bootstrap/app exit code after `pause` (`7`, `130`, and `1` are covered by tests).

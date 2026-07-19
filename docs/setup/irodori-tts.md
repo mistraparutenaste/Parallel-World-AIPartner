@@ -11,7 +11,7 @@ Windows x86_64でリポジトリルートの`ParallelWorld_run.bat`を実行す�
 managed環境がない、壊れている、またはbackendが変わった場合は、ネットワーク接続前に次の情報を表示して`Y` / `N`を確認します。
 
 - 選択backend（NVIDIA GPUは`cu128`、Radeon・Intel・不明なGPUは`cpu`）
-- direct download合計`2,505,659,887` bytesと、構築用reserve `12,884,901,888` bytesを含む必要空き容量`17,896,221,662` bytes
+- direct download合計`2,545,649,726` bytesと、構築用reserve `12,884,901,888` bytesを含む必要空き容量`17,976,201,340` bytes
 - 保存先、ライセンス、音声クローニングに関する注意
 
 `N`は構築せず、TTSを縮退させてアプリ起動を続行します。次回BAT起動時に再確認します。構築失敗時もcompletion markerを公開せず、次回起動でrepairを再確認します。構築中のCtrl+Cはsetupをcancelし、アプリを起動しません。
@@ -26,9 +26,9 @@ managed環境は次のユーザーデータ領域にだけ作成します。
 %LOCALAPPDATA%\com.parallelworld.desktop\irodori\
 ├─ runtime\
 │  ├─ active.json
-│  └─ 2026-07-19.1\
+│  └─ 2026-07-19.2\
 │     ├─ completion.json
-│     └─ verified uv / Python / env / server / model
+│     └─ verified uv / MinGit / Python / env / server / model
 ├─ cache\downloads\       verified download cache
 ├─ transactions\          incomplete setup recovery journal
 └─ user\
@@ -47,6 +47,7 @@ manifestは各成果物のHTTPS URL、install先、bytes、SHA-256、ライセ�
 | 成果物 | 固定version / revision | bytes | license |
 | --- | --- | ---: | --- |
 | uv Windows x86_64 | `0.11.29` | 25,534,683 | Apache-2.0 OR MIT |
+| Git for Windows MinGit x86_64 | [`2.54.0.windows.1`](https://github.com/git-for-windows/git/releases/tag/v2.54.0.windows.1) | 39,989,839 | [GPL-2.0-only](https://github.com/git-for-windows/git/blob/v2.54.0.windows.1/COPYING) |
 | Irodori-TTS-Server | `1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce` | 399,078 | MIT |
 | Irodori-TTS-500M-v3 `model.safetensors` | `236c1e56591279fc24e3c1bf6609fc06e48dde28` | 2,048,269,748 | MIT |
 | Semantic-DACVAE `weights.pth` | `47376ee24834d7a05a48ebabfe3cde29b3c5e214` | 429,620,065 | MIT |
@@ -54,7 +55,9 @@ manifestは各成果物のHTTPS URL、install先、bytes、SHA-256、ライセ�
 | Sarashina tokenizer config | 同上 | 3,777 | MIT |
 | Sarashina model config | 同上 | 657 | MIT |
 
-manifestが直接size/SHA-256を検証する範囲は上表の7成果物です。CPython archive自体のSHA-256をmanifestへ重複記載しているわけではありません。検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡すことで、uv binaryに埋め込まれたmanaged-Python metadata/checksumからCPython `3.10.20`のbuildを選択します。server archive内の検証済み`uv.lock`と`uv sync --frozen`がdependencyの固定version/hashを使用します。これはuv公式の[Python environment variables](https://docs.astral.sh/uv/configuration/environment/)と[`--frozen` sync](https://docs.astral.sh/uv/concepts/projects/sync/#locking-and-syncing)の契約に沿うものです。
+manifestが直接size/SHA-256を検証する範囲は上表の8成果物です。MinGit archiveの固定URLは`https://github.com/git-for-windows/git/releases/download/v2.54.0.windows.1/MinGit-2.54.0-64-bit.zip`、sizeは`39,989,839` bytes、SHA-256は`04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668`です。MinGitはserverの固定git dependencyを`uv sync --frozen`で解決する構築時だけPATHへ追加し、通常runtimeでは使用しません。
+
+CPython archive自体のSHA-256をmanifestへ重複記載しているわけではありません。検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡すことで、uv binaryに埋め込まれたmanaged-Python metadata/checksumからCPython `3.10.20`のbuildを選択します。server archive内の検証済み`uv.lock`と`uv sync --frozen`がdependencyの固定version/hashを使用します。これはuv公式の[Python environment variables](https://docs.astral.sh/uv/configuration/environment/)と[`--frozen` sync](https://docs.astral.sh/uv/concepts/projects/sync/#locking-and-syncing)の契約に沿うものです。
 
 実行する引数は次のとおりです。`<backend>`は`cpu`または`cu128`の一方です。
 
@@ -63,9 +66,11 @@ uv python install 3.10.20
 uv sync --frozen --extra <backend> --python 3.10.20 --managed-python
 ```
 
-system Python、system Git、repository-local venvは使いません。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
+system Python、system Git、repository-local venvは使いません。構築用MinGitも他の成果物と同じくmanaged root内へ配置し、system PATHのGitは参照しません。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
 
-uv/Python/environmentの保存先と外部設定の影響をmanaged root内へ限定するため、`UV_PYTHON_CPYTHON_BUILD`、`UV_PYTHON_INSTALL_DIR`、`UV_PROJECT_ENVIRONMENT`、`UV_CACHE_DIR`、`HF_HOME`、`UV_NO_SYSTEM_CONFIG=1`、`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`PYTHONDONTWRITEBYTECODE=1`を構築・再検証・起動へ渡します。
+uv/Python/environmentの保存先と外部設定の影響をmanaged root内へ限定するため、`UV_PYTHON_CPYTHON_BUILD`、`UV_PYTHON_INSTALL_DIR`、`UV_PROJECT_ENVIRONMENT`、`UV_CACHE_DIR`、`HF_HOME`、`UV_NO_SYSTEM_CONFIG=1`、`PYTHONDONTWRITEBYTECODE=1`を構築・再検証・起動へ渡します。再検証と通常起動はさらに`UV_MANAGED_PYTHON=1`、`UV_PYTHON_DOWNLOADS=never`、`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`を設定し、`uv run --no-sync --managed-python --no-python-downloads --offline`でsystem Pythonへのfallbackと暗黙downloadを拒否します。
+
+`completion.json`はmanifest version、backend、Python versionに加えて`python_build=20260510`まで厳密に一致した場合だけ再利用されます。fieldが欠ける、型が違う、またはbuildが異なる旧markerは完成済み環境として扱いません。
 
 downloadはCtrl+C cancellationを受け付け、1回のstream readが既定30秒を超えるとtimeoutとして失敗します。partial fileと未完了transactionはcompletionとして公開しません。promptとerrorには`%LOCALAPPDATA%`相対または固定ラベルの安全なpathだけを表示し、ユーザー名を含む完全pathや例外詳細を出しません。
 
