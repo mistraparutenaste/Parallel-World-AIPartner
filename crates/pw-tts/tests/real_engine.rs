@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use pw_application::speech_synthesis::TtsSynthesizer;
 use pw_tts::{
-    AivisSpeechClient, CachedSpeechSynthesizer, SynthesisParams, TtsClientConfig, WavCache,
-    cache_key,
+    AivisSpeechClient, CachedSpeechSynthesizer, EngineClient, SynthesisParams, TtsClientConfig,
+    WavCache, cache_key,
 };
 
 fn base_url() -> String {
@@ -63,9 +63,14 @@ fn cached_synthesizer_reuses_the_wav_file() {
     let dir = std::env::temp_dir().join(format!("pw-tts-e2e-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let params = SynthesisParams::default();
-    let key = cache_key("キャッシュの検証です。", style_id, &params);
-    let synthesizer =
-        CachedSpeechSynthesizer::new(client, WavCache::new(dir.clone(), 10), style_id, params);
+    let voice_id = style_id.to_string();
+    let key = cache_key("aivis", &voice_id, "キャッシュの検証です。", &params);
+    let synthesizer = CachedSpeechSynthesizer::new(
+        EngineClient::Aivis(client),
+        WavCache::new(dir.clone(), 10),
+        voice_id,
+        params,
+    );
 
     let first = synthesizer
         .synthesize("キャッシュの検証です。")

@@ -1,6 +1,6 @@
 //! WAV file cache for synthesized sentences.
 //!
-//! Keys are derived from the synthesis inputs (text, style, scales),
+//! Keys are derived from the synthesis inputs (engine, voice, text, scales),
 //! so a repeated sentence is served from disk without hitting the
 //! engine. The cache is pruned oldest-first above a fixed entry count.
 
@@ -58,9 +58,9 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 
 /// Cache key for one synthesis request.
 #[must_use]
-pub fn cache_key(text: &str, style_id: u32, params: &SynthesisParams) -> String {
+pub fn cache_key(engine: &str, voice_id: &str, text: &str, params: &SynthesisParams) -> String {
     let material = format!(
-        "{text}|{style_id}|{volume:.3}|{speed:.3}",
+        "{engine}|{voice_id}|{text}|{volume:.3}|{speed:.3}",
         volume = params.volume,
         speed = params.speed
     );
@@ -325,18 +325,41 @@ mod tests {
     }
 
     #[test]
+    fn key_separates_engines_and_voice_ids() {
+        let aivis = cache_key("aivis", "1", "hello", &params());
+
+        assert_eq!(aivis, cache_key("aivis", "1", "hello", &params()));
+        assert_ne!(aivis, cache_key("irodori", "1", "hello", &params()));
+        assert_ne!(aivis, cache_key("aivis", "2", "hello", &params()));
+        assert_ne!(aivis, cache_key("aivis", "1", "goodbye", &params()));
+    }
+
+    #[test]
     fn key_is_deterministic_and_input_sensitive() {
-        let base = cache_key("こんにちは。", 1, &params());
-        assert_eq!(base, cache_key("こんにちは。", 1, &params()));
-        assert_ne!(base, cache_key("こんばんは。", 1, &params()));
-        assert_ne!(base, cache_key("こんにちは。", 2, &params()));
+        let base = cache_key("aivis", "1", "こんにちは。", &params());
+        assert_eq!(base, cache_key("aivis", "1", "こんにちは。", &params()));
+        assert_ne!(base, cache_key("aivis", "1", "こんばんは。", &params()));
+        assert_ne!(base, cache_key("aivis", "2", "こんにちは。", &params()));
         assert_ne!(
             base,
             cache_key(
+                "aivis",
+                "1",
                 "こんにちは。",
-                1,
                 &SynthesisParams {
                     speed: 1.2,
+                    ..params()
+                }
+            )
+        );
+        assert_ne!(
+            base,
+            cache_key(
+                "aivis",
+                "1",
+                "こんにちは。",
+                &SynthesisParams {
+                    volume: 0.8,
                     ..params()
                 }
             )
@@ -347,7 +370,7 @@ mod tests {
     #[test]
     fn store_then_lookup_round_trips() {
         let cache = WavCache::new(temp_dir("roundtrip"), 10);
-        let key = cache_key("やあ", 1, &params());
+        let key = cache_key("aivis", "1", "やあ", &params());
 
         assert!(cache.lookup(&key).is_none());
         let path = cache.store(&key, b"RIFFdata").unwrap();
@@ -359,7 +382,7 @@ mod tests {
     fn prunes_oldest_entries_above_the_limit() {
         let cache = WavCache::new(temp_dir("prune"), 3);
         for (index, text) in ["一", "二", "三", "四"].iter().enumerate() {
-            let key = cache_key(text, 1, &params());
+            let key = cache_key("aivis", "1", text, &params());
             cache.store(&key, b"RIFF").unwrap();
             // Distinct mtimes so the prune order is stable.
             let mtime = std::time::SystemTime::UNIX_EPOCH
@@ -371,10 +394,26 @@ mod tests {
             file.set_modified(mtime).unwrap();
         }
 
-        assert!(cache.lookup(&cache_key("一", 1, &params())).is_none());
-        assert!(cache.lookup(&cache_key("二", 1, &params())).is_some());
-        assert!(cache.lookup(&cache_key("三", 1, &params())).is_some());
-        assert!(cache.lookup(&cache_key("四", 1, &params())).is_some());
+        assert!(
+            cache
+                .lookup(&cache_key("aivis", "1", "一", &params()))
+                .is_none()
+        );
+        assert!(
+            cache
+                .lookup(&cache_key("aivis", "1", "二", &params()))
+                .is_some()
+        );
+        assert!(
+            cache
+                .lookup(&cache_key("aivis", "1", "三", &params()))
+                .is_some()
+        );
+        assert!(
+            cache
+                .lookup(&cache_key("aivis", "1", "四", &params()))
+                .is_some()
+        );
     }
 
     #[test]

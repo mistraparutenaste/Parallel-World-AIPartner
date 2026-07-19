@@ -11,4 +11,4 @@ pub use aivis::{
 };
 pub use cache::{DEFAULT_MAX_ENTRIES, WavCache, WavCacheClearError, WavCacheStats, cache_key};
 pub use irodori::IrodoriTtsClient;
-pub use synthesizer::CachedSpeechSynthesizer;
+pub use synthesizer::{CachedSpeechSynthesizer, EngineClient};
