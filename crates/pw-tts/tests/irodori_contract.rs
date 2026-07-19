@@ -150,6 +150,32 @@ fn voices_extracts_ids_from_the_upstream_list_envelope() {
 }
 
 #[test]
+fn voices_rejects_an_envelope_without_the_object_discriminator() {
+    let server = spawn_server(vec![response(
+        200,
+        "application/json",
+        br#"{"data":[{"id":"sample","object":"voice"}]}"#.to_vec(),
+    )]);
+
+    let error = client_for(server.port).voices().unwrap_err();
+
+    assert!(matches!(error, TtsError::Protocol(_)), "{error:?}");
+}
+
+#[test]
+fn voices_rejects_an_envelope_with_a_non_list_object_discriminator() {
+    let server = spawn_server(vec![response(
+        200,
+        "application/json",
+        br#"{"object":"voice","data":[{"id":"sample","object":"voice"}]}"#.to_vec(),
+    )]);
+
+    let error = client_for(server.port).voices().unwrap_err();
+
+    assert!(matches!(error, TtsError::Protocol(_)), "{error:?}");
+}
+
+#[test]
 fn api_failures_preserve_4xx_and_5xx_statuses() {
     let client_error_server = spawn_server(vec![response(
         422,

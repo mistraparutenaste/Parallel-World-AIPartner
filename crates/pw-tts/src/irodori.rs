@@ -16,6 +16,7 @@ struct Voice {
 
 #[derive(Deserialize)]
 struct VoiceList {
+    object: String,
     data: Vec<Voice>,
 }
 
@@ -63,6 +64,11 @@ impl IrodoriTtsClient {
         let voices = response
             .json::<VoiceList>()
             .map_err(|error| TtsError::Protocol(error.to_string()))?;
+        if voices.object != "list" {
+            return Err(TtsError::Protocol(
+                "voice list response object is not list".to_owned(),
+            ));
+        }
         Ok(voices.data.into_iter().map(|voice| voice.id).collect())
     }
 
