@@ -18,6 +18,7 @@
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
 Set-Location $repoRoot
+Import-Module (Join-Path $PSScriptRoot 'managed-process-job.psm1') -Force
 
 function Test-Port {
     param([int]$Port)
@@ -88,9 +89,11 @@ $ttsEngine = (Get-EnvOrDefault 'PW_TTS_ENGINE' 'aivis').ToLowerInvariant()
 $defaultTtsPort = if ($ttsEngine -eq 'irodori') { '8088' } else { '10101' }
 $ttsPort = [int](Get-EnvOrDefault 'PW_TTS_PORT' $defaultTtsPort)
 $llmPort = [int](Get-EnvOrDefault 'PW_LLM_PORT' '1234')
+$ttsJob = $null
 
-# --- 1. TTS engine ----------------------------------------------------------
-if ($ttsEngine -eq 'aivis') {
+try {
+    # --- 1. TTS engine ------------------------------------------------------
+    if ($ttsEngine -eq 'aivis') {
     if (Test-Port $ttsPort) {
         Write-Host "[TTS] AivisSpeech Engine: 起動済み (port $ttsPort)" -ForegroundColor Green
     } else {
@@ -113,7 +116,8 @@ if ($ttsEngine -eq 'aivis') {
             Write-Host "      実行ファイルの場所が分かる場合は `$env:PW_AIVIS_ENGINE で指定できます。" -ForegroundColor Yellow
         } else {
             Write-Host "[TTS] AivisSpeech Engineを起動します: $engine" -ForegroundColor Cyan
-            Start-Process -FilePath $engine -ArgumentList @('--host', '127.0.0.1', '--port', "$ttsPort") -WindowStyle Minimized
+            $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
+            Start-ManagedProcess -Job $ttsJob -FilePath $engine -ArgumentList @('--host', '127.0.0.1', '--port', "$ttsPort") -WorkingDirectory $repoRoot | Out-Null
             $deadline = (Get-Date).AddSeconds(60)
             while (-not (Test-Port $ttsPort)) {
                 if ((Get-Date) -gt $deadline) {
@@ -127,7 +131,7 @@ if ($ttsEngine -eq 'aivis') {
             }
         }
     }
-} elseif ($ttsEngine -eq 'irodori') {
+    } elseif ($ttsEngine -eq 'irodori') {
     if (Test-IrodoriHealth $ttsPort) {
         Write-Host "[TTS] Irodori-TTS Server: 起動済み (port $ttsPort)" -ForegroundColor Green
         Invoke-IrodoriWarmUp $ttsPort
@@ -142,7 +146,8 @@ if ($ttsEngine -eq 'aivis') {
             Write-Host "[TTS] Irodori-TTS Serverを起動します: $irodoriDir" -ForegroundColor Cyan
             $irodoriArguments = @('run', '--no-sync', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', "$ttsPort")
             try {
-                Start-Process -FilePath $uv.Source -ArgumentList $irodoriArguments -WorkingDirectory $irodoriDir -WindowStyle Hidden
+                $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
+                Start-ManagedProcess -Job $ttsJob -FilePath $uv.Source -ArgumentList $irodoriArguments -WorkingDirectory $irodoriDir | Out-Null
                 $deadline = (Get-Date).AddSeconds(90)
                 while (-not (Test-IrodoriHealth $ttsPort)) {
                     if ((Get-Date) -gt $deadline) {
@@ -160,28 +165,33 @@ if ($ttsEngine -eq 'aivis') {
             }
         }
     }
-} else {
-    Write-Host "[TTS] PW_TTS_ENGINE '$ttsEngine' は未対応です。aivisまたはirodoriを指定してください（読み上げのみ縮退し、アプリは動作します）。" -ForegroundColor Yellow
-}
+    } else {
+        Write-Host "[TTS] PW_TTS_ENGINE '$ttsEngine' は未対応です。aivisまたはirodoriを指定してください（読み上げのみ縮退し、アプリは動作します）。" -ForegroundColor Yellow
+    }
 
-# --- 2. LLMサーバー ---------------------------------------------------------
-if (Test-Port $llmPort) {
-    Write-Host "[LLM] LLMサーバー: 起動済み (port $llmPort)" -ForegroundColor Green
-} else {
-    Write-Host "[LLM] port $llmPort にLLMサーバーが見つかりません。LM Studio等を手動で起動してください（チャットはLLM接続まで縮退表示）。" -ForegroundColor Yellow
-}
+    # --- 2. LLMサーバー -----------------------------------------------------
+    if (Test-Port $llmPort) {
+        Write-Host "[LLM] LLMサーバー: 起動済み (port $llmPort)" -ForegroundColor Green
+    } else {
+        Write-Host "[LLM] port $llmPort にLLMサーバーが見つかりません。LM Studio等を手動で起動してください（チャットはLLM接続まで縮退表示）。" -ForegroundColor Yellow
+    }
 
-# --- 3. 開発用アセットの確認 -------------------------------------------------
-$appData = Join-Path $env:APPDATA 'com.parallelworld.desktop'
-if (-not (Test-Path (Join-Path $appData 'characters'))) {
-    Write-Host "[Live2D] キャラクターモデルが未配置のようです: node tools/scripts/sync-live2d-dev-assets.mjs" -ForegroundColor Yellow
-}
-$models = Join-Path $appData 'models'
-$hasStt = (Test-Path $models) -and ((Get-ChildItem $models -Recurse -Filter '*.onnx' -ErrorAction SilentlyContinue | Select-Object -First 1) -ne $null)
-if (-not $hasStt) {
-    Write-Host "[STT] 音声認識モデルが未配置のようです: node tools/scripts/download-stt-models.mjs" -ForegroundColor Yellow
-}
+    # --- 3. 開発用アセットの確認 ---------------------------------------------
+    $appData = Join-Path $env:APPDATA 'com.parallelworld.desktop'
+    if (-not (Test-Path (Join-Path $appData 'characters'))) {
+        Write-Host "[Live2D] キャラクターモデルが未配置のようです: node tools/scripts/sync-live2d-dev-assets.mjs" -ForegroundColor Yellow
+    }
+    $models = Join-Path $appData 'models'
+    $hasStt = (Test-Path $models) -and ((Get-ChildItem $models -Recurse -Filter '*.onnx' -ErrorAction SilentlyContinue | Select-Object -First 1) -ne $null)
+    if (-not $hasStt) {
+        Write-Host "[STT] 音声認識モデルが未配置のようです: node tools/scripts/download-stt-models.mjs" -ForegroundColor Yellow
+    }
 
-# --- 4. アプリ起動 -----------------------------------------------------------
-Write-Host "[APP] tauri dev を起動します…" -ForegroundColor Cyan
-corepack pnpm --filter @parallel-world/desktop tauri dev
+    # --- 4. アプリ起動 -------------------------------------------------------
+    Write-Host "[APP] tauri dev を起動します…" -ForegroundColor Cyan
+    corepack pnpm --filter @parallel-world/desktop tauri dev
+} finally {
+    if ($null -ne $ttsJob) {
+        Stop-ManagedProcessJob -Job $ttsJob -GraceSeconds 5
+    }
+}

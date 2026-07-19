@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +12,44 @@ const scriptPath = path.join(
 );
 const source = await readFile(scriptPath, "utf8");
 const repositoryRoot = path.resolve(path.dirname(scriptPath), "../..");
+const jobModulePath = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "managed-process-job.psm1",
+);
+
+function quotePowerShell(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function runPowerShell(source, options = {}) {
+  return spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", source],
+    { encoding: "utf8", timeout: 20_000, ...options },
+  );
+}
+
+function isAlive(pid) {
+  const result = runPowerShell(
+    `if (Get-Process -Id ${Number(pid)} -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }`,
+  );
+  return result.status === 0;
+}
+
+function stopProcess(pid) {
+  runPowerShell(
+    `Stop-Process -Id ${Number(pid)} -Force -ErrorAction SilentlyContinue`,
+  );
+}
+
+async function waitFor(check, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await check()) return true;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return false;
+}
 
 test("defaults to the backward-compatible Aivis startup path", () => {
   assert.match(source, /Get-EnvOrDefault 'PW_TTS_ENGINE' 'aivis'/);
@@ -50,3 +90,159 @@ test("README links the user-managed Irodori setup guide", async () => {
   assert.match(guide, /uv sync --extra cpu/);
   assert.match(guide, /明示的な同意/);
 });
+
+test("TTS ownership uses a kill-on-close Job and suspended assignment", async () => {
+  const moduleSource = await readFile(jobModulePath, "utf8");
+  assert.match(moduleSource, /JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE|KillOnJobClose/);
+  assert.match(moduleSource, /CreateSuspended/);
+  assert.match(moduleSource, /AssignProcessToJobObject/);
+  assert.match(moduleSource, /ResumeThread/);
+  assert.match(moduleSource, /session_id/);
+  assert.match(moduleSource, /start_time_utc_ticks/);
+  assert.match(moduleSource, /executable_path/);
+});
+
+test("dev-up preserves pre-open TTS and never manages LLM", () => {
+  assert.match(source, /if \(Test-Port \$ttsPort\)/);
+  assert.match(source, /if \(Test-IrodoriHealth \$ttsPort\)/);
+  assert.match(source, /New-ManagedProcessJob/);
+  assert.match(source, /Start-ManagedProcess/);
+  assert.match(source, /finally\s*\{[\s\S]*Stop-ManagedProcessJob/);
+  assert.doesNotMatch(source, /Start-ManagedProcess[^\r\n]*(?:llm|PW_LLAMA_SERVER)/i);
+  assert.doesNotMatch(source, /taskkill|Get-Process\s+-Name/i);
+});
+
+test(
+  "stops owned root and descendant while preserving external TTS and LLM",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "pw-owned-job-"));
+    const marker = path.join(temp, "pids.json");
+    const helper = path.join(temp, "owned-helper.ps1");
+    const externalTts = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      windowsHide: true,
+    });
+    const externalLlm = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      windowsHide: true,
+    });
+    try {
+      await writeFile(
+        helper,
+        `param([string]$Marker)\n$child = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
+        "utf8",
+      );
+      const command = [
+        `Import-Module ${quotePowerShell(jobModulePath)} -Force`,
+        `$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())`,
+        `$identity = Start-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-File',${quotePowerShell(helper)},'-Marker',${quotePowerShell(marker)}) -WorkingDirectory ${quotePowerShell(temp)}`,
+        `while (-not (Test-Path -LiteralPath ${quotePowerShell(marker)})) { Start-Sleep -Milliseconds 20 }`,
+        `Stop-ManagedProcessJob -Job $job -GraceSeconds 0`,
+      ].join("; ");
+      const result = runPowerShell(command);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+      assert.equal(await waitFor(() => !isAlive(pids.root)), true);
+      assert.equal(await waitFor(() => !isAlive(pids.child)), true);
+      assert.equal(isAlive(externalTts.pid), true);
+      assert.equal(isAlive(externalLlm.pid), true);
+    } finally {
+      stopProcess(externalTts.pid);
+      stopProcess(externalLlm.pid);
+      await rm(temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "stale process identity is released without killing the process",
+  { skip: process.platform !== "win32" },
+  () => {
+    const command = [
+      `Import-Module ${quotePowerShell(jobModulePath)} -Force`,
+      `$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())`,
+      `$identity = Start-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WorkingDirectory $PWD.Path`,
+      `$identity.start_time_utc_ticks = [long]$identity.start_time_utc_ticks + 1`,
+      `Stop-ManagedProcessJob -Job $job -GraceSeconds 0`,
+      `$alive = $null -ne (Get-Process -Id $identity.pid -ErrorAction SilentlyContinue)`,
+      `Stop-Process -Id $identity.pid -Force -ErrorAction SilentlyContinue`,
+      `if (-not $alive) { throw 'stale identity process was killed' }`,
+    ].join("; ");
+    const result = runPowerShell(command);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+  },
+);
+
+test(
+  "stops owned descendants after the owned root already exited",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "pw-owned-orphan-"));
+    const marker = path.join(temp, "pids.json");
+    const helper = path.join(temp, "owned-helper.ps1");
+    try {
+      await writeFile(
+        helper,
+        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\n`,
+        "utf8",
+      );
+      const command = [
+        `$ErrorActionPreference = 'Stop'`,
+        `Import-Module ${quotePowerShell(jobModulePath)} -Force`,
+        `$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())`,
+        `$identity = Start-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-File',${quotePowerShell(helper)},'-Marker',${quotePowerShell(marker)}) -WorkingDirectory ${quotePowerShell(temp)}`,
+        `while (-not (Test-Path -LiteralPath ${quotePowerShell(marker)})) { Start-Sleep -Milliseconds 20 }`,
+        `$deadline = [DateTime]::UtcNow.AddSeconds(5)`,
+        `while ((Get-Process -Id $identity.pid -ErrorAction SilentlyContinue) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }`,
+        `Stop-ManagedProcessJob -Job $job -GraceSeconds 0`,
+      ].join("; ");
+      const result = runPowerShell(command);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+      assert.equal(await waitFor(() => !isAlive(pids.child)), true);
+    } finally {
+      if (await readFile(marker, "utf8").catch(() => null)) {
+        const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+        stopProcess(pids.child);
+      }
+      await rm(temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "closing the bootstrap process Job handle kills only its owned descendants",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "pw-job-close-"));
+    const marker = path.join(temp, "pids.json");
+    const helper = path.join(temp, "owned-helper.ps1");
+    const harness = path.join(temp, "harness.ps1");
+    const external = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      windowsHide: true,
+    });
+    try {
+      await writeFile(
+        helper,
+        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n@{ root = $PID; child = $child.Id } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
+        "utf8",
+      );
+      await writeFile(
+        harness,
+        `Import-Module ${quotePowerShell(jobModulePath)} -Force\n$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())\nStart-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-File',${quotePowerShell(helper)},'-Marker',${quotePowerShell(marker)}) -WorkingDirectory ${quotePowerShell(temp)} | Out-Null\nwhile (-not (Test-Path -LiteralPath ${quotePowerShell(marker)})) { Start-Sleep -Milliseconds 20 }\n`,
+        "utf8",
+      );
+      const result = spawnSync("powershell.exe", ["-NoProfile", "-File", harness], {
+        encoding: "utf8",
+        timeout: 10_000,
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+      assert.equal(await waitFor(() => !isAlive(pids.root)), true);
+      assert.equal(await waitFor(() => !isAlive(pids.child)), true);
+      assert.equal(isAlive(external.pid), true);
+    } finally {
+      stopProcess(external.pid);
+      await rm(temp, { recursive: true, force: true });
+    }
+  },
+);
