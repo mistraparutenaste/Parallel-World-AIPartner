@@ -58,7 +58,8 @@ function Import-IrodoriManifest {
     $installPaths = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($artifact in @($manifest.artifacts)) {
         Assert-IrodoriExactFields $artifact $AllowedArtifactFields 'Irodori artifact'
-        if (-not (Test-IrodoriString $artifact.id) -or $artifact.id -cnotmatch '^[a-z0-9][a-z0-9._-]*$' -or $artifact.id -in @('.', '..') -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be a unique safe lowercase basename: $($artifact.id)" }
+        $artifactBaseName = if (Test-IrodoriString $artifact.id) { ($artifact.id -split '\.')[0] } else { '' }
+        if (-not (Test-IrodoriString $artifact.id) -or $artifact.id -cnotmatch '^[a-z0-9][a-z0-9._-]*$' -or $artifact.id -in @('.', '..') -or $artifactBaseName -match '^(?i:con|prn|aux|nul|clock\$|com[1-9]|lpt[1-9])$' -or -not $artifactIds.Add($artifact.id)) { throw "Irodori artifact id must be a unique safe lowercase basename: $($artifact.id)" }
         if (-not (Test-IrodoriString $artifact.url) -or -not (Test-IrodoriHttpsUrl $artifact.url)) { throw "Irodori artifact URL must be an HTTPS string: $($artifact.id)" }
         if (-not (Test-IrodoriPositiveInteger $artifact.size)) { throw "Irodori artifact size must be a positive integer: $($artifact.id)" }
         if (-not (Test-IrodoriString $artifact.sha256) -or $artifact.sha256 -notmatch '^[0-9a-f]{64}$') { throw "Irodori artifact sha256 must be a lowercase 64-hex string: $($artifact.id)" }
@@ -327,6 +328,76 @@ function Expand-IrodoriVerifiedZip {
     }
 }
 
+function Get-IrodoriVerifiedZipInventory {
+    param([string] $ArchivePath, [psobject] $Artifact, [switch] $StripSingleRoot)
+    if (-not (Test-IrodoriVerifiedFile -Path $ArchivePath -Artifact $Artifact)) { throw 'Irodori cached ZIP does not match the manifest.' }
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $validated = [System.Collections.ArrayList]::new()
+        $targets = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $archive.Entries) {
+            $value = Get-IrodoriZipEntryPath $entry
+            if (-not $targets.Add($value.path)) { throw 'Irodori ZIP contains duplicate case-folded targets.' }
+            [void] $validated.Add($value)
+        }
+        if ($validated.Count -eq 0) { throw 'Irodori ZIP is empty.' }
+        foreach ($value in $validated) {
+            $parts = @($value.path -split '/')
+            for ($index = 1; $index -lt $parts.Count; $index++) {
+                $ancestor = ($parts[0..($index - 1)] -join '/')
+                $ancestorEntry = @($validated | Where-Object { $_.path -eq $ancestor })
+                if ($ancestorEntry.Count -gt 0 -and -not $ancestorEntry[0].is_directory) { throw 'Irodori ZIP contains a file-directory collision.' }
+            }
+        }
+        $stripRoot = $null
+        $rootName = $null
+        if ($StripSingleRoot) {
+            $roots = @($validated | ForEach-Object { ($_.path -split '/')[0] } | Sort-Object -Unique)
+            if ($roots.Count -ne 1 -or @($validated | Where-Object { $_.path -notmatch '/' -and -not $_.is_directory }).Count -gt 0) { throw 'Irodori server ZIP must contain one top-level directory.' }
+            $rootName = $roots[0]
+            $stripRoot = $rootName + '/'
+        }
+        $inventory = [System.Collections.ArrayList]::new()
+        foreach ($value in $validated) {
+            $relative = if ($null -ne $stripRoot -and $value.path -eq $rootName -and $value.is_directory) { '' } elseif ($null -ne $stripRoot) { $value.path.Substring($stripRoot.Length) } else { $value.path }
+            if ([string]::IsNullOrEmpty($relative) -or $value.is_directory) { continue }
+            $input = $value.entry.Open()
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try { $hash = [BitConverter]::ToString($sha256.ComputeHash($input)).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose(); $input.Dispose() }
+            [void] $inventory.Add([pscustomobject]@{ path = $relative; size = [int64] $value.entry.Length; sha256 = $hash })
+        }
+        return @($inventory)
+    } finally { $archive.Dispose() }
+}
+
+function Test-IrodoriInstalledZipTree {
+    param([string] $ArchivePath, [psobject] $Artifact, [string] $Destination, [switch] $StripSingleRoot)
+    if (-not (Test-Path -LiteralPath $Destination -PathType Container)) { return $false }
+    $expectedItems = @(Get-IrodoriVerifiedZipInventory -ArchivePath $ArchivePath -Artifact $Artifact -StripSingleRoot:$StripSingleRoot)
+    $expected = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $expectedItems) {
+        if ($expected.ContainsKey([string] $item.path)) { return $false }
+        $expected.Add([string] $item.path, $item)
+    }
+    $actual = [System.Collections.Generic.Dictionary[string,object]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in @(Get-ChildItem -LiteralPath $Destination -Force -Recurse)) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $false }
+        if ($item.PSIsContainer) { continue }
+        $relative = $item.FullName.Substring((Get-IrodoriCanonicalPath $Destination).Length).TrimStart([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar).Replace('\', '/')
+        if ($actual.ContainsKey($relative)) { return $false }
+        $actual.Add($relative, $item)
+    }
+    if ($actual.Count -ne $expected.Count) { return $false }
+    foreach ($pair in $expected.GetEnumerator()) {
+        if (-not $actual.ContainsKey($pair.Key)) { return $false }
+        $actualItem = $actual[$pair.Key]
+        if ($actualItem.Length -ne $pair.Value.size -or (Get-FileHash -LiteralPath $actualItem.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pair.Value.sha256) { return $false }
+    }
+    return $true
+}
+
 function Assert-IrodoriTransactionPaths {
     param([hashtable] $Layout, [psobject] $Transaction, [string] $TransactionPath)
     foreach ($field in @('schema_version', 'manifest_version', 'backend', 'phase', 'staging_path', 'runtime_path', 'backup_path')) {
@@ -428,6 +499,7 @@ function Get-IrodoriRuntimeEnvironment {
         UV_NO_SYSTEM_CONFIG = '1'
         HF_HUB_OFFLINE = '1'
         TRANSFORMERS_OFFLINE = '1'
+        PYTHONDONTWRITEBYTECODE = '1'
     }
 }
 
@@ -448,7 +520,10 @@ function Test-IrodoriReusableRuntime {
         $serverPath = Join-Path $Layout.runtime $ServerArtifact.install_relative_path
         Assert-IrodoriCleanupTarget -Root $Layout.root -Target $uvPath
         Assert-IrodoriCleanupTarget -Root $Layout.root -Target $serverPath
-        if (-not (Test-Path -LiteralPath $uvPath -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $serverPath 'pyproject.toml') -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $serverPath 'uv.lock') -PathType Leaf)) { return $false }
+        $uvArchive = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $UvArtifact
+        $serverArchive = Get-IrodoriArtifactCachePath -Layout $Layout -Artifact $ServerArtifact
+        $uvTree = Join-Path $Layout.runtime ([IO.Path]::GetDirectoryName($UvArtifact.install_relative_path))
+        if (-not (Test-IrodoriInstalledZipTree -ArchivePath $uvArchive -Artifact $UvArtifact -Destination $uvTree) -or -not (Test-IrodoriInstalledZipTree -ArchivePath $serverArchive -Artifact $ServerArtifact -Destination $serverPath -StripSingleRoot)) { return $false }
         foreach ($artifact in $VerifiedArtifacts) {
             if (-not (Test-IrodoriVerifiedFile -Path (Join-Path $Layout.runtime $artifact.install_relative_path) -Artifact $artifact)) { return $false }
         }
@@ -467,8 +542,8 @@ function Test-IrodoriReusableRuntime {
 }
 
 function Get-IrodoriProvisionMutexName {
-    param([string] $Root, [string] $ManifestVersion, [string] $Backend)
-    $material = (Get-IrodoriCanonicalPath $Root).ToLowerInvariant() + '|' + $ManifestVersion + '|' + $Backend
+    param([string] $Root, [string] $ManifestVersion)
+    $material = (Get-IrodoriCanonicalPath $Root).ToLowerInvariant() + '|' + $ManifestVersion
     $sha256 = [Security.Cryptography.SHA256]::Create()
     try { $hash = [BitConverter]::ToString($sha256.ComputeHash([Text.Encoding]::UTF8.GetBytes($material))).Replace('-', '').ToLowerInvariant() } finally { $sha256.Dispose() }
     return 'Local\ParallelWorld.Irodori.Provision.' + $hash
@@ -642,7 +717,7 @@ function Invoke-IrodoriProvision {
     if (-not $Layout.ContainsKey('root') -or $Manifest.manifest_version -notmatch '^\d{4}-\d{2}-\d{2}\.\d+$' -or $Backend -notin @($Manifest.backends)) { throw 'Irodori provisioning lock inputs are invalid.' }
     $timeoutMilliseconds = if ($Adapters.ContainsKey('LockTimeoutMilliseconds')) { [int] $Adapters.LockTimeoutMilliseconds } else { 30000 }
     if ($timeoutMilliseconds -lt 0 -or $timeoutMilliseconds -gt 600000) { throw 'Irodori provisioning lock timeout must be between 0 and 600000 milliseconds.' }
-    $mutexName = Get-IrodoriProvisionMutexName -Root $Layout.root -ManifestVersion $Manifest.manifest_version -Backend $Backend
+    $mutexName = Get-IrodoriProvisionMutexName -Root $Layout.root -ManifestVersion $Manifest.manifest_version
     $mutex = Enter-IrodoriProvisionMutex -Name $mutexName -TimeoutMilliseconds $timeoutMilliseconds
     try {
         return Invoke-IrodoriProvisionLocked -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $Adapters

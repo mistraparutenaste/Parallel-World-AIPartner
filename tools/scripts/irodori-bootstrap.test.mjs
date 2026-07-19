@@ -167,12 +167,17 @@ async function prepareCompleteRuntime(root, manifest, payloads, label = "current
     revision,
   );
   await mkdir(path.join(runtime, "tools", "uv"), { recursive: true });
-  await mkdir(path.join(runtime, "server"), { recursive: true });
+  await mkdir(path.join(runtime, "server", "irodori_openai_tts"), { recursive: true });
   await mkdir(snapshot, { recursive: true });
   await mkdir(path.join(path.dirname(snapshot), "..", "..", "refs"), { recursive: true });
   await writeFile(path.join(runtime, "tools", "uv", "uv.exe"), "fixture uv", "utf8");
   await writeFile(path.join(runtime, "server", "pyproject.toml"), "[project]\nname='fixture'\n", "utf8");
   await writeFile(path.join(runtime, "server", "uv.lock"), "version = 1\n", "utf8");
+  await writeFile(path.join(runtime, "server", "irodori_openai_tts", "__init__.py"), "", "utf8");
+  await mkdir(path.join(root, "cache", "downloads"), { recursive: true });
+  for (const id of ["uv-windows-x86_64", "irodori-server"]) {
+    await writeFile(path.join(root, "cache", "downloads", `${id}.artifact`), payloads.get(id));
+  }
   for (const artifact of manifest.artifacts.filter(({ id }) => !["uv-windows-x86_64", "irodori-server"].includes(id))) {
     const destination = path.join(runtime, ...artifact.install_relative_path.split("/"));
     await mkdir(path.dirname(destination), { recursive: true });
@@ -260,6 +265,23 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     await rm(path.join(preparedRuntime, "tools", "uv", "uv.exe"), { force: true });
   } else if (options.corruptRuntime === "server") {
     await rm(path.join(preparedRuntime, "server", "pyproject.toml"), { force: true });
+  } else if (options.corruptRuntime === "uv_same_length") {
+    const target = path.join(preparedRuntime, "tools", "uv", "uv.exe");
+    const bytes = await readFile(target);
+    bytes[0] ^= 1;
+    await writeFile(target, bytes);
+  } else if (options.corruptRuntime === "server_same_length") {
+    const target = path.join(preparedRuntime, "server", "pyproject.toml");
+    const bytes = await readFile(target);
+    bytes[0] ^= 1;
+    await writeFile(target, bytes);
+  } else if (options.corruptRuntime === "server_extra") {
+    await writeFile(path.join(preparedRuntime, "server", "sitecustomize.py"), "raise SystemExit\n", "utf8");
+  } else if (options.corruptRuntime === "cache_zip") {
+    const target = path.join(root, "cache", "downloads", "uv-windows-x86_64.artifact");
+    const bytes = await readFile(target);
+    bytes[0] ^= 1;
+    await writeFile(target, bytes);
   } else if (options.corruptRuntime === "model") {
     await writeFile(path.join(preparedRuntime, "models", "model.safetensors"), "tampered", "utf8");
   } else if (options.corruptRuntime === "hf") {
@@ -324,6 +346,7 @@ async function runProvisionHarness(scenario = "success", options = {}) {
   const payloadObject = Object.fromEntries(
     [...payloads].map(([id, bytes]) => [id, bytes.toString("base64")]),
   );
+  const selectedBackend = options.backend ?? "cpu";
   const expression = `
     $manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestFile)}
     $layout = Get-IrodoriLayout -Root ${quotePowerShell(layoutRoot)} -ManifestVersion $manifest.manifest_version
@@ -395,9 +418,9 @@ async function runProvisionHarness(scenario = "success", options = {}) {
     $failure = $null
     $failureDetail = $null
     try {
-      $first = Invoke-IrodoriProvision -Manifest $manifest -Layout $layout -Backend cpu -Adapters $adapters
+      $first = Invoke-IrodoriProvision -Manifest $manifest -Layout $layout -Backend ${selectedBackend} -Adapters $adapters
       if (${options.repeat ? "$true" : "$false"}) {
-        $second = Invoke-IrodoriProvision -Manifest $manifest -Layout $layout -Backend cpu -Adapters $adapters
+        $second = Invoke-IrodoriProvision -Manifest $manifest -Layout $layout -Backend ${selectedBackend} -Adapters $adapters
       }
     } catch {
       $failure = $_.Exception.GetType().Name
@@ -455,9 +478,9 @@ async function cleanupHarness(result) {
   await rm(result.root, { force: true, recursive: true });
 }
 
-function provisionMutexName(root, manifestVersion = "2026-07-19.1", backend = "cpu") {
+function provisionMutexName(root, manifestVersion = "2026-07-19.1") {
   const canonicalRoot = path.resolve(root).replace(/[\\/]+$/, "").toLowerCase();
-  const digest = sha256(Buffer.from(`${canonicalRoot}|${manifestVersion}|${backend}`, "utf8"));
+  const digest = sha256(Buffer.from(`${canonicalRoot}|${manifestVersion}`, "utf8"));
   return `Local\\ParallelWorld.Irodori.Provision.${digest}`;
 }
 
@@ -722,6 +745,24 @@ test("rejects artifact ids that are not safe lowercase cache basenames", async (
   }
 });
 
+test("rejects Windows reserved device basenames as artifact ids", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-manifest-device-id-"));
+  try {
+    for (const [index, id] of ["con", "prn.txt", "aux.data", "nul", "clock$", "com1.bin", "com9", "lpt1.txt", "lpt9"].entries()) {
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+      manifest.artifacts[0].id = id;
+      const invalidManifestPath = path.join(temporaryDirectory, `${index}.json`);
+      await writeFile(invalidManifestPath, JSON.stringify(manifest), "utf8");
+      await assert.rejects(
+        invokePowerShell(`Import-IrodoriManifest -Path ${quotePowerShell(invalidManifestPath)}`),
+        /artifact id/i,
+      );
+    }
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test("default downloader rejects HTTP before creating a partial file", async () => {
   const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-default-download-"));
   try {
@@ -932,12 +973,13 @@ test("reuses only after offline import verification of a complete runtime", asyn
     ]);
     assert.equal(result.powerShellResult.run_calls[0].environment.HF_HUB_OFFLINE, "1");
     assert.equal(result.powerShellResult.run_calls[0].environment.TRANSFORMERS_OFFLINE, "1");
+    assert.equal(result.powerShellResult.run_calls[0].environment.PYTHONDONTWRITEBYTECODE, "1");
   } finally {
     await cleanupHarness(result);
   }
 });
 
-for (const corruption of ["uv", "server", "model", "hf"]) {
+for (const corruption of ["uv", "server", "uv_same_length", "server_same_length", "server_extra", "cache_zip", "model", "hf"]) {
   test(`reprovisions instead of reusing a runtime with corrupt ${corruption}`, async () => {
     const result = await runProvisionHarness("success", {
       precompleteRuntime: true,
@@ -945,7 +987,11 @@ for (const corruption of ["uv", "server", "model", "hf"]) {
     });
     try {
       assert.equal(result.powerShellResult.first.status, "provisioned");
-      assert.equal(result.powerShellResult.download_calls.length, result.manifest.artifacts.length);
+      const expectedDownloads = result.manifest.artifacts.length - 2 + (corruption === "cache_zip" ? 1 : 0);
+      assert.equal(result.powerShellResult.download_calls.length, expectedDownloads);
+      if (corruption === "cache_zip") {
+        assert.equal(result.powerShellResult.download_calls.includes("uv-windows-x86_64"), true);
+      }
       assert.equal(result.completionExists, true);
     } finally {
       await cleanupHarness(result);
@@ -984,6 +1030,7 @@ test("publishes completion only after pinned environment verification", async ()
       assert.equal(call.environment.UV_NO_SYSTEM_CONFIG, "1");
       assert.equal(call.environment.HF_HUB_OFFLINE, "1");
       assert.equal(call.environment.TRANSFORMERS_OFFLINE, "1");
+      assert.equal(call.environment.PYTHONDONTWRITEBYTECODE, "1");
       for (const key of ["UV_PYTHON_INSTALL_DIR", "UV_PROJECT_ENVIRONMENT", "UV_CACHE_DIR", "HF_HOME"]) {
         assert.equal(call.environment[key].startsWith(result.root), true);
       }
@@ -1050,6 +1097,29 @@ test("times out before provisioning while another process owns the runtime mutex
   let result = null;
   try {
     result = await runProvisionHarness("success", {
+      lockTimeoutMs: 150,
+      beforeInvoke: async ({ root }) => {
+        holder = await holdNamedMutex(provisionMutexName(root));
+      },
+    });
+    assert.equal(result.completionExists, false);
+    assert.equal(result.powerShellResult.download_calls.length, 0);
+    assert.match(
+      Buffer.from(result.powerShellResult.failure_detail, "base64").toString("utf8"),
+      /lock.*timeout|timeout.*lock/i,
+    );
+  } finally {
+    if (holder) await holder.release();
+    if (result) await cleanupHarness(result);
+  }
+});
+
+test("serializes different backends that share one versioned runtime", async () => {
+  let holder = null;
+  let result = null;
+  try {
+    result = await runProvisionHarness("success", {
+      backend: "cu128",
       lockTimeoutMs: 150,
       beforeInvoke: async ({ root }) => {
         holder = await holdNamedMutex(provisionMutexName(root));
