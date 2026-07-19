@@ -804,11 +804,13 @@ function Invoke-IrodoriBootstrap {
     $savedEnvironment = @{}
     $managedEnvironmentNames = @(
         'PATH', 'PW_TTS_ENGINE', 'PW_TTS_PORT', 'PW_IRODORI_DIR', 'IRODORI_CHECKPOINT',
-        'PW_IRODORI_SKIP_WARMUP', 'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
+        'PW_IRODORI_SKIP_WARMUP', 'PW_IRODORI_BOOTSTRAP_STATUS', 'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
         'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
     )
     foreach ($name in $managedEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
     if ([string]::IsNullOrWhiteSpace($explicitEngine)) { $env:PW_TTS_ENGINE = 'irodori' }
+    $env:PW_IRODORI_SKIP_WARMUP = '0'
+    $env:PW_IRODORI_BOOTSTRAP_STATUS = 'none'
     try {
         try {
             $manifest = Import-IrodoriManifest -Path $ManifestPath
@@ -921,6 +923,7 @@ Build now? [Y/N]
                     }
                     if ($status -in @('ready', 'ready_without_voice', 'warmup_failed')) {
                         $env:PW_IRODORI_SKIP_WARMUP = '1'
+                        $env:PW_IRODORI_BOOTSTRAP_STATUS = $status
                     }
                 }
             }

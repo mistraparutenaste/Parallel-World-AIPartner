@@ -179,7 +179,7 @@ function invokePowerShellRaw(expression) {
 
 async function runBootstrapHarness(scenario) {
   const root = await mkdtemp(path.join(os.tmpdir(), "pw-irodori-bootstrap-"));
-  const needsCompletion = !["decline", "accept_success", "provision_failure", "secret_failure"].includes(scenario);
+  const needsCompletion = !["decline", "accept_success", "provision_failure", "secret_failure", "stale_failure"].includes(scenario);
   const expression = `
     $scenario = ${quotePowerShell(scenario)}
     $root = ${quotePowerShell(root)}
@@ -194,13 +194,14 @@ async function runBootstrapHarness(scenario) {
     $observations = [ordered]@{ prompt_calls = 0; prompt_text = ''; provision_calls = 0; start_calls = 0; stop_calls = 0; app_calls = 0; health_calls = 0; voice_calls = 0; speech_calls = 0; start_arguments = @(); start_environment = @{}; app_environment = @{}; progress = [System.Collections.ArrayList]::new() }
     $adapters = @{
       DetectGpuNames = { @('AMD Radeon RX 7900 XTX') }
-      TestRuntime = { param($Manifest, $Layout, $Backend, $RuntimeAdapters) return $scenario -notin @('decline', 'accept_success', 'provision_failure', 'secret_failure', 'broken_decline') }
+      TestRuntime = { param($Manifest, $Layout, $Backend, $RuntimeAdapters) return $scenario -notin @('decline', 'accept_success', 'provision_failure', 'secret_failure', 'stale_failure', 'broken_decline') }
       PromptConsent = { param($Message) $observations.prompt_calls++; $observations.prompt_text = $Message; return $scenario -notin @('decline', 'broken_decline') }
       Provision = {
         param($Manifest, $Layout, $Backend, $ProvisionAdapters)
         $observations.provision_calls++
         if ($scenario -eq 'provision_failure') { throw 'fixture provisioning failed' }
         if ($scenario -eq 'secret_failure') { throw 'Bearer TOP-SECRET Authorization=C:\\Users\\secret\\model.bin' }
+        if ($scenario -eq 'stale_failure') { throw 'fixture setup failure' }
         return [pscustomobject]@{ status = if ($scenario -eq 'accept_success') { 'provisioned' } else { 'reused' }; runtime_path = $Layout.runtime; uv_path = (Join-Path $Layout.runtime 'tools\\uv\\uv.exe') }
       }
       TestPort = { param($Port) return $scenario -eq 'port_conflict' }
@@ -231,10 +232,11 @@ async function runBootstrapHarness(scenario) {
         throw "unexpected fixture URI: $Uri"
       }
       Sleep = { param($Milliseconds) }
-      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
+      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
       WriteProgress = { param($Stage, $Message) [void] $observations.progress.Add("$Stage|$Message") }
     }
     if ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
+    if ($scenario -eq 'stale_failure') { $env:PW_IRODORI_SKIP_WARMUP = '1'; $env:PW_IRODORI_BOOTSTRAP_STATUS = 'ready' }
     $result = Invoke-IrodoriBootstrap -ManifestPath $manifestPath -DataRoot $root -Adapters $adapters
     [pscustomobject]@{ result = $result; observations = $observations }
   `;
@@ -1440,6 +1442,7 @@ test("reports ready_without_voice and still starts the app", async () => {
   assert.equal(observations.app_calls, 1);
   assert.equal(observations.stop_calls, 1);
   assert.equal(observations.app_environment.PW_IRODORI_SKIP_WARMUP, "1");
+  assert.equal(observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "ready_without_voice");
   assert.equal(observations.voice_calls, 1);
   assert.equal(observations.speech_calls, 0);
 });
@@ -1451,6 +1454,8 @@ test("accepts only RIFF/WAVE warm-up audio", async () => {
   assert.equal(invalid.result.status, "warmup_failed");
   assert.equal(valid.observations.app_environment.PW_IRODORI_SKIP_WARMUP, "1");
   assert.equal(invalid.observations.app_environment.PW_IRODORI_SKIP_WARMUP, "1");
+  assert.equal(valid.observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "ready");
+  assert.equal(invalid.observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "warmup_failed");
   assert.equal(valid.observations.voice_calls, 1);
   assert.equal(valid.observations.speech_calls, 1);
   assert.equal(valid.observations.app_calls, 1);
@@ -1510,6 +1515,14 @@ test("default setup warning is fixed text and does not expose exception details"
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("setup failure clears stale bootstrap warm-up trust before app startup", async () => {
+  const { result, observations } = await runBootstrapHarness("stale_failure");
+  assert.equal(result.status, "setup_failed");
+  assert.equal(observations.app_environment.PW_IRODORI_SKIP_WARMUP, "0");
+  assert.equal(observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "none");
+  assert.equal(observations.app_calls, 1);
 });
 
 test("only the managed launcher calls the Irodori bootstrap entry", async () => {

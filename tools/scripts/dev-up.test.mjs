@@ -194,7 +194,10 @@ test("README links the user-managed Irodori setup guide", async () => {
 
 test("managed bootstrap can suppress the duplicate dev-up warm-up", () => {
   assert.match(source, /PW_IRODORI_SKIP_WARMUP/);
-  assert.match(source, /if \(\$skipIrodoriWarmUp\)[\s\S]*else\s*\{\s*Invoke-IrodoriWarmUp/);
+  assert.match(source, /PW_IRODORI_BOOTSTRAP_STATUS/);
+  assert.match(source, /trustedStatuses[\s\S]*-not \$SkipWarmUp[\s\S]*Invoke-IrodoriWarmUp/);
+  assert.match(source, /ready_without_voice[\s\S]*ForegroundColor Yellow/);
+  assert.match(source, /warmup_failed[\s\S]*ForegroundColor Yellow/);
 });
 
 test("TTS ownership uses a kill-on-close Job and suspended assignment", async () => {
@@ -335,6 +338,7 @@ test(
         PW_TTS_ENGINE: "irodori",
         PW_TTS_PORT: String(irodori.port),
         PW_IRODORI_SKIP_WARMUP: "1",
+        PW_IRODORI_BOOTSTRAP_STATUS: "ready",
         PW_LLM_PORT: "49152",
       });
       assert.equal(result.status, 0, result.stderr || result.stdout);
@@ -344,6 +348,66 @@ test(
       assert.match(requests, /GET \/health/);
       assert.doesNotMatch(requests, /\/v1\/audio\/voices|\/v1\/audio\/speech/);
       assert.match(result.stdout, /bootstrap.*検証済み/i);
+    } finally {
+      stopProcess(irodori.process.pid);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "reports managed voice absence and WAV failure without repeating warm-up requests",
+  { skip: process.platform !== "win32" },
+  async () => {
+    for (const scenario of [
+      { status: "ready_without_voice", message: /voice.*0|voice.*配置/i },
+      { status: "warmup_failed", message: /WAV.*warm-up.*失敗|縮退/i },
+    ]) {
+      const harness = await createCorepackHarness(0);
+      const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
+      try {
+        const voicesDir = path.join(harness.temp, "voices");
+        const result = runDevUp({
+          ...harness.env,
+          PW_TTS_ENGINE: "irodori",
+          PW_TTS_PORT: String(irodori.port),
+          PW_IRODORI_SKIP_WARMUP: "1",
+          PW_IRODORI_BOOTSTRAP_STATUS: scenario.status,
+          IRODORI_VOICES_DIR: voicesDir,
+          PW_LLM_PORT: "49152",
+        });
+        assert.equal(result.status, 0, result.stderr || result.stdout);
+        const requests = await readFile(irodori.requestLog, "utf8");
+        assert.doesNotMatch(requests, /\/v1\/audio\/voices|\/v1\/audio\/speech/);
+        assert.match(result.stdout, scenario.message);
+        if (scenario.status === "ready_without_voice") assert.match(result.stdout, new RegExp(voicesDir.replaceAll("\\", "\\\\"), "i"));
+      } finally {
+        stopProcess(irodori.process.pid);
+        await rm(harness.temp, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
+test(
+  "does not trust a stale skip flag without a recognized bootstrap status",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(irodori.port),
+        PW_IRODORI_SKIP_WARMUP: "1",
+        PW_IRODORI_BOOTSTRAP_STATUS: "stale-or-unknown",
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const requests = await readFile(irodori.requestLog, "utf8");
+      assert.match(requests, /GET \/v1\/audio\/voices/);
+      assert.match(requests, /POST \/v1\/audio\/speech/);
     } finally {
       stopProcess(irodori.process.pid);
       await rm(harness.temp, { recursive: true, force: true });
