@@ -100,6 +100,22 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
+async function startHttpListenerProcess(temp) {
+  const probe = await listenOnLoopback();
+  const port = probe.address().port;
+  await closeServer(probe);
+  const helperPath = path.join(temp, "http-listener.mjs");
+  const marker = path.join(temp, "http-listener-ready.txt");
+  await writeFile(
+    helperPath,
+    `import http from "node:http"; import { writeFileSync } from "node:fs"; const server = http.createServer((_request, response) => { response.statusCode = 503; response.end("not irodori"); }); server.listen(${port}, "127.0.0.1", () => writeFileSync(${JSON.stringify(marker)}, "ready"));`,
+    "utf8",
+  );
+  const child = spawn(process.execPath, [helperPath], { windowsHide: true });
+  assert.equal(await waitFor(() => readFile(marker).then(() => true, () => false)), true);
+  return { process: child, port };
+}
+
 async function createCorepackHarness(exitCode = 0) {
   const temp = await mkdtemp(path.join(os.tmpdir(), "pw-dev-up-"));
   const marker = path.join(temp, "app-called.txt");
@@ -270,6 +286,32 @@ test(
       assert.doesNotMatch(result.stdout, /AivisSpeech Engineを起動します/);
     } finally {
       await closeServer(externalTts);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "does not start or claim Irodori when its port has an unknown listener",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const externalTts = await startHttpListenerProcess(harness.temp);
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(externalTts.port),
+        PW_IRODORI_DIR: harness.temp,
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+      assert.equal(isAlive(externalTts.process.pid), true);
+      assert.match(result.stdout, /Irodori-TTS.*port.*(?:使用中|listener)/i);
+      assert.doesNotMatch(result.stdout, /Irodori-TTS Serverを起動します/);
+    } finally {
+      stopProcess(externalTts.process.pid);
       await rm(harness.temp, { recursive: true, force: true });
     }
   },

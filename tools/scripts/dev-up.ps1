@@ -159,6 +159,8 @@ try {
     if (Test-IrodoriHealth $ttsPort) {
         Write-Host "[TTS] Irodori-TTS Server: 起動済み (port $ttsPort)" -ForegroundColor Green
         Invoke-IrodoriWarmUp $ttsPort
+    } elseif (Test-Port $ttsPort) {
+        Write-Host "[TTS] Irodori-TTS以外のlistenerがport ${ttsPort}を使用中です。外部processは管理せず、読み上げは縮退動作になります。" -ForegroundColor Yellow
     } else {
         $irodoriDir = $env:PW_IRODORI_DIR
         $uv = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
