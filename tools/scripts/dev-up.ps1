@@ -87,6 +87,31 @@ function Invoke-IrodoriWarmUp {
     }
 }
 
+function Get-IrodoriVoicesDisplayPath {
+    param([AllowNull()][string]$VoicesPath)
+    $fallback = '<Irodori data>\user\voices'
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if ([string]::IsNullOrWhiteSpace($VoicesPath) -or [string]::IsNullOrWhiteSpace($localAppData)) {
+        return $fallback
+    }
+    try {
+        $directorySeparator = [System.IO.Path]::DirectorySeparatorChar
+        $alternateSeparator = [System.IO.Path]::AltDirectorySeparatorChar
+        $canonicalRoot = [System.IO.Path]::GetFullPath($localAppData).TrimEnd($directorySeparator, $alternateSeparator)
+        $canonicalPath = [System.IO.Path]::GetFullPath($VoicesPath)
+        $rootPrefix = "$canonicalRoot$directorySeparator"
+        if ($canonicalPath.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $relativePath = $canonicalPath.Substring($rootPrefix.Length).Replace($alternateSeparator, $directorySeparator)
+            if (-not [string]::IsNullOrWhiteSpace($relativePath)) {
+                return "%LOCALAPPDATA%\$relativePath"
+            }
+        }
+    } catch {
+        # Display-only redaction: malformed paths always use the fixed label.
+    }
+    return $fallback
+}
+
 function Invoke-IrodoriPostHealthCheck {
     param([int]$Port, [bool]$SkipWarmUp, [string]$BootstrapStatus)
     $trustedStatuses = @('ready', 'ready_without_voice', 'warmup_failed')
@@ -97,7 +122,8 @@ function Invoke-IrodoriPostHealthCheck {
     if ($BootstrapStatus -eq 'ready') {
         Write-Host '[TTS] Irodori-TTS warm-up: bootstrapで検証済み' -ForegroundColor Green
     } elseif ($BootstrapStatus -eq 'ready_without_voice') {
-        Write-Host "[TTS] Irodori-TTS: voiceが0件です。参照音声を配置してください: $env:IRODORI_VOICES_DIR" -ForegroundColor Yellow
+        $voicesDisplayPath = Get-IrodoriVoicesDisplayPath -VoicesPath $env:IRODORI_VOICES_DIR
+        Write-Host "[TTS] Irodori-TTS: voiceが0件です。参照音声を配置してください: $voicesDisplayPath" -ForegroundColor Yellow
     } else {
         Write-Host '[TTS] Irodori-TTS: WAV warm-upに失敗しました。読み上げは縮退動作になります。' -ForegroundColor Yellow
     }

@@ -366,9 +366,11 @@ test(
       const harness = await createCorepackHarness(0);
       const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
       try {
-        const voicesDir = path.join(harness.temp, "voices");
+        const secretPathSegment = "SensitiveUser-DoNotLeak";
+        const voicesDir = `C:\\Users\\${secretPathSegment}\\Irodori\\nested\\..\\voices`;
         const result = runDevUp({
           ...harness.env,
+          LOCALAPPDATA: "C:\\Users\\DifferentUser\\AppData\\Local",
           PW_TTS_ENGINE: "irodori",
           PW_TTS_PORT: String(irodori.port),
           PW_IRODORI_SKIP_WARMUP: "1",
@@ -380,11 +382,48 @@ test(
         const requests = await readFile(irodori.requestLog, "utf8");
         assert.doesNotMatch(requests, /\/v1\/audio\/voices|\/v1\/audio\/speech/);
         assert.match(result.stdout, scenario.message);
-        if (scenario.status === "ready_without_voice") assert.match(result.stdout, new RegExp(voicesDir.replaceAll("\\", "\\\\"), "i"));
+        if (scenario.status === "ready_without_voice") {
+          assert.match(result.stdout, /<Irodori data>\\user\\voices/i);
+          assert.doesNotMatch(result.stdout, new RegExp(secretPathSegment, "i"));
+          assert.doesNotMatch(result.stdout, new RegExp(voicesDir.replaceAll("\\", "\\\\"), "i"));
+        }
       } finally {
         stopProcess(irodori.process.pid);
         await rm(harness.temp, { recursive: true, force: true });
       }
+    }
+  },
+);
+
+test(
+  "uses a redacted LOCALAPPDATA-relative voice path without exposing the username",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
+    try {
+      const secretUsername = "SensitiveUser-DoNotLeak";
+      const localAppData = `C:\\Users\\${secretUsername}\\AppData\\Local`;
+      const voicesDir = `${localAppData}\\ParallelWorld\\irodori\\user\\voices`;
+      const result = runDevUp({
+        ...harness.env,
+        LOCALAPPDATA: localAppData,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(irodori.port),
+        PW_IRODORI_SKIP_WARMUP: "1",
+        PW_IRODORI_BOOTSTRAP_STATUS: "ready_without_voice",
+        IRODORI_VOICES_DIR: voicesDir,
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /%LOCALAPPDATA%\\ParallelWorld\\irodori\\user\\voices/i);
+      assert.doesNotMatch(result.stdout, new RegExp(secretUsername, "i"));
+      assert.doesNotMatch(result.stdout, new RegExp(voicesDir.replaceAll("\\", "\\\\"), "i"));
+      const requests = await readFile(irodori.requestLog, "utf8");
+      assert.doesNotMatch(requests, /\/v1\/audio\/voices|\/v1\/audio\/speech/);
+    } finally {
+      stopProcess(irodori.process.pid);
+      await rm(harness.temp, { recursive: true, force: true });
     }
   },
 );
