@@ -138,6 +138,7 @@
 - [x] T5: TTS settings UI、voice preview、Aivis-only dictionary gating
 - [x] T6: opt-in launcher、固定 upstream commit、setup documentation
 - [x] T7: mock／compile／frontend／workspace acceptance と ignored real-engine contract
+- [x] Dynamic LoRA: server-side adapter path設定、request payload、worker fingerprint、cache namespace分離、UI／文書
 - [ ] 実 Irodori サーバーでの voice list／短文 synthesis／RIFF/WAVE／latency 確認
 - [ ] 実再生での sample rate／RMS、lip sync、停止／縮退動作の確認
 
@@ -151,3 +152,5 @@
 - ts-rs bindings は repository tool で再生成確認済み。契約 drift はなく、generator が再付与する末尾空白は追跡差分に含めない。
 - Tauri の `list_tts_voices` permission と capability schema は生成済み成果物との整合を確認済み。
 - 未実行項目は、上記 2 件の実 Irodori server／audio runtime validation のみ。禁止条件に従い、ignored test は実行していない。
+- Dynamic LoRAはIrodori-TTS-Serverの`irodori.lora_adapter`へserver-visible pathを渡す。空欄はbase model、設定変更時はworkerを再生成し、base／adapter間およびadapter間で音声cacheを分離する。
+- Dynamic LoRA利用時はIrodori-TTS-Server側で`IRODORI_COMPILE_MODEL=false`が必要。Parallel Worldはadapterの作成、取得、変換、mergeを行わない。

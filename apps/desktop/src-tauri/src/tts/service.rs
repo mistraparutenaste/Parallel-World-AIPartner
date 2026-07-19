@@ -180,10 +180,26 @@ impl Default for TtsService {
 }
 
 fn fingerprint(settings: &TtsSettingsDto) -> String {
-    format!(
-        "{:?}|{}|{}|{}|{}",
-        settings.engine, settings.base_url, settings.voice_id, settings.volume, settings.speed
-    )
+    let engine = match settings.engine {
+        TtsEngineKind::Aivis => "aivis",
+        TtsEngineKind::Irodori => "irodori",
+    };
+    let volume = settings.volume.to_bits().to_string();
+    let speed = settings.speed.to_bits().to_string();
+    let mut result = String::new();
+    for field in [
+        engine,
+        settings.base_url.as_str(),
+        settings.voice_id.as_str(),
+        settings.irodori_lora_adapter.as_str(),
+        volume.as_str(),
+        speed.as_str(),
+    ] {
+        result.push_str(&field.len().to_string());
+        result.push(':');
+        result.push_str(field);
+    }
+    result
 }
 
 fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
@@ -195,9 +211,16 @@ fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
         TtsEngineKind::Aivis => AivisSpeechClient::new(&config)
             .map(EngineClient::Aivis)
             .map_err(|error| error.to_string()),
-        TtsEngineKind::Irodori => IrodoriTtsClient::new(&config)
-            .map(EngineClient::Irodori)
-            .map_err(|error| error.to_string()),
+        TtsEngineKind::Irodori => {
+            let client = if settings.irodori_lora_adapter.trim().is_empty() {
+                IrodoriTtsClient::new(&config)
+            } else {
+                IrodoriTtsClient::with_lora_adapter(&config, &settings.irodori_lora_adapter)
+            };
+            client
+                .map(EngineClient::Irodori)
+                .map_err(|error| error.to_string())
+        }
     }
 }
 
@@ -616,9 +639,26 @@ mod tests {
         changed_engine.engine = pw_contracts::TtsEngineKind::Irodori;
         let mut changed_voice = base.clone();
         changed_voice.voice_id = "different".to_owned();
+        let mut changed_lora = base.clone();
+        changed_lora.engine = pw_contracts::TtsEngineKind::Irodori;
+        changed_lora.irodori_lora_adapter = "adapters/character-a".to_owned();
 
         assert_ne!(fingerprint(&base), fingerprint(&changed_engine));
         assert_ne!(fingerprint(&base), fingerprint(&changed_voice));
+        assert_ne!(fingerprint(&changed_engine), fingerprint(&changed_lora));
+    }
+
+    #[test]
+    fn worker_fingerprint_separates_fields_containing_the_old_delimiter() {
+        let mut left = crate::tts::settings::default_tts_settings();
+        left.engine = TtsEngineKind::Irodori;
+        left.voice_id = "x".to_owned();
+        left.irodori_lora_adapter = "y|z".to_owned();
+        let mut right = left.clone();
+        right.voice_id = "x|y".to_owned();
+        right.irodori_lora_adapter = "z".to_owned();
+
+        assert_ne!(fingerprint(&left), fingerprint(&right));
     }
 
     #[test]

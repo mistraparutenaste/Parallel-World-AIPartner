@@ -93,6 +93,17 @@ fn client_for(port: u16) -> IrodoriTtsClient {
     .unwrap()
 }
 
+fn client_for_lora(port: u16, lora_adapter: &str) -> IrodoriTtsClient {
+    IrodoriTtsClient::with_lora_adapter(
+        &TtsClientConfig {
+            base_url: format!("http://127.0.0.1:{port}"),
+            timeout: Duration::from_secs(1),
+        },
+        lora_adapter,
+    )
+    .unwrap()
+}
+
 #[test]
 fn synthesize_posts_the_upstream_speech_request_and_returns_wav() {
     let wav = b"RIFF\x24\x00\x00\x00WAVEfmt ".to_vec();
@@ -112,6 +123,23 @@ fn synthesize_posts_the_upstream_speech_request_and_returns_wav() {
     assert_eq!(body["voice"], "sample");
     assert_eq!(body["response_format"], "wav");
     assert_eq!(body["speed"], 1.5);
+    assert!(body.get("irodori").is_none());
+}
+
+#[test]
+fn synthesize_sends_the_selected_dynamic_lora_adapter() {
+    let wav = b"RIFF\x24\x00\x00\x00WAVEfmt ".to_vec();
+    let server = spawn_server(vec![response(200, "audio/wav", wav)]);
+    let client = client_for_lora(server.port, "  C:/models/adapters/character-a  ");
+
+    client.synthesize("LoRA test", "sample", 1.0).unwrap();
+
+    let requests = server.requests();
+    let body: serde_json::Value = serde_json::from_str(&requests[0].body).unwrap();
+    assert_eq!(
+        body["irodori"]["lora_adapter"],
+        "C:/models/adapters/character-a"
+    );
 }
 
 #[test]

@@ -119,7 +119,7 @@ http://127.0.0.1:8080/v1
 
 ### Irodori-TTS
 
-ユーザーが別途管理するIrodori-TTS-Serverも選択できます。サーバー、Python/CUDA環境、モデル、参照音声は同梱・自動インストールしません。Windows 11での準備、安全な音声利用、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
+ユーザーが別途管理するIrodori-TTS-Serverも選択でき、server側のdynamic LoRA adapter pathを設定できます。サーバー、Python/CUDA環境、モデル、LoRA、参照音声は同梱・自動インストールしません。Windows 11での準備、安全な音声利用、LoRA、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
 ### VAD / STT
 

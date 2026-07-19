@@ -59,12 +59,15 @@ fn fnv1a64(bytes: &[u8]) -> u64 {
 /// Cache key for one synthesis request.
 #[must_use]
 pub fn cache_key(engine: &str, voice_id: &str, text: &str, params: &SynthesisParams) -> String {
-    let material = format!(
-        "{engine}|{voice_id}|{text}|{volume:.3}|{speed:.3}",
-        volume = params.volume,
-        speed = params.speed
-    );
-    format!("{:016x}", fnv1a64(material.as_bytes()))
+    let mut material = Vec::with_capacity(engine.len() + voice_id.len() + text.len() + 40);
+    for field in [engine.as_bytes(), voice_id.as_bytes(), text.as_bytes()] {
+        let length = u64::try_from(field.len()).unwrap_or(u64::MAX);
+        material.extend_from_slice(&length.to_le_bytes());
+        material.extend_from_slice(field);
+    }
+    material.extend_from_slice(&params.volume.to_bits().to_le_bytes());
+    material.extend_from_slice(&params.speed.to_bits().to_le_bytes());
+    format!("{:016x}", fnv1a64(&material))
 }
 
 impl WavCache {
@@ -332,6 +335,14 @@ mod tests {
         assert_ne!(aivis, cache_key("irodori", "1", "hello", &params()));
         assert_ne!(aivis, cache_key("aivis", "2", "hello", &params()));
         assert_ne!(aivis, cache_key("aivis", "1", "goodbye", &params()));
+    }
+
+    #[test]
+    fn key_separates_fields_containing_the_old_delimiter() {
+        let left = cache_key("irodori:lora:x", "y|z", "hello", &params());
+        let right = cache_key("irodori:lora:x|y", "z", "hello", &params());
+
+        assert_ne!(left, right);
     }
 
     #[test]

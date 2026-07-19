@@ -18,6 +18,7 @@ const AIVIS_SETTINGS: TtsSettingsDto = {
   base_url: 'http://127.0.0.1:10101',
   engine: 'aivis',
   voice_id: '888753760',
+  irodori_lora_adapter: '',
   style_id: 888753760,
   volume: 1,
   speed: 1,
@@ -154,6 +155,9 @@ describe('TtsPanel', () => {
     fireEvent.change(screen.getByLabelText('音声'), {
       target: { value: 'irodori-voice' },
     });
+    fireEvent.change(screen.getByLabelText('LoRA adapter path'), {
+      target: { value: 'C:/models/adapters/character-a' },
+    });
     fireEvent.click(screen.getByRole('button', { name: '保存' }));
 
     expect(invokeMock).toHaveBeenCalledWith('set_tts_settings', {
@@ -162,6 +166,7 @@ describe('TtsPanel', () => {
         engine: 'irodori',
         base_url: 'http://127.0.0.1:8088',
         voice_id: 'irodori-voice',
+        irodori_lora_adapter: 'C:/models/adapters/character-a',
       },
     });
     expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
@@ -244,6 +249,7 @@ describe('TtsPanel', () => {
     await screen.findByLabelText('接続先 (irodori-TTS)');
     expect(screen.getByText(/GPUを推奨/)).toBeVisible();
     expect(screen.getByText(/初回の音声合成.*モデル.*時間/)).toBeVisible();
+    expect(screen.getByText(/IRODORI_COMPILE_MODEL=false/)).toBeVisible();
     expect(screen.getByText(/同意を得た参照音声のみ/)).toBeVisible();
   });
 

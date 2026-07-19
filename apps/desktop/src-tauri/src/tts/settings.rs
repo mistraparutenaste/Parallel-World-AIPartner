@@ -26,6 +26,7 @@ pub fn default_tts_settings() -> TtsSettingsDto {
         base_url: default_base_url(TtsEngineKind::Aivis).to_owned(),
         engine: TtsEngineKind::Aivis,
         voice_id: "888753760".to_owned(),
+        irodori_lora_adapter: String::new(),
         style_id: 888_753_760,
         volume: 1.0,
         speed: 1.0,
@@ -72,6 +73,10 @@ pub fn save_tts_settings(layout: &AppDataLayout, settings: &TtsSettingsDto) -> R
         .voice_id
         .trim()
         .clone_into(&mut normalized.voice_id);
+    settings
+        .irodori_lora_adapter
+        .trim()
+        .clone_into(&mut normalized.irodori_lora_adapter);
     if normalized.voice_id.is_empty() {
         return Err("voice_id must not be empty".to_owned());
     }
@@ -229,6 +234,25 @@ mod tests {
         save_tts_settings(&layout, &settings).unwrap();
 
         assert_eq!(load_tts_settings(&layout).voice_id, "voice-a");
+    }
+
+    #[test]
+    fn save_trims_irodori_lora_adapter_path() {
+        let layout = temp_layout("trim-irodori-lora");
+        let settings = pw_contracts::TtsSettingsDto {
+            engine: TtsEngineKind::Irodori,
+            base_url: default_base_url(TtsEngineKind::Irodori).to_owned(),
+            voice_id: "voice-a".to_owned(),
+            irodori_lora_adapter: "  C:/models/adapters/character-a  ".to_owned(),
+            ..default_tts_settings()
+        };
+
+        save_tts_settings(&layout, &settings).unwrap();
+
+        assert_eq!(
+            load_tts_settings(&layout).irodori_lora_adapter,
+            "C:/models/adapters/character-a"
+        );
     }
 
     #[test]

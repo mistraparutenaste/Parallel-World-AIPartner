@@ -75,3 +75,21 @@ powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 portを変更する場合は、server側の`.env`または起動設定と合わせて`PW_TTS_PORT`も指定します。アプリの設定画面ではエンジンを`Irodori`、接続先を`http://127.0.0.1:8088`、voiceを参照音声のIDへ設定してください。
 
 通常のAivisSpeech起動は従来どおり既定です。`PW_TTS_ENGINE`を設定しない場合、`dev-up.ps1`はAivisSpeechを`127.0.0.1:10101`で確認します。
+
+## 5. Dynamic LoRAを使用する
+
+Irodori-TTS-Serverは、合成リクエストごとにPEFT LoRA adapterディレクトリを動的に指定できます。Parallel Worldの設定画面でTTSエンジンを`irodori-TTS`にし、「LoRA adapter path」へ**Irodoriサーバープロセスから参照できるディレクトリ**を入力してください。空欄の場合はbase modelを使用します。
+
+例:
+
+```text
+C:\Users\YOUR_NAME\source\Irodori-TTS\outputs\irodori_tts_lora\checkpoint_final
+```
+
+このパスはParallel Worldが読み込むファイルではなく、`POST /v1/audio/speech`の`irodori.lora_adapter`としてloopback上のIrodoriサーバーへ渡されます。Dockerでサーバーを実行する場合は、Windowsホスト側ではなくコンテナ内から参照できるパスを指定してください。
+
+Dynamic LoRA使用時は`.env`で`IRODORI_COMPILE_MODEL=false`を維持してください。`IRODORI_COMPILE_MODEL=true`とは併用できません。adapterの初回リクエストではメモリへの読み込み時間が発生し、同じserver process内の後続リクエストではcacheされたadapterが再利用されます。
+
+同じpathのadapter内容を更新しても、Irodoriサーバーのadapter cacheとParallel WorldのWAV cacheには以前の結果が残ります。更新時は新しいpathを指定するか、Irodoriサーバーを再起動したうえで設定画面のデータ管理からTTS音声cacheを消去してください。
+
+Parallel WorldはLoRA adapterの作成、取得、変換、mergeを行いません。adapterとbase checkpointの互換性はIrodori-TTS側で確認し、本人の同意を得たデータだけで学習・利用してください。

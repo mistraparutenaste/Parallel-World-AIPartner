@@ -31,10 +31,10 @@ impl From<IrodoriTtsClient> for EngineClient {
 }
 
 impl EngineClient {
-    fn cache_namespace(&self) -> &'static str {
+    fn cache_namespace(&self) -> String {
         match self {
-            Self::Aivis(_) => "aivis",
-            Self::Irodori(_) => "irodori",
+            Self::Aivis(_) => "aivis".to_owned(),
+            Self::Irodori(client) => client.cache_namespace(),
         }
     }
 
@@ -91,7 +91,7 @@ impl CachedSpeechSynthesizer {
 impl TtsSynthesizer for CachedSpeechSynthesizer {
     fn synthesize(&self, text: &str) -> Result<PathBuf, PortError> {
         let key = cache_key(
-            self.client.cache_namespace(),
+            &self.client.cache_namespace(),
             &self.voice_id,
             text,
             &self.params,
@@ -226,8 +226,12 @@ fn scale_i32(sample: i32, volume: f32, bits_per_sample: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::time::Duration;
 
-    use super::apply_wav_gain;
+    use super::{EngineClient, apply_wav_gain};
+    use crate::aivis::SynthesisParams;
+    use crate::cache::cache_key;
+    use crate::{IrodoriTtsClient, TtsClientConfig};
 
     fn pcm16_wav(samples: &[i16]) -> Vec<u8> {
         let mut wav = Vec::new();
@@ -273,5 +277,32 @@ mod tests {
             pcm16_samples(&gained),
             vec![i16::MIN, -2_000, 2_000, i16::MAX]
         );
+    }
+
+    #[test]
+    fn irodori_base_and_lora_adapters_use_distinct_cache_keys() {
+        let config = TtsClientConfig {
+            base_url: "http://127.0.0.1:8088".to_owned(),
+            timeout: Duration::from_secs(1),
+        };
+        let base = EngineClient::Irodori(IrodoriTtsClient::new(&config).unwrap());
+        let lora = EngineClient::Irodori(
+            IrodoriTtsClient::with_lora_adapter(&config, "adapters/character-a").unwrap(),
+        );
+        let other_lora = EngineClient::Irodori(
+            IrodoriTtsClient::with_lora_adapter(&config, "adapters/character-b").unwrap(),
+        );
+
+        let key = |client: &EngineClient| {
+            cache_key(
+                &client.cache_namespace(),
+                "voice-a",
+                "hello",
+                &SynthesisParams::default(),
+            )
+        };
+
+        assert_ne!(key(&base), key(&lora));
+        assert_ne!(key(&lora), key(&other_lora));
     }
 }

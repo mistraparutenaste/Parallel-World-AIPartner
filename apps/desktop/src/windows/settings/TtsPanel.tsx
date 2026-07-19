@@ -270,6 +270,24 @@ export function TtsPanel() {
           </div>
           {settings.engine === 'irodori' && (
             <div>
+              <div>
+                <label htmlFor="tts-irodori-lora">LoRA adapter path</label>
+                <input
+                  id="tts-irodori-lora"
+                  type="text"
+                  value={settings.irodori_lora_adapter}
+                  placeholder="C:/models/adapters/character-a"
+                  onChange={(event) =>
+                    update({ irodori_lora_adapter: event.target.value })
+                  }
+                />
+              </div>
+              <p>
+                未指定時はbase modelを使用します。Irodoriサーバーから参照できるadapterディレクトリを指定してください。
+              </p>
+              <p>
+            Dynamic LoRA使用時はサーバーでIRODORI_COMPILE_MODEL=falseにしてください。
+              </p>
               <p>irodori-TTSの実行にはGPUを推奨します。</p>
               <p>初回の音声合成はモデルの読み込みに時間がかかります。</p>
               <p>本人の同意を得た参照音声のみ使用してください。</p>

@@ -29,6 +29,10 @@ pub struct TtsSettingsDto {
     /// Engine-specific selected voice identifier. Missing legacy values are empty.
     #[serde(default)]
     pub voice_id: String,
+    /// Irodori server-side dynamic PEFT `LoRA` adapter directory. Empty uses
+    /// the base model and remains backward-compatible with existing settings.
+    #[serde(default)]
+    pub irodori_lora_adapter: String,
     /// Selected style id (`/speakers` の styles[].id).
     pub style_id: u32,
     /// `volumeScale`, 1.0 = unchanged.
@@ -106,6 +110,7 @@ mod tests {
             base_url: "http://127.0.0.1:10101".into(),
             engine: TtsEngineKind::Aivis,
             voice_id: String::new(),
+            irodori_lora_adapter: String::new(),
             style_id: 888_753_760,
             volume: 1.0,
             speed: 1.0,
@@ -131,6 +136,7 @@ mod tests {
 
         assert_eq!(round_trip["engine"], "aivis");
         assert_eq!(round_trip["voice_id"], "");
+        assert_eq!(round_trip["irodori_lora_adapter"], "");
     }
 
     #[test]
@@ -141,6 +147,7 @@ mod tests {
             "base_url": "http://127.0.0.1:10101",
             "engine": "irodori",
             "voice_id": "irodori-voice-001",
+            "irodori_lora_adapter": "C:/models/adapters/character-a",
             "style_id": 888753760,
             "volume": 1.0,
             "speed": 1.0
@@ -151,5 +158,9 @@ mod tests {
 
         assert_eq!(round_trip["engine"], "irodori");
         assert_eq!(round_trip["voice_id"], "irodori-voice-001");
+        assert_eq!(
+            round_trip["irodori_lora_adapter"],
+            "C:/models/adapters/character-a"
+        );
     }
 }

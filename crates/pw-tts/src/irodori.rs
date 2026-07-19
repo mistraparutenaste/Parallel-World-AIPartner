@@ -25,6 +25,7 @@ struct VoiceList {
 pub struct IrodoriTtsClient {
     http: reqwest::blocking::Client,
     base: String,
+    lora_adapter: Option<String>,
 }
 
 impl IrodoriTtsClient {
@@ -35,6 +36,23 @@ impl IrodoriTtsClient {
     /// Returns [`TtsError::InvalidEndpoint`] for unparsable or non-loopback
     /// URLs, and [`TtsError::Transport`] if the HTTP client cannot be built.
     pub fn new(config: &TtsClientConfig) -> Result<Self, TtsError> {
+        Self::build(config, None)
+    }
+
+    /// Creates a client that selects one dynamic PEFT `LoRA` adapter for every
+    /// synthesis request. The path is resolved by the Irodori server process.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same endpoint and transport errors as [`Self::new`].
+    pub fn with_lora_adapter(
+        config: &TtsClientConfig,
+        lora_adapter: &str,
+    ) -> Result<Self, TtsError> {
+        Self::build(config, Some(lora_adapter))
+    }
+
+    fn build(config: &TtsClientConfig, lora_adapter: Option<&str>) -> Result<Self, TtsError> {
         let base = validate_base_url(&config.base_url, false)
             .map_err(|error| TtsError::InvalidEndpoint(error.to_string()))?;
         let http = reqwest::blocking::Client::builder()
@@ -46,7 +64,18 @@ impl IrodoriTtsClient {
         Ok(Self {
             http,
             base: base.as_str().trim_end_matches('/').to_owned(),
+            lora_adapter: lora_adapter
+                .map(str::trim)
+                .filter(|adapter| !adapter.is_empty())
+                .map(str::to_owned),
         })
+    }
+
+    pub(crate) fn cache_namespace(&self) -> String {
+        match &self.lora_adapter {
+            Some(adapter) => format!("irodori:lora:{adapter}"),
+            None => "irodori:base".to_owned(),
+        }
     }
 
     /// Lists installed voice identifiers (`GET /v1/audio/voices`).
@@ -81,16 +110,20 @@ impl IrodoriTtsClient {
     ///
     /// Returns [`TtsError`] on transport, API, or response validation failure.
     pub fn synthesize(&self, text: &str, voice_id: &str, speed: f32) -> Result<Vec<u8>, TtsError> {
+        let mut body = serde_json::json!({
+            "model": "irodori-tts",
+            "input": text,
+            "voice": voice_id,
+            "response_format": "wav",
+            "speed": clamp_speed(speed),
+        });
+        if let Some(lora_adapter) = &self.lora_adapter {
+            body["irodori"] = serde_json::json!({ "lora_adapter": lora_adapter });
+        }
         let response = self
             .http
             .post(format!("{}/v1/audio/speech", self.base))
-            .json(&serde_json::json!({
-                "model": "irodori-tts",
-                "input": text,
-                "voice": voice_id,
-                "response_format": "wav",
-                "speed": clamp_speed(speed),
-            }))
+            .json(&body)
             .send()
             .map_err(|error| transport(&error))?;
         let response = check_status(response)?;
