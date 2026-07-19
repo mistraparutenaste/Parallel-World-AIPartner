@@ -67,10 +67,21 @@ fn read_settings(path: &Path) -> Option<TtsSettingsDto> {
 pub fn save_tts_settings(layout: &AppDataLayout, settings: &TtsSettingsDto) -> Result<(), String> {
     pw_platform::net::validate_base_url(&settings.base_url, false)
         .map_err(|error| error.to_string())?;
-    if settings.engine == TtsEngineKind::Aivis && settings.voice_id.parse::<u32>().is_err() {
-        return Err("Aivis voice_id must be a numeric style ID".to_owned());
+    let mut normalized = settings.clone();
+    settings
+        .voice_id
+        .trim()
+        .clone_into(&mut normalized.voice_id);
+    if normalized.voice_id.is_empty() {
+        return Err("voice_id must not be empty".to_owned());
     }
-    let json = serde_json::to_string_pretty(settings)
+    if normalized.engine == TtsEngineKind::Aivis {
+        normalized.style_id = normalized
+            .voice_id
+            .parse::<u32>()
+            .map_err(|_| "Aivis voice_id must be a numeric style ID".to_owned())?;
+    }
+    let json = serde_json::to_string_pretty(&normalized)
         .map_err(|error| format!("failed to serialize settings: {error}"))?;
     std::fs::create_dir_all(&layout.config)
         .map_err(|error| format!("failed to create config dir: {error}"))?;
@@ -103,6 +114,7 @@ mod tests {
     fn save_then_load_round_trips() {
         let layout = temp_layout("roundtrip");
         let settings = pw_contracts::TtsSettingsDto {
+            voice_id: "42".to_owned(),
             style_id: 42,
             volume: 0.5,
             enabled: false,
@@ -183,5 +195,57 @@ mod tests {
         save_tts_settings(&layout, &settings).unwrap();
 
         assert_eq!(load_tts_settings(&layout), settings);
+    }
+
+    #[test]
+    fn save_rejects_trimmed_empty_voice_ids_for_both_engines() {
+        for engine in [TtsEngineKind::Aivis, TtsEngineKind::Irodori] {
+            let layout = temp_layout(match engine {
+                TtsEngineKind::Aivis => "empty-aivis",
+                TtsEngineKind::Irodori => "empty-irodori",
+            });
+            let settings = pw_contracts::TtsSettingsDto {
+                engine,
+                base_url: default_base_url(engine).to_owned(),
+                voice_id: " \t ".to_owned(),
+                ..default_tts_settings()
+            };
+
+            assert!(save_tts_settings(&layout, &settings).is_err());
+            assert!(!layout.config.join("tts.json").exists());
+        }
+    }
+
+    #[test]
+    fn save_trims_irodori_voice_id() {
+        let layout = temp_layout("trim-irodori");
+        let settings = pw_contracts::TtsSettingsDto {
+            engine: TtsEngineKind::Irodori,
+            base_url: default_base_url(TtsEngineKind::Irodori).to_owned(),
+            voice_id: "  voice-a  ".to_owned(),
+            ..default_tts_settings()
+        };
+
+        save_tts_settings(&layout, &settings).unwrap();
+
+        assert_eq!(load_tts_settings(&layout).voice_id, "voice-a");
+    }
+
+    #[test]
+    fn save_syncs_aivis_style_id_for_legacy_readers() {
+        let layout = temp_layout("aivis-downgrade");
+        let settings = pw_contracts::TtsSettingsDto {
+            voice_id: " 42 ".to_owned(),
+            style_id: 888_753_760,
+            ..default_tts_settings()
+        };
+
+        save_tts_settings(&layout, &settings).unwrap();
+        let persisted: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(layout.config.join("tts.json")).unwrap())
+                .unwrap();
+
+        assert_eq!(persisted["voice_id"], "42");
+        assert_eq!(persisted["style_id"], 42);
     }
 }

@@ -1,11 +1,15 @@
-//! Acceptance test against a real `AivisSpeech` Engine instance.
+//! Acceptance tests against real TTS engine instances.
 //!
 //! Requires the engine running on loopback (default port 10101):
 //! `cargo test -p pw-tts --test real_engine -- --ignored --nocapture`
 //! Override the endpoint with `PW_TTS_BASE_URL`.
 //!
 //! The Irodori acceptance test requires `PW_IRODORI_BASE_URL` and optionally
-//! uses `PW_IRODORI_VOICE`. It remains ignored unless explicitly run.
+//! uses `PW_IRODORI_VOICE`. Without `PW_IRODORI_BASE_URL`, it reports an
+//! explicit self-skip so the existing Aivis command above remains compatible.
+//! Run each engine independently with an exact test-name filter:
+//! `cargo test -p pw-tts --test real_engine speakers_then_synthesis_produces_wav -- --ignored --nocapture`
+//! `cargo test -p pw-tts --test real_engine irodori_voices_then_short_synthesis_produces_wav_and_records_latency -- --ignored --nocapture`
 
 use std::time::{Duration, Instant};
 
@@ -92,15 +96,19 @@ fn cached_synthesizer_reuses_the_wav_file() {
     );
 }
 
-fn irodori_client() -> IrodoriTtsClient {
-    let base_url = std::env::var("PW_IRODORI_BASE_URL").expect(
-        "set PW_IRODORI_BASE_URL to the explicit loopback Irodori server URL before running this ignored test",
-    );
-    IrodoriTtsClient::new(&TtsClientConfig {
-        base_url,
-        timeout: Duration::from_mins(1),
-    })
-    .expect("Irodori client")
+fn explicit_irodori_base_url(value: Option<String>) -> Option<String> {
+    value.filter(|base_url| !base_url.trim().is_empty())
+}
+
+fn irodori_client() -> Option<IrodoriTtsClient> {
+    let base_url = explicit_irodori_base_url(std::env::var("PW_IRODORI_BASE_URL").ok())?;
+    Some(
+        IrodoriTtsClient::new(&TtsClientConfig {
+            base_url,
+            timeout: Duration::from_mins(1),
+        })
+        .expect("Irodori client"),
+    )
 }
 
 fn selected_irodori_voice(voices: &[String]) -> String {
@@ -162,9 +170,24 @@ fn wav_sample_check_accepts_one_pcm_sample() {
 }
 
 #[test]
+fn irodori_opt_in_requires_a_non_empty_explicit_url() {
+    assert_eq!(explicit_irodori_base_url(None), None);
+    assert_eq!(explicit_irodori_base_url(Some("   ".to_owned())), None);
+    assert_eq!(
+        explicit_irodori_base_url(Some("http://127.0.0.1:8088".to_owned())),
+        Some("http://127.0.0.1:8088".to_owned())
+    );
+}
+
+#[test]
 #[ignore = "requires a running Irodori TTS server and an installed voice"]
 fn irodori_voices_then_short_synthesis_produces_wav_and_records_latency() {
-    let client = irodori_client();
+    let Some(client) = irodori_client() else {
+        eprintln!(
+            "SKIPPED: PW_IRODORI_BASE_URL is not set; no Irodori server request was attempted"
+        );
+        return;
+    };
     let voices = client.voices().expect("GET /v1/audio/voices");
     assert!(!voices.is_empty(), "server reports no Irodori voices");
 

@@ -3,7 +3,7 @@ import type {
   TtsVoiceDto,
   UserDictWordDto,
 } from '@parallel-world/contracts';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TtsPanel } from './TtsPanel';
 
@@ -52,6 +52,14 @@ function mockSettings(settings: TtsSettingsDto = AIVIS_SETTINGS) {
         return Promise.resolve(null);
     }
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe('TtsPanel', () => {
@@ -162,6 +170,68 @@ describe('TtsPanel', () => {
     });
   });
 
+  it('ignores an old Aivis voice response after switching to irodori', async () => {
+    const aivisVoices = deferred<TtsVoiceDto[]>();
+    invokeMock.mockImplementation((command: string, args?: unknown) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve(AIVIS_SETTINGS);
+      }
+      if (command === 'list_tts_voices') {
+        const target = args as { engine: string };
+        return target.engine === 'aivis'
+          ? aivisVoices.promise
+          : Promise.resolve([{ id: 'irodori-voice', label: 'Irodori Voice' }]);
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: '音声一覧を取得' }),
+    );
+    fireEvent.change(screen.getByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: '音声一覧を取得' }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'Irodori Voice' }),
+    ).toBeInTheDocument();
+
+    await act(async () => {
+      aivisVoices.resolve([{ id: 'old-aivis', label: 'Old Aivis Voice' }]);
+      await aivisVoices.promise;
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('option', { name: 'Old Aivis Voice' }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows the backend error when saving irodori without a voice', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve(AIVIS_SETTINGS);
+      }
+      if (command === 'set_tts_settings') {
+        return Promise.reject(new Error('voice_id must not be empty'));
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'irodori' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'voice_id must not be empty',
+    );
+  });
+
   it('shows the irodori operational and consent notices', async () => {
     mockSettings({
       ...AIVIS_SETTINGS,
@@ -216,6 +286,8 @@ describe('TtsPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '単語を追加' }));
     expect(invokeMock).toHaveBeenCalledWith('add_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
       surface: 'STT',
       pronunciation: 'エスティーティー',
       accentType: 0,
@@ -223,6 +295,54 @@ describe('TtsPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'LLMを削除' }));
     expect(invokeMock).toHaveBeenCalledWith('delete_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
+      uuid: 'aaaa-bbbb',
+    });
+  });
+
+  it('uses unsaved Aivis connection values for dictionary commands', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    render(<TtsPanel />);
+
+    fireEvent.change(await screen.findByLabelText('TTSエンジン'), {
+      target: { value: 'aivis' },
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: '辞書を読み込む' }),
+    );
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith('list_user_dict', {
+        engine: 'aivis',
+        baseUrl: 'http://127.0.0.1:10101',
+      });
+    });
+
+    fireEvent.change(screen.getByLabelText('単語'), {
+      target: { value: 'API' },
+    });
+    fireEvent.change(screen.getByLabelText('読み（カタカナ）'), {
+      target: { value: 'エーピーアイ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '単語を追加' }));
+    expect(invokeMock).toHaveBeenCalledWith('add_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
+      surface: 'API',
+      pronunciation: 'エーピーアイ',
+      accentType: 0,
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'LLMを削除' }));
+    expect(invokeMock).toHaveBeenCalledWith('delete_user_dict_word', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
       uuid: 'aaaa-bbbb',
     });
   });

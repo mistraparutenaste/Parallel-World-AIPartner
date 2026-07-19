@@ -144,6 +144,7 @@
 ## Work Record（2026-07-19）
 
 - Automated implementation and verification are complete on branch `codex/irodori-tts-support`.
+- The existing Aivis ignored-test command remains compatible: the Irodori case self-skips without `PW_IRODORI_BASE_URL` and never falls back to a default endpoint. Exact per-engine test-name filters are documented in `crates/pw-tts/tests/real_engine.rs`.
 - Irodori の Python／uv／CUDA／model 環境は、この repository 内にもローカル作業環境にも作成していない。
 - 実サーバーへ接続する acceptance test は `#[ignore]` かつ環境変数 opt-in とした。誤接続を防ぐため `PW_IRODORI_BASE_URL` は明示必須、`PW_IRODORI_VOICE` は任意。
 - 実サーバーを必要としない HTTP contract、WAV gain、cache isolation、settings migration、engine dispatch、UI、launcher checks は自動テスト対象。

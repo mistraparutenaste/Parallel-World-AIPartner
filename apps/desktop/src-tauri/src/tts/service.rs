@@ -149,6 +149,7 @@ impl Worker {
 /// sentences at or below it before synthesizing them.
 pub struct TtsService {
     worker: Mutex<Option<Worker>>,
+    settings_fingerprint: Mutex<Option<String>>,
     latest_turn: AtomicU64,
     invalid_up_to: Arc<AtomicU64>,
     event_gate: Arc<Mutex<()>>,
@@ -162,6 +163,7 @@ impl Default for TtsService {
     fn default() -> Self {
         Self {
             worker: Mutex::new(None),
+            settings_fingerprint: Mutex::new(None),
             latest_turn: AtomicU64::new(0),
             invalid_up_to: Arc::new(AtomicU64::new(0)),
             event_gate: Arc::new(Mutex::new(())),
@@ -200,6 +202,35 @@ fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
 }
 
 impl TtsService {
+    /// Stops work tied to an old engine configuration and gives the new
+    /// configuration an independent health circuit. Repeated submissions with
+    /// the same fingerprint retain their current backoff state.
+    fn refresh_configuration(&self, wanted: &str) {
+        let mut current = self
+            .settings_fingerprint
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if current.as_deref() == Some(wanted) {
+            return;
+        }
+
+        let mut worker = self.lock();
+        if let Some(stale) = worker.take() {
+            stale.shutdown();
+        }
+        self.queue_metrics.reset_depth();
+        self.text_only_turn.store(0, Ordering::Relaxed);
+        *self
+            .health
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = FeatureHealthSupervisor::new(
+            RuntimeFeature::TextToSpeech,
+            SystemClock,
+            TimeJitter::default(),
+        );
+        *current = Some(wanted.to_owned());
+    }
+
     /// Clears the application-owned TTS circuit.
     ///
     /// # Errors
@@ -302,6 +333,8 @@ impl TtsService {
         if !settings.enabled {
             return;
         }
+        let wanted = fingerprint(&settings);
+        self.refresh_configuration(&wanted);
         if !self
             .health
             .lock()
@@ -316,7 +349,6 @@ impl TtsService {
             );
             return;
         }
-        let wanted = fingerprint(&settings);
         let mut guard = self.lock();
         self.register_turn_locked_with(&guard, turn, || emit_stop(app));
         if turn.value() <= self.invalid_up_to.load(Ordering::SeqCst) {
@@ -587,6 +619,43 @@ mod tests {
 
         assert_ne!(fingerprint(&base), fingerprint(&changed_engine));
         assert_ne!(fingerprint(&base), fingerprint(&changed_voice));
+    }
+
+    #[test]
+    fn engine_change_rearms_an_open_aivis_circuit_before_the_next_attempt() {
+        let service = TtsService::default();
+        let aivis = crate::tts::settings::default_tts_settings();
+        let mut irodori = aivis.clone();
+        irodori.engine = TtsEngineKind::Irodori;
+        irodori.base_url = crate::tts::settings::default_base_url(TtsEngineKind::Irodori).into();
+        irodori.voice_id = "voice-a".into();
+
+        service.refresh_configuration(&fingerprint(&aivis));
+        {
+            let mut health = service.health.lock().unwrap();
+            health.record_failure(RuntimeFailure::permanent(FailureCode::Unavailable));
+            assert!(!health.can_attempt());
+        }
+
+        service.refresh_configuration(&fingerprint(&irodori));
+
+        assert!(service.health.lock().unwrap().can_attempt());
+    }
+
+    #[test]
+    fn same_configuration_preserves_health_backoff() {
+        let service = TtsService::default();
+        let wanted = fingerprint(&crate::tts::settings::default_tts_settings());
+        service.refresh_configuration(&wanted);
+        service
+            .health
+            .lock()
+            .unwrap()
+            .record_failure(RuntimeFailure::permanent(FailureCode::Unavailable));
+
+        service.refresh_configuration(&wanted);
+
+        assert!(!service.health.lock().unwrap().can_attempt());
     }
 
     #[test]

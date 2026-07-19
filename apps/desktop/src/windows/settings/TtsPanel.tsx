@@ -5,7 +5,7 @@ import type {
   UserDictWordDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 /**
  * 音声合成 section of the settings window: engine connection, voice,
@@ -24,6 +24,8 @@ const ENGINE_LABELS: Record<TtsEngineKind, string> = {
 
 export function TtsPanel() {
   const [settings, setSettings] = useState<TtsSettingsDto | null>(null);
+  const settingsRef = useRef<TtsSettingsDto | null>(null);
+  const voiceRequestGenerationRef = useRef(0);
   const [voices, setVoices] = useState<TtsVoiceDto[] | null>(null);
   const [words, setWords] = useState<UserDictWordDto[] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -37,6 +39,7 @@ export function TtsPanel() {
     invoke<TtsSettingsDto>('get_tts_settings')
       .then((loaded) => {
         if (!cancelled) {
+          settingsRef.current = loaded;
           setSettings(loaded);
         }
       })
@@ -51,10 +54,22 @@ export function TtsPanel() {
   }, []);
 
   const update = (patch: Partial<TtsSettingsDto>) => {
-    setSettings((current) => (current ? { ...current, ...patch } : current));
+    if (patch.engine !== undefined || patch.base_url !== undefined) {
+      voiceRequestGenerationRef.current += 1;
+      setVoices(null);
+    }
+    setSettings((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = { ...current, ...patch };
+      settingsRef.current = next;
+      return next;
+    });
   };
 
   const changeEngine = (engine: TtsEngineKind) => {
+    voiceRequestGenerationRef.current += 1;
     setVoices(null);
     setSettings((current) => {
       if (!current) {
@@ -63,7 +78,7 @@ export function TtsPanel() {
       const usesEngineDefault = Object.values(DEFAULT_BASE_URLS).includes(
         current.base_url,
       );
-      return {
+      const next = {
         ...current,
         engine,
         base_url: usesEngineDefault
@@ -71,6 +86,8 @@ export function TtsPanel() {
           : current.base_url,
         voice_id: '',
       };
+      settingsRef.current = next;
+      return next;
     });
   };
 
@@ -92,23 +109,58 @@ export function TtsPanel() {
     if (!settings) {
       return;
     }
-    setMessage(null);
-    invoke<TtsVoiceDto[]>('list_tts_voices', {
+    const request = {
       engine: settings.engine,
       baseUrl: settings.base_url,
+    };
+    const generation = voiceRequestGenerationRef.current + 1;
+    voiceRequestGenerationRef.current = generation;
+    setMessage(null);
+    invoke<TtsVoiceDto[]>('list_tts_voices', {
+      engine: request.engine,
+      baseUrl: request.baseUrl,
     })
-      .then(setVoices)
+      .then((loadedVoices) => {
+        const current = settingsRef.current;
+        if (
+          generation === voiceRequestGenerationRef.current &&
+          current?.engine === request.engine &&
+          current.base_url === request.baseUrl
+        ) {
+          setVoices(loadedVoices);
+        }
+      })
       .catch((error: unknown) => {
-        const engineLabel = settings
-          ? ENGINE_LABELS[settings.engine]
-          : 'TTSエンジン';
+        const current = settingsRef.current;
+        if (
+          generation !== voiceRequestGenerationRef.current ||
+          current?.engine !== request.engine ||
+          current.base_url !== request.baseUrl
+        ) {
+          return;
+        }
+        const engineLabel = ENGINE_LABELS[request.engine];
         setMessage(`${engineLabel} の音声一覧を取得できません: ${String(error)}`);
       });
   };
 
-  const loadDictionary = () => {
+  type DictionaryTarget = Pick<TtsSettingsDto, 'engine'> & {
+    baseUrl: string;
+  };
+
+  const currentDictionaryTarget = (): DictionaryTarget | null => {
+    const current = settingsRef.current;
+    return current
+      ? { engine: current.engine, baseUrl: current.base_url }
+      : null;
+  };
+
+  const loadDictionary = (target = currentDictionaryTarget()) => {
+    if (!target) {
+      return;
+    }
     setDictMessage(null);
-    invoke<UserDictWordDto[]>('list_user_dict')
+    invoke<UserDictWordDto[]>('list_user_dict', target)
       .then(setWords)
       .catch((error: unknown) => {
         setDictMessage(`辞書を読み込めません: ${String(error)}`);
@@ -116,8 +168,13 @@ export function TtsPanel() {
   };
 
   const addWord = () => {
+    const target = currentDictionaryTarget();
+    if (!target) {
+      return;
+    }
     setDictMessage(null);
     invoke<string>('add_user_dict_word', {
+      ...target,
       surface,
       pronunciation,
       accentType,
@@ -126,7 +183,7 @@ export function TtsPanel() {
         setSurface('');
         setPronunciation('');
         setAccentType(0);
-        loadDictionary();
+        loadDictionary(target);
       })
       .catch((error: unknown) => {
         setDictMessage(`追加できません: ${String(error)}`);
@@ -134,9 +191,13 @@ export function TtsPanel() {
   };
 
   const deleteWord = (uuid: string) => {
+    const target = currentDictionaryTarget();
+    if (!target) {
+      return;
+    }
     setDictMessage(null);
-    invoke('delete_user_dict_word', { uuid })
-      .then(loadDictionary)
+    invoke('delete_user_dict_word', { ...target, uuid })
+      .then(() => loadDictionary(target))
       .catch((error: unknown) => {
         setDictMessage(`削除できません: ${String(error)}`);
       });
@@ -248,7 +309,7 @@ export function TtsPanel() {
             <>
               <h3>ユーザー辞書</h3>
               {dictMessage !== null && <p role="status">{dictMessage}</p>}
-              <button type="button" onClick={loadDictionary}>
+              <button type="button" onClick={() => loadDictionary()}>
                 辞書を読み込む
               </button>
               {words !== null && (

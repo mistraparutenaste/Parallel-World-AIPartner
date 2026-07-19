@@ -9,17 +9,6 @@ use tauri::State;
 
 use crate::tts::{load_tts_settings, save_tts_settings};
 
-fn client_config(layout: &AppDataLayout) -> (TtsEngineKind, TtsClientConfig) {
-    let settings = load_tts_settings(layout);
-    (
-        settings.engine,
-        TtsClientConfig {
-            base_url: settings.base_url,
-            timeout: Duration::from_secs(10),
-        },
-    )
-}
-
 fn ensure_dictionary_supported(engine: TtsEngineKind) -> Result<(), String> {
     if engine == TtsEngineKind::Irodori {
         return Err("Irodori TTS does not support user dictionary commands".to_owned());
@@ -27,9 +16,12 @@ fn ensure_dictionary_supported(engine: TtsEngineKind) -> Result<(), String> {
     Ok(())
 }
 
-fn dictionary_client(layout: &AppDataLayout) -> Result<AivisSpeechClient, String> {
-    let (engine, config) = client_config(layout);
+fn dictionary_client(engine: TtsEngineKind, base_url: String) -> Result<AivisSpeechClient, String> {
     ensure_dictionary_supported(engine)?;
+    let config = TtsClientConfig {
+        base_url,
+        timeout: Duration::from_secs(10),
+    };
     AivisSpeechClient::new(&config).map_err(|error| error.to_string())
 }
 
@@ -128,8 +120,11 @@ pub fn list_tts_voices(
 /// Returns an error message when the engine is unreachable.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn list_user_dict(layout: State<'_, AppDataLayout>) -> Result<Vec<UserDictWordDto>, String> {
-    let client = dictionary_client(&layout)?;
+pub fn list_user_dict(
+    engine: TtsEngineKind,
+    base_url: String,
+) -> Result<Vec<UserDictWordDto>, String> {
+    let client = dictionary_client(engine, base_url)?;
     let words = client.user_dict().map_err(|error| error.to_string())?;
     Ok(words
         .into_iter()
@@ -151,7 +146,8 @@ pub fn list_user_dict(layout: State<'_, AppDataLayout>) -> Result<Vec<UserDictWo
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
 pub fn add_user_dict_word(
-    layout: State<'_, AppDataLayout>,
+    engine: TtsEngineKind,
+    base_url: String,
     surface: String,
     pronunciation: String,
     accent_type: u32,
@@ -161,7 +157,7 @@ pub fn add_user_dict_word(
     if surface.is_empty() || pronunciation.is_empty() {
         return Err("単語と読みを入力してください".to_owned());
     }
-    let client = dictionary_client(&layout)?;
+    let client = dictionary_client(engine, base_url)?;
     client
         .add_user_dict_word(surface, pronunciation, accent_type)
         .map_err(|error| error.to_string())
@@ -174,8 +170,12 @@ pub fn add_user_dict_word(
 /// Returns an error message when the engine is unreachable.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn delete_user_dict_word(layout: State<'_, AppDataLayout>, uuid: String) -> Result<(), String> {
-    let client = dictionary_client(&layout)?;
+pub fn delete_user_dict_word(
+    engine: TtsEngineKind,
+    base_url: String,
+    uuid: String,
+) -> Result<(), String> {
+    let client = dictionary_client(engine, base_url)?;
     client
         .delete_user_dict_word(&uuid)
         .map_err(|error| error.to_string())
@@ -187,7 +187,8 @@ mod tests {
     use pw_tts::{Speaker, SpeakerStyle};
 
     use super::{
-        VoiceClient, aivis_voices, ensure_dictionary_supported, irodori_voices, voice_client,
+        VoiceClient, aivis_voices, dictionary_client, ensure_dictionary_supported, irodori_voices,
+        voice_client,
     };
 
     #[test]
@@ -255,5 +256,25 @@ mod tests {
         assert!(error.contains("Irodori"));
         assert!(error.contains("dictionary"));
         assert!(ensure_dictionary_supported(TtsEngineKind::Aivis).is_ok());
+    }
+
+    #[test]
+    fn transient_irodori_dictionary_selection_is_rejected_before_transport() {
+        let error = dictionary_client(TtsEngineKind::Irodori, "http://127.0.0.1:8088".to_owned())
+            .unwrap_err();
+
+        assert!(error.contains("Irodori"));
+        assert!(error.contains("dictionary"));
+    }
+
+    #[test]
+    fn transient_aivis_dictionary_url_must_be_loopback() {
+        let error = dictionary_client(
+            TtsEngineKind::Aivis,
+            "http://tts.example.com:10101".to_owned(),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("loopback"));
     }
 }
