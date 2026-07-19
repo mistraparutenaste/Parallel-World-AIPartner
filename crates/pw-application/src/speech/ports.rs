@@ -47,6 +47,26 @@ pub trait SpeechRecognizer: Send {
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, PortError>;
 }
 
+/// Mutable references forward the port so callers can keep ownership
+/// of a loaded model across pipeline runs.
+impl<V: VoiceActivityDetector> VoiceActivityDetector for &mut V {
+    fn probability(&mut self, frame: &[f32]) -> Result<f32, PortError> {
+        (**self).probability(frame)
+    }
+
+    fn reset(&mut self) {
+        (**self).reset();
+    }
+}
+
+/// Mutable references forward the port so callers can keep ownership
+/// of a loaded model across pipeline runs.
+impl<R: SpeechRecognizer> SpeechRecognizer for &mut R {
+    fn transcribe(&mut self, samples: &[f32]) -> Result<String, PortError> {
+        (**self).transcribe(samples)
+    }
+}
+
 /// Sink for pipeline outcomes (UI events and diagnostics).
 pub trait SpeechEvents: Send {
     fn on_level(&self, rms: f32);

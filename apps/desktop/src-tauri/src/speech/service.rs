@@ -34,8 +34,11 @@ pub const DEVICE_FALLBACK_EVENT: &str = "stt-device-fallback";
 
 /// Emit a level event every N frames (~256 ms at 32 ms frames).
 const LEVEL_EVERY_N_FRAMES: u64 = 8;
-/// Maximum time for model loading, device enumeration and capture startup.
-const PIPELINE_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+/// Base time a single startup stage may run without reporting progress.
+/// Bounds hung platform/model calls, not total startup time: slow
+/// stages get [`StartupStage::budget_multiplier`] times this budget,
+/// and retries keep marking progress so they are never cut off.
+const STARTUP_NO_PROGRESS_TIMEOUT: Duration = Duration::from_secs(30);
 const STARTUP_WATCHDOG_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 struct SpeechState {
@@ -102,15 +105,107 @@ enum StartupWatchdogOutcome {
     TimedOut,
 }
 
+/// Startup stage reported by the worker; shown in timeout diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum StartupStage {
+    WaitingPreviousShutdown = 0,
+    LoadingVadModel = 1,
+    LoadingRecognizerModel = 2,
+    OpeningCapture = 3,
+    RetryBackoff = 4,
+}
+
+impl StartupStage {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::WaitingPreviousShutdown => "waiting for previous pipeline shutdown",
+            Self::LoadingVadModel => "loading vad model",
+            Self::LoadingRecognizerModel => "loading recognizer model",
+            Self::OpeningCapture => "opening audio capture",
+            Self::RetryBackoff => "waiting to retry",
+        }
+    }
+
+    const fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::LoadingVadModel,
+            2 => Self::LoadingRecognizerModel,
+            3 => Self::OpeningCapture,
+            4 => Self::RetryBackoff,
+            _ => Self::WaitingPreviousShutdown,
+        }
+    }
+
+    /// Model loading (and waiting out an old worker stuck inside it)
+    /// can legitimately take tens of seconds on a cold file cache with
+    /// the 150 MB recognizer being antivirus-scanned on first read.
+    /// Only fast stages get the tight base budget.
+    const fn budget_multiplier(self) -> u32 {
+        match self {
+            Self::WaitingPreviousShutdown
+            | Self::LoadingVadModel
+            | Self::LoadingRecognizerModel => 4,
+            Self::OpeningCapture | Self::RetryBackoff => 1,
+        }
+    }
+}
+
+/// Monotonic startup progress shared between the worker and its
+/// watchdog. The watchdog only gives up when no stage reports
+/// progress for [`STARTUP_NO_PROGRESS_TIMEOUT`].
+struct StartupProgress {
+    epoch: std::time::Instant,
+    last_progress_ms: AtomicU64,
+    stage: std::sync::atomic::AtomicU8,
+}
+
+impl StartupProgress {
+    fn new(stage: StartupStage) -> Self {
+        Self {
+            epoch: std::time::Instant::now(),
+            last_progress_ms: AtomicU64::new(0),
+            stage: std::sync::atomic::AtomicU8::new(stage as u8),
+        }
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// Records progress into a new stage.
+    fn mark(&self, stage: StartupStage) {
+        self.stage.store(stage as u8, Ordering::Release);
+        self.touch();
+    }
+
+    /// Records progress within the current stage.
+    fn touch(&self) {
+        self.last_progress_ms
+            .store(self.elapsed_ms(), Ordering::Release);
+    }
+
+    fn stalled_for(&self) -> Duration {
+        Duration::from_millis(
+            self.elapsed_ms()
+                .saturating_sub(self.last_progress_ms.load(Ordering::Acquire)),
+        )
+    }
+
+    fn stage(&self) -> StartupStage {
+        StartupStage::from_u8(self.stage.load(Ordering::Acquire))
+    }
+}
+
 fn wait_for_startup_watchdog(
     state: &SpeechState,
     cancel: &AtomicBool,
     startup_timed_out: &AtomicBool,
     generation: u64,
     current_generation: &AtomicU64,
-    timeout: Duration,
+    progress: &StartupProgress,
+    no_progress_timeout: Duration,
 ) -> StartupWatchdogOutcome {
-    let deadline = std::time::Instant::now() + timeout;
     loop {
         if cancel.load(Ordering::Acquire)
             || current_generation.load(Ordering::Acquire) != generation
@@ -120,8 +215,9 @@ fn wait_for_startup_watchdog(
         if state.snapshot().phase != SttPhaseDto::Starting {
             return StartupWatchdogOutcome::Ready;
         }
-        let now = std::time::Instant::now();
-        if now >= deadline {
+        let stalled = progress.stalled_for();
+        let budget = no_progress_timeout * progress.stage().budget_multiplier();
+        if stalled >= budget {
             return if current_generation
                 .compare_exchange(
                     generation,
@@ -138,13 +234,12 @@ fn wait_for_startup_watchdog(
                 StartupWatchdogOutcome::Cancelled
             };
         }
-        std::thread::sleep(
-            STARTUP_WATCHDOG_POLL_INTERVAL.min(deadline.saturating_duration_since(now)),
-        );
+        std::thread::sleep(STARTUP_WATCHDOG_POLL_INTERVAL.min(budget.saturating_sub(stalled)));
     }
 }
 
 /// Resolved model locations under the app data `models/` directory.
+#[derive(Clone)]
 pub struct SttModelPaths {
     pub vad_model: PathBuf,
     pub recognizer_dir: PathBuf,
@@ -440,11 +535,19 @@ fn resolve_device(preferred: Option<&str>, devices: &[InputDeviceInfo]) -> Resol
     }
 }
 
+/// A start request queued while the previous pipeline is still
+/// shutting down; completed by the deferred-start thread.
+struct PendingStart {
+    paths: SttModelPaths,
+    device_id: Option<String>,
+}
+
 /// Managed state: at most one running speech pipeline.
 pub struct SpeechService {
     lifecycle: Mutex<()>,
     running: Mutex<Option<RunningPipeline>>,
     active_cancel: Mutex<Option<Arc<AtomicBool>>>,
+    pending_start: Mutex<Option<PendingStart>>,
     generation: Arc<AtomicU64>,
     state: Arc<SpeechState>,
 }
@@ -455,6 +558,7 @@ impl Default for SpeechService {
             lifecycle: Mutex::new(()),
             running: Mutex::new(None),
             active_cancel: Mutex::new(None),
+            pending_start: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             state: Arc::new(SpeechState::default()),
         }
@@ -481,8 +585,19 @@ impl SpeechService {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    fn lock_pending_start(&self) -> MutexGuard<'_, Option<PendingStart>> {
+        self.pending_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Starts the pipeline on a worker thread. Model loading happens
     /// on the worker; state transitions arrive as `stt-state` events.
+    ///
+    /// When the previous pipeline is still shutting down the request
+    /// is queued and completed as soon as its worker exits, so a
+    /// stop→start toggle (or a retry after a timeout) never fails
+    /// with a transient error.
     ///
     /// # Errors
     ///
@@ -512,12 +627,17 @@ impl SpeechService {
         {
             let _ = worker.join();
         }
-        if let Some(running) = guard.as_ref() {
-            return Err(if running.cancel.load(Ordering::Acquire) {
-                "speech pipeline is stopping".to_owned()
-            } else {
-                "speech pipeline is already running".to_owned()
-            });
+        if let Some(running) = guard.as_mut() {
+            if !running.cancel.load(Ordering::Acquire) {
+                return Err("speech pipeline is already running".to_owned());
+            }
+            // The old worker may be blocked inside a platform/model
+            // call that cannot be interrupted; queue the request
+            // instead of joining it on the command thread.
+            let worker = running.worker.take();
+            drop(guard);
+            self.queue_start_while_stopping(app, worker, paths, device_id);
+            return Ok(());
         }
 
         let cancel = Arc::new(AtomicBool::new(false));
@@ -539,6 +659,7 @@ impl SpeechService {
             emit_state(&app, starting);
         }
 
+        let progress = Arc::new(StartupProgress::new(StartupStage::LoadingVadModel));
         let worker = PipelineWorker {
             app: app.clone(),
             paths,
@@ -551,6 +672,7 @@ impl SpeechService {
             dropped_samples: Arc::clone(&dropped_samples),
             failure_metrics: Arc::clone(&failure_metrics),
             failure_queue_dropped: Arc::clone(&failure_queue_dropped),
+            progress: Arc::clone(&progress),
             generation,
             current_generation: Arc::clone(&self.generation),
             state: Arc::clone(&self.state),
@@ -585,8 +707,47 @@ impl SpeechService {
             failure_queue_dropped,
             worker: Some(worker),
         });
-        self.spawn_startup_watchdog(app, watchdog_cancel, startup_timed_out, generation);
+        self.spawn_startup_watchdog(
+            app,
+            watchdog_cancel,
+            startup_timed_out,
+            generation,
+            progress,
+        );
         Ok(())
+    }
+
+    /// Records the start request and completes it once the previous
+    /// worker has exited; state transitions keep flowing meanwhile.
+    fn queue_start_while_stopping<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        worker: Option<JoinHandle<()>>,
+        paths: SttModelPaths,
+        device_id: Option<String>,
+    ) {
+        *self.lock_pending_start() = Some(PendingStart { paths, device_id });
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        if let Some(starting) = self.state.update_for_generation(
+            generation,
+            SttPhaseDto::Starting,
+            Some("前回の音声認識の終了を待っています".into()),
+        ) {
+            emit_state(&app, starting);
+        }
+        // The watchdog still supervises the wait: a worker that never
+        // exits surfaces as a startup timeout instead of silence.
+        let progress = Arc::new(StartupProgress::new(StartupStage::WaitingPreviousShutdown));
+        self.spawn_startup_watchdog(
+            app.clone(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+            generation,
+            progress,
+        );
+        if let Some(worker) = worker {
+            spawn_deferred_start(app, worker);
+        }
     }
 
     fn spawn_startup_watchdog<R: Runtime>(
@@ -595,6 +756,7 @@ impl SpeechService {
         cancel: Arc<AtomicBool>,
         startup_timed_out: Arc<AtomicBool>,
         generation: u64,
+        progress: Arc<StartupProgress>,
     ) {
         let state = Arc::clone(&self.state);
         let current_generation = Arc::clone(&self.generation);
@@ -607,16 +769,19 @@ impl SpeechService {
                     &startup_timed_out,
                     generation,
                     &current_generation,
-                    PIPELINE_STARTUP_TIMEOUT,
+                    &progress,
+                    STARTUP_NO_PROGRESS_TIMEOUT,
                 ) == StartupWatchdogOutcome::TimedOut
                 {
+                    tracing::warn!(
+                        stage = progress.stage().name(),
+                        stalled_ms = progress.stalled_for().as_millis(),
+                        "speech startup made no progress; marking unavailable"
+                    );
                     let payload = state.update_for_generation(
                         generation.wrapping_add(1),
                         SttPhaseDto::Unavailable,
-                        Some(
-                            "音声認識の起動がタイムアウトしました。停止後に再試行してください。"
-                                .into(),
-                        ),
+                        Some("音声認識の起動がタイムアウトしました。再試行してください。".into()),
                     );
                     if let Some(payload) = payload {
                         emit_state(&app, payload);
@@ -633,6 +798,9 @@ impl SpeechService {
     /// Requests the running pipeline to stop.
     pub fn stop(&self) -> SttStateEventDto {
         let _lifecycle = self.lock_lifecycle();
+        // A stop also withdraws any start still waiting on the old
+        // worker: the user's last request wins.
+        *self.lock_pending_start() = None;
         let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
         if let Some(cancel) = self.lock_active_cancel().as_ref() {
             cancel.store(true, Ordering::Release);
@@ -653,38 +821,43 @@ impl SpeechService {
     pub fn diagnostics(&self) -> AudioDiagnosticsDto {
         let guard = self.lock();
         match guard.as_ref() {
-            Some(running) => AudioDiagnosticsDto {
-                schema_version: SCHEMA_VERSION,
-                running: !running.cancel.load(Ordering::Relaxed),
-                capture_enabled: running.capture_enabled.load(Ordering::Relaxed),
-                frames_processed: running.diagnostics.frames_processed.load(Ordering::Relaxed),
-                segments_completed: running
-                    .diagnostics
-                    .segments_completed
-                    .load(Ordering::Relaxed),
-                transcripts_accepted: running
-                    .diagnostics
-                    .transcripts_accepted
-                    .load(Ordering::Relaxed),
-                transcripts_rejected: running
-                    .diagnostics
-                    .transcripts_rejected
-                    .load(Ordering::Relaxed),
-                dropped_samples: running.dropped_samples.load(Ordering::Relaxed),
-                failure_queue_depth: running
-                    .failure_metrics
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .depth(),
-                failure_queue_dropped: aggregate_counter(
-                    running.failure_queue_dropped.load(Ordering::Relaxed),
-                    running
+            Some(running) => {
+                // Read both metrics under a single short-lived lock.
+                // Locking twice inside one struct literal deadlocks:
+                // the first guard is a temporary that lives until the
+                // end of the whole statement.
+                let (failure_queue_depth, failure_metrics_dropped) = {
+                    let metrics = running
                         .failure_metrics
                         .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .dropped(),
-                ),
-            },
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    (metrics.depth(), metrics.dropped())
+                };
+                AudioDiagnosticsDto {
+                    schema_version: SCHEMA_VERSION,
+                    running: !running.cancel.load(Ordering::Relaxed),
+                    capture_enabled: running.capture_enabled.load(Ordering::Relaxed),
+                    frames_processed: running.diagnostics.frames_processed.load(Ordering::Relaxed),
+                    segments_completed: running
+                        .diagnostics
+                        .segments_completed
+                        .load(Ordering::Relaxed),
+                    transcripts_accepted: running
+                        .diagnostics
+                        .transcripts_accepted
+                        .load(Ordering::Relaxed),
+                    transcripts_rejected: running
+                        .diagnostics
+                        .transcripts_rejected
+                        .load(Ordering::Relaxed),
+                    dropped_samples: running.dropped_samples.load(Ordering::Relaxed),
+                    failure_queue_depth,
+                    failure_queue_dropped: aggregate_counter(
+                        running.failure_queue_dropped.load(Ordering::Relaxed),
+                        failure_metrics_dropped,
+                    ),
+                }
+            }
             None => AudioDiagnosticsDto {
                 schema_version: SCHEMA_VERSION,
                 running: false,
@@ -724,6 +897,87 @@ impl SpeechService {
     }
 }
 
+/// Test-only hooks for the lifecycle integration tests in
+/// `tests/speech_lifecycle.rs`. Those tests need a mock Tauri app,
+/// which links dialog code importing `TaskDialogIndirect`; only
+/// integration test binaries receive the Common-Controls v6 manifest
+/// (see `build.rs`), so they cannot live in the unit test module.
+#[doc(hidden)]
+impl SpeechService {
+    /// Installs a cancelled pipeline whose worker blocks until the
+    /// returned sender fires, emulating a shutdown stuck inside an
+    /// uninterruptible platform call.
+    pub fn testing_install_blocked_stopping_worker(&self) -> std::sync::mpsc::Sender<()> {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let worker = std::thread::Builder::new()
+            .name("pw-speech-test-blocked-worker".into())
+            .spawn(move || {
+                let _ = release_rx.recv();
+            })
+            .expect("failed to spawn blocked test worker");
+        *self.lock_active_cancel() = Some(Arc::clone(&cancel));
+        *self.lock() = Some(RunningPipeline {
+            active_device_id: Arc::new(Mutex::new("test-device".to_owned())),
+            cancel,
+            capture_enabled: Arc::new(AtomicBool::new(true)),
+            diagnostics: Arc::new(PipelineDiagnostics::default()),
+            dropped_samples: Arc::new(AtomicU64::new(0)),
+            failure_metrics: Arc::new(Mutex::new(Arc::new(FailureQueueMetrics::default()))),
+            failure_queue_dropped: Arc::new(AtomicU64::new(0)),
+            worker: Some(worker),
+        });
+        release_tx
+    }
+
+    #[must_use]
+    pub fn testing_has_running_entry(&self) -> bool {
+        self.lock().is_some()
+    }
+
+    #[must_use]
+    pub fn testing_has_pending_start(&self) -> bool {
+        self.lock_pending_start().is_some()
+    }
+}
+
+/// Completes a queued start once the previous worker has exited.
+/// Runs on its own thread because the join may block for as long as
+/// the old worker is stuck inside an uninterruptible platform call.
+fn spawn_deferred_start<R: Runtime>(app: AppHandle<R>, worker: JoinHandle<()>) {
+    if let Err(error) = std::thread::Builder::new()
+        .name("pw-speech-deferred-start".into())
+        .spawn(move || {
+            let _ = worker.join();
+            let service = app.state::<SpeechService>();
+            {
+                let mut guard = service.lock();
+                if guard.as_ref().is_some_and(|running| {
+                    running.cancel.load(Ordering::Acquire) && running.worker.is_none()
+                }) {
+                    guard.take();
+                }
+            }
+            let pending = service.lock_pending_start().take();
+            let Some(pending) = pending else {
+                return;
+            };
+            if let Err(error) = service.start(app.clone(), pending.paths, pending.device_id) {
+                tracing::warn!(%error, "deferred speech start failed");
+            }
+        })
+    {
+        tracing::warn!(%error, "failed to spawn deferred speech start");
+    }
+}
+
+/// Models kept alive across audio-only retry cycles; reloading the
+/// ~150 MB recognizer on every capture retry would stall recovery.
+struct LoadedModels {
+    vad: SileroVad,
+    recognizer: ReazonSpeechRecognizer,
+}
+
 struct PipelineWorker<R: Runtime> {
     app: AppHandle<R>,
     paths: SttModelPaths,
@@ -736,6 +990,7 @@ struct PipelineWorker<R: Runtime> {
     dropped_samples: Arc<AtomicU64>,
     failure_metrics: Arc<Mutex<Arc<FailureQueueMetrics>>>,
     failure_queue_dropped: Arc<AtomicU64>,
+    progress: Arc<StartupProgress>,
     generation: u64,
     current_generation: Arc<AtomicU64>,
     state: Arc<SpeechState>,
@@ -787,20 +1042,22 @@ impl<R: Runtime> PipelineWorker<R> {
             self.generation,
             Arc::clone(&self.current_generation),
         );
+        let mut models: Option<LoadedModels> = None;
         loop {
             match self.interruption() {
                 WorkerInterruption::Continue => {}
                 WorkerInterruption::Stopped => {
-                    self.emit_state(SttPhaseDto::Stopped, None);
-                    emit_health_events(
-                        &self.app,
-                        health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
-                    );
+                    self.emit_stopped(&mut health, policy.attempts());
                     break;
                 }
                 WorkerInterruption::Stale | WorkerInterruption::TimedOut => break,
             }
-            let result = self.build_and_run(&mut recovery, &mut health, || policy.record_healthy());
+            let result = match self.ensure_models(&mut models) {
+                Ok(loaded) => self.build_and_run(loaded, &mut recovery, &mut health, || {
+                    policy.record_healthy();
+                }),
+                Err(failure) => Err(failure),
+            };
             if self.was_superseded() {
                 break;
             }
@@ -813,28 +1070,21 @@ impl<R: Runtime> PipelineWorker<R> {
                 }
             };
             if failure == SpeechFailure::Stopped {
-                self.emit_state(SttPhaseDto::Stopped, None);
-                emit_health_events(
-                    &self.app,
-                    health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
-                );
+                self.emit_stopped(&mut health, policy.attempts());
                 break;
             }
+            if failure != SpeechFailure::Audio {
+                // Model files or inference state are suspect; reload on
+                // the next cycle. Audio failures keep the loaded models.
+                models = None;
+            }
             if matches!(failure, SpeechFailure::VadModel | SpeechFailure::SttModel) {
-                self.emit_state(SttPhaseDto::Unavailable, Some(failure.message()));
-                emit_health_event(
-                    &self.app,
-                    health.mark_failure(failure, SystemClock.now_ms(), policy.attempts(), true),
-                );
+                self.emit_unavailable(&mut health, failure, policy.attempts());
                 break;
             }
             match policy.record_failure() {
                 BackoffDecision::CircuitOpen => {
-                    self.emit_state(SttPhaseDto::Unavailable, Some(failure.message()));
-                    emit_health_event(
-                        &self.app,
-                        health.mark_failure(failure, SystemClock.now_ms(), policy.attempts(), true),
-                    );
+                    self.emit_unavailable(&mut health, failure, policy.attempts());
                     break;
                 }
                 BackoffDecision::RetryAfter(delay) => {
@@ -851,21 +1101,66 @@ impl<R: Runtime> PipelineWorker<R> {
                         SttPhaseDto::Starting,
                         Some("音声認識を再初期化しています".into()),
                     );
+                    self.progress.mark(StartupStage::RetryBackoff);
                     if self.wait_retry(delay) {
                         continue;
                     }
                     if self.interruption() == WorkerInterruption::Stopped {
-                        self.emit_state(SttPhaseDto::Stopped, None);
-                        emit_health_events(
-                            &self.app,
-                            health.mark_stopped(SystemClock.now_ms(), policy.attempts()),
-                        );
+                        self.emit_stopped(&mut health, policy.attempts());
                     }
                     break;
                 }
             }
         }
         self.cancel.store(true, Ordering::Release);
+        if self.startup_timed_out.load(Ordering::Acquire) {
+            // Marks when the uninterruptible call that exhausted the
+            // watchdog budget finally returned.
+            tracing::info!("speech worker exited after startup timeout");
+        }
+    }
+
+    fn emit_stopped(&self, health: &mut HealthRegistry, attempts: u8) {
+        self.emit_state(SttPhaseDto::Stopped, None);
+        emit_health_events(
+            &self.app,
+            health.mark_stopped(SystemClock.now_ms(), attempts),
+        );
+    }
+
+    fn emit_unavailable(&self, health: &mut HealthRegistry, failure: SpeechFailure, attempts: u8) {
+        self.emit_state(SttPhaseDto::Unavailable, Some(failure.message()));
+        emit_health_event(
+            &self.app,
+            health.mark_failure(failure, SystemClock.now_ms(), attempts, true),
+        );
+    }
+
+    /// Loads VAD and recognizer models unless a previous cycle already
+    /// left healthy instances behind.
+    fn ensure_models<'m>(
+        &self,
+        models: &'m mut Option<LoadedModels>,
+    ) -> Result<&'m mut LoadedModels, (SpeechFailure, String)> {
+        if models.is_none() {
+            let started = std::time::Instant::now();
+            self.progress.mark(StartupStage::LoadingVadModel);
+            let vad = SileroVad::new(&self.paths.vad_model, 0.5)
+                .map_err(|error| classify_model_error(&error, true))?;
+            self.progress.mark(StartupStage::LoadingRecognizerModel);
+            let recognizer = ReazonSpeechRecognizer::new(&RecognizerModelPaths::in_directory(
+                &self.paths.recognizer_dir,
+            ))
+            .map_err(|error| classify_model_error(&error, false))?;
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "speech models loaded"
+            );
+            *models = Some(LoadedModels { vad, recognizer });
+        }
+        Ok(models
+            .as_mut()
+            .expect("models were just loaded or already present"))
     }
 
     fn was_superseded(&self) -> bool {
@@ -903,6 +1198,8 @@ impl<R: Runtime> PipelineWorker<R> {
             if self.cancel.load(Ordering::Acquire) || self.is_stale() {
                 return false;
             }
+            // Deliberate backoff waits count as startup progress.
+            self.progress.touch();
             std::thread::sleep(Duration::from_millis(20));
         }
         true
@@ -910,6 +1207,7 @@ impl<R: Runtime> PipelineWorker<R> {
 
     fn build_and_run<F>(
         &self,
+        models: &mut LoadedModels,
         recovery: &mut RecoveryCycle<ProductionDeviceSelector, ProductionCaptureFactory>,
         health: &mut HealthRegistry,
         mut on_healthy: F,
@@ -917,13 +1215,6 @@ impl<R: Runtime> PipelineWorker<R> {
     where
         F: FnMut(),
     {
-        let vad = SileroVad::new(&self.paths.vad_model, 0.5)
-            .map_err(|error| classify_model_error(&error, true))?;
-        let recognizer = ReazonSpeechRecognizer::new(&RecognizerModelPaths::in_directory(
-            &self.paths.recognizer_dir,
-        ))
-        .map_err(|error| classify_model_error(&error, false))?;
-
         let (failure_tx, failure_rx, metrics) = failure_channel(4);
         let mut failure_metrics = self
             .failure_metrics
@@ -933,6 +1224,7 @@ impl<R: Runtime> PipelineWorker<R> {
             .fetch_add(failure_metrics.dropped(), Ordering::Relaxed);
         *failure_metrics = metrics;
         drop(failure_metrics);
+        self.progress.mark(StartupStage::OpeningCapture);
         let mut recovery_events = Vec::new();
         recovery.recover_once(Some(failure_tx), &mut recovery_events)?;
         for event in &recovery_events {
@@ -971,6 +1263,7 @@ impl<R: Runtime> PipelineWorker<R> {
             return Ok(());
         }
         self.emit_state(SttPhaseDto::Listening, None);
+        tracing::info!("speech pipeline listening");
         emit_health_events(
             &self.app,
             health.mark_pipeline_healthy(SystemClock.now_ms()),
@@ -979,8 +1272,8 @@ impl<R: Runtime> PipelineWorker<R> {
 
         let pipeline = SpeechPipeline::new(
             SpeechPipelineConfig::default(),
-            vad,
-            recognizer,
+            &mut models.vad,
+            &mut models.recognizer,
             events,
             Arc::clone(&recovery.capture_enabled),
             Arc::clone(&self.diagnostics),
@@ -1179,8 +1472,8 @@ mod tests {
     use super::{
         CaptureFactory, CaptureLifecycle, DeviceSelector, HealthRegistry, RecoveryCycle,
         RecoveryCycleEvent, RunningPipeline, SpeechFailure, SpeechService, SpeechState,
-        StartupWatchdogOutcome, SttModelPaths, WorkerInterruption, aggregate_counter,
-        resolve_device, wait_for_startup_watchdog, worker_interruption,
+        StartupProgress, StartupStage, StartupWatchdogOutcome, SttModelPaths, WorkerInterruption,
+        aggregate_counter, resolve_device, wait_for_startup_watchdog, worker_interruption,
     };
     use pw_contracts::{HealthStatusDto, RuntimeFeatureDto, SttPhaseDto};
 
@@ -1207,6 +1500,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let startup_timed_out = AtomicBool::new(false);
         let current_generation = AtomicU64::new(7);
+        let progress = StartupProgress::new(StartupStage::LoadingVadModel);
 
         let outcome = wait_for_startup_watchdog(
             &state,
@@ -1214,6 +1508,7 @@ mod tests {
             &startup_timed_out,
             7,
             &current_generation,
+            &progress,
             Duration::ZERO,
         );
 
@@ -1230,6 +1525,7 @@ mod tests {
         let cancel = AtomicBool::new(false);
         let startup_timed_out = AtomicBool::new(false);
         let current_generation = AtomicU64::new(3);
+        let progress = StartupProgress::new(StartupStage::LoadingVadModel);
 
         let outcome = wait_for_startup_watchdog(
             &state,
@@ -1237,6 +1533,7 @@ mod tests {
             &startup_timed_out,
             3,
             &current_generation,
+            &progress,
             Duration::from_secs(1),
         );
 
@@ -1244,6 +1541,51 @@ mod tests {
         assert!(!cancel.load(Ordering::Acquire));
         assert!(!startup_timed_out.load(Ordering::Acquire));
         assert_eq!(current_generation.load(Ordering::Acquire), 3);
+    }
+
+    #[test]
+    fn slow_startup_stages_get_a_larger_no_progress_budget() {
+        assert_eq!(StartupStage::WaitingPreviousShutdown.budget_multiplier(), 4);
+        assert_eq!(StartupStage::LoadingVadModel.budget_multiplier(), 4);
+        assert_eq!(StartupStage::LoadingRecognizerModel.budget_multiplier(), 4);
+        assert_eq!(StartupStage::OpeningCapture.budget_multiplier(), 1);
+        assert_eq!(StartupStage::RetryBackoff.budget_multiplier(), 1);
+    }
+
+    #[test]
+    fn startup_watchdog_tolerates_slow_but_progressing_startup() {
+        let state = Arc::new(SpeechState::default());
+        state.update_for_generation(5, SttPhaseDto::Starting, None);
+        let cancel = AtomicBool::new(false);
+        let startup_timed_out = AtomicBool::new(false);
+        let current_generation = AtomicU64::new(5);
+        let progress = Arc::new(StartupProgress::new(StartupStage::LoadingRecognizerModel));
+
+        // A worker that takes far longer than the no-progress budget
+        // but keeps reporting progress must never be cut off.
+        let worker_progress = Arc::clone(&progress);
+        let worker_state = Arc::clone(&state);
+        let worker = std::thread::spawn(move || {
+            for _ in 0..30 {
+                worker_progress.touch();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            worker_state.update_for_generation(5, SttPhaseDto::Listening, None);
+        });
+
+        let outcome = wait_for_startup_watchdog(
+            &state,
+            &cancel,
+            &startup_timed_out,
+            5,
+            &current_generation,
+            &progress,
+            Duration::from_millis(120),
+        );
+
+        assert_eq!(outcome, StartupWatchdogOutcome::Ready);
+        assert!(!startup_timed_out.load(Ordering::Acquire));
+        worker.join().unwrap();
     }
 
     #[test]
@@ -1316,6 +1658,29 @@ mod tests {
         let diagnostics = service.diagnostics();
         assert!(!diagnostics.running);
         assert_eq!(diagnostics.frames_processed, 0);
+    }
+
+    /// Regression: the heartbeat calls `diagnostics()` every second, and
+    /// locking `failure_metrics` twice inside one struct literal made the
+    /// call self-deadlock as soon as a pipeline existed, which then froze
+    /// speech startup at the metrics swap until the watchdog fired.
+    #[test]
+    fn diagnostics_with_a_running_pipeline_do_not_deadlock() {
+        let service = Arc::new(SpeechService::default());
+        let release = service.testing_install_blocked_stopping_worker();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let worker_service = Arc::clone(&service);
+        let probe = std::thread::spawn(move || {
+            let _ = done_tx.send(worker_service.diagnostics());
+        });
+
+        let diagnostics = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("diagnostics deadlocked with a running pipeline");
+        assert!(!diagnostics.running, "installed pipeline is cancelled");
+        release.send(()).unwrap();
+        probe.join().unwrap();
     }
 
     #[test]

@@ -1,6 +1,11 @@
 fn main() {
     // Windows installer detection treats test executables containing "updater"
-    // as installers unless their execution level is explicit.
+    // as installers unless their execution level is explicit. The manifest
+    // also declares Common-Controls v6 so loader imports such as
+    // `TaskDialogIndirect` resolve. These flags only reach integration
+    // tests; the main binary gets its manifest from tauri-build, and the
+    // lib unittest binary gets none, so tests that link the full Tauri
+    // runtime (mock app) must live under `tests/`.
     #[cfg(target_os = "windows")]
     {
         let test_manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -158,6 +158,17 @@ pub fn run() {
                 tracing::warn!(%error, "failed to restore chat placement");
             }
             windows::spawn_cursor_watcher(app.handle().clone());
+            // 会話ファーストUI: 起動と同時に音声認識を立ち上げる。モデル
+            // 読み込みはワーカースレッド側で進み、進捗は stt-state
+            // イベントとして各ウィンドウへ届く。
+            let stt_paths =
+                speech::SttModelPaths::under(&app.state::<pw_platform::paths::AppDataLayout>());
+            if let Err(error) =
+                app.state::<speech::SpeechService>()
+                    .start(app.handle().clone(), stt_paths, None)
+            {
+                tracing::warn!(%error, "failed to start speech recognition at launch");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
