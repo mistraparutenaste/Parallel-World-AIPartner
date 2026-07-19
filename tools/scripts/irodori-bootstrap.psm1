@@ -726,4 +726,216 @@ function Invoke-IrodoriProvision {
     }
 }
 
-Export-ModuleMember -Function Import-IrodoriManifest, Get-IrodoriLayout, Get-IrodoriBackend, Test-IrodoriCompletion, Invoke-IrodoriProvision
+function Invoke-IrodoriBootstrapHttp {
+    param([string] $Method, [string] $Uri, [object] $Body)
+    if ($Method -eq 'GET') {
+        $response = Invoke-RestMethod -Uri $Uri -Method Get -TimeoutSec 10
+        return [pscustomobject]@{ status_code = 200; body = $response; bytes = $null }
+    }
+    $json = $Body | ConvertTo-Json -Depth 5 -Compress
+    $temporary = Join-Path ([IO.Path]::GetTempPath()) ('parallel-world-irodori-warmup-' + [Guid]::NewGuid().ToString('N') + '.wav')
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -Method Post -ContentType 'application/json' -Body $json -OutFile $temporary -TimeoutSec 300 -UseBasicParsing
+        return [pscustomobject]@{ status_code = [int] $response.StatusCode; body = $null; bytes = [IO.File]::ReadAllBytes($temporary) }
+    } finally {
+        Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-IrodoriBootstrapHealth {
+    param([scriptblock] $InvokeHttp, [int] $Port)
+    try {
+        $response = & $InvokeHttp 'GET' "http://127.0.0.1:$Port/health" $null
+        return $null -ne $response -and [int] $response.status_code -eq 200
+    } catch { return $false }
+}
+
+function Test-IrodoriWaveBytes {
+    param([byte[]] $Bytes)
+    return $null -ne $Bytes -and $Bytes.Length -ge 12 -and
+        [Text.Encoding]::ASCII.GetString($Bytes, 0, 4) -eq 'RIFF' -and
+        [Text.Encoding]::ASCII.GetString($Bytes, 8, 4) -eq 'WAVE'
+}
+
+function Test-IrodoriRuntimeReady {
+    param(
+        [psobject] $Manifest,
+        [hashtable] $Layout,
+        [Parameter(Mandatory)] [ValidateSet('cpu', 'cu128')] [string] $Backend,
+        [hashtable] $Adapters = @{}
+    )
+    if (-not (Test-IrodoriCompletion -Layout $Layout -Manifest $Manifest -ExpectedBackend $Backend)) { return $false }
+    $transactionPath = Join-Path $Layout.transactions ($Manifest.manifest_version + '.json')
+    if (Test-Path -LiteralPath $transactionPath) { return $false }
+    $uvArtifact = Get-IrodoriArtifactById $Manifest 'uv-windows-x86_64'
+    $serverArtifact = Get-IrodoriArtifactById $Manifest 'irodori-server'
+    $modelArtifact = Get-IrodoriArtifactById $Manifest 'irodori-model'
+    $codecArtifact = Get-IrodoriArtifactById $Manifest 'irodori-codec'
+    $tokenizerModel = Get-IrodoriArtifactById $Manifest 'sarashina-tokenizer-model'
+    $tokenizerConfig = Get-IrodoriArtifactById $Manifest 'sarashina-tokenizer-config'
+    $modelConfig = Get-IrodoriArtifactById $Manifest 'sarashina-config'
+    $runAdapter = if ($Adapters.ContainsKey('RunCommand')) { $Adapters.RunCommand } else {
+        { param($Executable, $Arguments, $WorkingDirectory, $Environment) Invoke-IrodoriDefaultRunApp -Executable $Executable -Arguments $Arguments -WorkingDirectory $WorkingDirectory -Environment $Environment }
+    }
+    return Test-IrodoriReusableRuntime -Layout $Layout -Manifest $Manifest -Backend $Backend `
+        -UvArtifact $uvArtifact -ServerArtifact $serverArtifact `
+        -VerifiedArtifacts @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig) `
+        -TokenizerArtifacts @($tokenizerModel, $tokenizerConfig, $modelConfig) -RunAdapter $runAdapter
+}
+
+function Invoke-IrodoriBootstrap {
+    param(
+        [Parameter(Mandatory)] [string] $ManifestPath,
+        [Parameter(Mandatory)] [string] $DataRoot,
+        [hashtable] $Adapters = @{}
+    )
+    $runApp = if ($Adapters.ContainsKey('RunApp')) { $Adapters.RunApp } else {
+        { & (Join-Path $PSScriptRoot 'dev-up.ps1'); return $LASTEXITCODE }
+    }
+    $explicitEngine = [Environment]::GetEnvironmentVariable('PW_TTS_ENGINE')
+    if (-not [string]::IsNullOrWhiteSpace($explicitEngine) -and $explicitEngine.ToLowerInvariant() -ne 'irodori') {
+        $appExitCode = & $runApp
+        return [pscustomobject]@{ status = 'external_engine'; app_exit_code = [int] $appExitCode; backend = $null }
+    }
+
+    $status = 'setup_failed'
+    $backend = $null
+    $owned = $null
+    $savedEnvironment = @{}
+    $managedEnvironmentNames = @(
+        'PATH', 'PW_TTS_ENGINE', 'PW_TTS_PORT', 'PW_IRODORI_DIR', 'IRODORI_CHECKPOINT',
+        'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
+        'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
+    )
+    foreach ($name in $managedEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
+    if ([string]::IsNullOrWhiteSpace($explicitEngine)) { $env:PW_TTS_ENGINE = 'irodori' }
+    try {
+        try {
+            $manifest = Import-IrodoriManifest -Path $ManifestPath
+            $layout = Get-IrodoriLayout -Root $DataRoot -ManifestVersion $manifest.manifest_version
+            $detectGpuNames = if ($Adapters.ContainsKey('DetectGpuNames')) { $Adapters.DetectGpuNames } else {
+                { @((Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) }
+            }
+            $backend = Get-IrodoriBackend -GpuNames @(& $detectGpuNames)
+            $testRuntime = if ($Adapters.ContainsKey('TestRuntime')) { $Adapters.TestRuntime } else {
+                { param($Manifest, $Layout, $Backend, $RuntimeAdapters) Test-IrodoriRuntimeReady -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $RuntimeAdapters }
+            }
+            $isComplete = [bool] (& $testRuntime $manifest $layout $backend $Adapters)
+            if (-not $isComplete) {
+                [int64] $downloadBytes = 0
+                foreach ($artifact in @($manifest.artifacts)) { $downloadBytes += [int64] $artifact.size }
+                [int64] $peakBytes = ($downloadBytes * 2) + 2147483648
+                $promptMessage = @"
+Irodori-TTS managed environment is not ready.
+Backend: $backend
+Direct downloads: $downloadBytes bytes
+Conservative peak free space: $peakBytes bytes
+Storage (LocalAppData): $DataRoot
+Licenses: Irodori/model/codec/tokenizer MIT; uv Apache-2.0 OR MIT
+Voice cloning / third-party voice: use only recordings with the speaker's explicit consent.
+Build now? [Y/N]
+"@
+                $promptConsent = if ($Adapters.ContainsKey('PromptConsent')) { $Adapters.PromptConsent } else {
+                    { param($Message) Write-Host $Message; return (Read-Host).Trim() -match '^(?i:y|yes)$' }
+                }
+                if (-not (& $promptConsent $promptMessage)) {
+                    $status = 'declined'
+                } else {
+                    $provision = if ($Adapters.ContainsKey('Provision')) { $Adapters.Provision } else {
+                        { param($Manifest, $Layout, $Backend, $ProvisionAdapters) Invoke-IrodoriProvision -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $ProvisionAdapters }
+                    }
+                    $provisionResult = & $provision $manifest $layout $backend $Adapters
+                    $isComplete = $true
+                }
+            } else {
+                $provision = if ($Adapters.ContainsKey('Provision')) { $Adapters.Provision } else {
+                    { param($Manifest, $Layout, $Backend, $ProvisionAdapters) Invoke-IrodoriProvision -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $ProvisionAdapters }
+                }
+                $provisionResult = & $provision $manifest $layout $backend $Adapters
+            }
+
+            if ($isComplete) {
+                $uvPath = [string] $provisionResult.uv_path
+                $serverPath = Join-Path $layout.runtime 'server'
+                $runtimeEnvironment = [ordered]@{
+                    IRODORI_CHECKPOINT = Join-Path $layout.runtime 'models\model.safetensors'
+                    IRODORI_CODEC_REPO = Join-Path $layout.runtime 'models\codec\weights.pth'
+                    IRODORI_VOICES_DIR = $layout.voices
+                    IRODORI_COMPILE_MODEL = 'false'
+                    HF_HOME = Join-Path $layout.runtime 'hf'
+                    HF_HUB_OFFLINE = '1'
+                    TRANSFORMERS_OFFLINE = '1'
+                }
+                [void] [IO.Directory]::CreateDirectory($layout.voices)
+                [void] [IO.Directory]::CreateDirectory($layout.loras)
+                $env:PATH = ([IO.Path]::GetDirectoryName($uvPath)) + [IO.Path]::PathSeparator + $env:PATH
+                $env:PW_TTS_ENGINE = 'irodori'
+                $env:PW_TTS_PORT = '8088'
+                $env:PW_IRODORI_DIR = $serverPath
+                foreach ($entry in $runtimeEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, [string] $entry.Value) }
+
+                $invokeHttp = if ($Adapters.ContainsKey('InvokeHttp')) { $Adapters.InvokeHttp } else {
+                    { param($Method, $Uri, $Body) Invoke-IrodoriBootstrapHttp -Method $Method -Uri $Uri -Body $Body }
+                }
+                $testPort = if ($Adapters.ContainsKey('TestPort')) { $Adapters.TestPort } else {
+                    { param($Port) $client = [Net.Sockets.TcpClient]::new(); try { return $client.ConnectAsync('127.0.0.1', $Port).Wait(1000) -and $client.Connected } catch { return $false } finally { $client.Dispose() } }
+                }
+                $portWasOpen = [bool] (& $testPort 8088)
+                if ($portWasOpen -and -not (Test-IrodoriBootstrapHealth -InvokeHttp $invokeHttp -Port 8088)) {
+                    $status = 'port_conflict'
+                } else {
+                    if (-not $portWasOpen) {
+                        $startOwned = if ($Adapters.ContainsKey('StartOwnedProcess')) { $Adapters.StartOwnedProcess } else {
+                            {
+                                param($FilePath, $ArgumentList, $WorkingDirectory, $Environment)
+                                Import-Module (Join-Path $PSScriptRoot 'managed-process-job.psm1') -Force
+                                $job = New-ManagedProcessJob -SessionId ([Guid]::NewGuid())
+                                try {
+                                    Start-ManagedProcess -Job $job -FilePath $FilePath -ArgumentList $ArgumentList -WorkingDirectory $WorkingDirectory | Out-Null
+                                    return $job
+                                } catch { Stop-ManagedProcessJob -Job $job -GraceSeconds 0; throw }
+                            }
+                        }
+                        $arguments = @('run', '--no-sync', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', '8088')
+                        $owned = & $startOwned $uvPath $arguments $serverPath $runtimeEnvironment
+                        $sleep = if ($Adapters.ContainsKey('Sleep')) { $Adapters.Sleep } else { { param($Milliseconds) Start-Sleep -Milliseconds $Milliseconds } }
+                        $healthy = $false
+                        for ($attempt = 0; $attempt -lt 180; $attempt++) {
+                            if (Test-IrodoriBootstrapHealth -InvokeHttp $invokeHttp -Port 8088) { $healthy = $true; break }
+                            & $sleep 500
+                        }
+                        if (-not $healthy) { throw 'Irodori /health did not become ready.' }
+                    }
+                    $voicesResponse = & $invokeHttp 'GET' 'http://127.0.0.1:8088/v1/audio/voices' $null
+                    if ($null -eq $voicesResponse -or [int] $voicesResponse.status_code -ne 200) { throw 'Irodori voice list request failed.' }
+                    $voices = @($voicesResponse.body.data)
+                    if ($voices.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string] $voices[0].id)) {
+                        $status = 'ready_without_voice'
+                    } else {
+                        $speechBody = [ordered]@{ model = 'irodori-tts'; input = 'Irodori startup check.'; voice = [string] $voices[0].id; response_format = 'wav'; speed = 1.0 }
+                        $speechResponse = & $invokeHttp 'POST' 'http://127.0.0.1:8088/v1/audio/speech' $speechBody
+                        if ($null -eq $speechResponse -or [int] $speechResponse.status_code -ne 200 -or -not (Test-IrodoriWaveBytes -Bytes $speechResponse.bytes)) {
+                            $status = 'warmup_failed'
+                        } else { $status = 'ready' }
+                    }
+                }
+            }
+        } catch [OperationCanceledException] { throw } catch [Management.Automation.PipelineStoppedException] { throw } catch {
+            $status = 'setup_failed'
+            if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'error' $_.Exception.Message } else { Write-Warning "Irodori setup failed; continuing without managed TTS: $($_.Exception.Message)" }
+        }
+
+        $appExitCode = & $runApp
+        return [pscustomobject]@{ status = $status; app_exit_code = [int] $appExitCode; backend = $backend }
+    } finally {
+        if ($null -ne $owned) {
+            $stopOwned = if ($Adapters.ContainsKey('StopOwnedProcess')) { $Adapters.StopOwnedProcess } else {
+                { param($Owned) Stop-ManagedProcessJob -Job $Owned -GraceSeconds 5 }
+            }
+            & $stopOwned $owned
+        }
+        foreach ($name in $managedEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }
+    }
+}
+
+Export-ModuleMember -Function Import-IrodoriManifest, Get-IrodoriLayout, Get-IrodoriBackend, Test-IrodoriCompletion, Invoke-IrodoriProvision, Test-IrodoriRuntimeReady, Invoke-IrodoriBootstrap

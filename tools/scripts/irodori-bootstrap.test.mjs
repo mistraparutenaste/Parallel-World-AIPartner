@@ -17,6 +17,10 @@ const manifestPath = path.join(
   "irodori",
   "windows-x86_64.json",
 );
+const bootstrapEntryPath = path.join(scriptDirectory, "irodori-bootstrap.ps1");
+const managedLauncherPath = path.join(repositoryRoot, "ParallelWorld_run.bat");
+const legacyLauncherPath = path.join(repositoryRoot, "ParallelWorld起動.bat");
+const directLauncherPath = path.join(repositoryRoot, "dev-up.bat");
 const powerShell = process.env.SystemRoot
   ? path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
   : "powershell.exe";
@@ -131,6 +135,70 @@ async function invokePowerShell(expression) {
       resolve(JSON.parse(stdout));
     });
   });
+}
+
+async function runBootstrapHarness(scenario) {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pw-irodori-bootstrap-"));
+  const needsCompletion = !["decline", "accept_success", "provision_failure"].includes(scenario);
+  const expression = `
+    $scenario = ${quotePowerShell(scenario)}
+    $root = ${quotePowerShell(root)}
+    $manifestPath = ${quotePowerShell(manifestPath)}
+    $manifest = Import-IrodoriManifest -Path $manifestPath
+    $layout = Get-IrodoriLayout -Root $root -ManifestVersion $manifest.manifest_version
+    if (${needsCompletion ? "$true" : "$false"}) {
+      [void][IO.Directory]::CreateDirectory($layout.runtime)
+      @{ schema_version = 1; manifest_version = $manifest.manifest_version; backend = 'cpu'; python_version = $manifest.python_version; completed_at = [DateTimeOffset]::UtcNow.ToString('o') } |
+        ConvertTo-Json -Compress | Set-Content -LiteralPath $layout.completion_marker -Encoding UTF8
+    }
+    $observations = [ordered]@{ prompt_calls = 0; prompt_text = ''; provision_calls = 0; start_calls = 0; stop_calls = 0; app_calls = 0; start_arguments = @(); start_environment = @{}; app_environment = @{} }
+    $adapters = @{
+      DetectGpuNames = { @('AMD Radeon RX 7900 XTX') }
+      TestRuntime = { param($Manifest, $Layout, $Backend, $RuntimeAdapters) return $scenario -notin @('decline', 'accept_success', 'provision_failure', 'broken_decline') }
+      PromptConsent = { param($Message) $observations.prompt_calls++; $observations.prompt_text = $Message; return $scenario -notin @('decline', 'broken_decline') }
+      Provision = {
+        param($Manifest, $Layout, $Backend, $ProvisionAdapters)
+        $observations.provision_calls++
+        if ($scenario -eq 'provision_failure') { throw 'fixture provisioning failed' }
+        return [pscustomobject]@{ status = if ($scenario -eq 'accept_success') { 'provisioned' } else { 'reused' }; runtime_path = $Layout.runtime; uv_path = (Join-Path $Layout.runtime 'tools\\uv\\uv.exe') }
+      }
+      TestPort = { param($Port) return $scenario -eq 'port_conflict' }
+      StartOwnedProcess = {
+        param($FilePath, $ArgumentList, $WorkingDirectory, $Environment)
+        $observations.start_calls++
+        $observations.start_arguments = @($ArgumentList)
+        $observations.start_environment = $Environment
+        return [pscustomobject]@{ fixture = 'owned' }
+      }
+      StopOwnedProcess = { param($Owned) $observations.stop_calls++ }
+      InvokeHttp = {
+        param($Method, $Uri, $Body)
+        if ($Uri -match '/health$') {
+          return [pscustomobject]@{ status_code = if ($scenario -eq 'port_conflict') { 503 } else { 200 }; body = $null; bytes = $null }
+        }
+        if ($Uri -match '/v1/audio/voices$') {
+          $data = if ($scenario -eq 'no_voice') { @() } else { @([pscustomobject]@{ id = 'fixture-voice' }) }
+          return [pscustomobject]@{ status_code = 200; body = [pscustomobject]@{ data = $data }; bytes = $null }
+        }
+        if ($Uri -match '/v1/audio/speech$') {
+          $bytes = if ($scenario -eq 'invalid_wav') { [Text.Encoding]::ASCII.GetBytes('not a wav') } else { [byte[]](82,73,70,70,0,0,0,0,87,65,86,69) }
+          return [pscustomobject]@{ status_code = 200; body = $null; bytes = $bytes }
+        }
+        throw "unexpected fixture URI: $Uri"
+      }
+      Sleep = { param($Milliseconds) }
+      RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
+      WriteProgress = { param($Stage, $Message) }
+    }
+    if ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
+    $result = Invoke-IrodoriBootstrap -ManifestPath $manifestPath -DataRoot $root -Adapters $adapters
+    [pscustomobject]@{ result = $result; observations = $observations }
+  `;
+  try {
+    return await invokePowerShell(expression);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 function fixtureArtifacts(serverZip) {
@@ -1195,4 +1263,115 @@ test("returns reused without downloading or rebuilding an idempotent provision",
   } finally {
     await cleanupHarness(result);
   }
+});
+
+test("continues app startup without network work when managed setup is declined", async () => {
+  const { result, observations } = await runBootstrapHarness("decline");
+  assert.equal(result.status, "declined");
+  assert.equal(observations.prompt_calls, 1);
+  assert.equal(observations.provision_calls, 0);
+  assert.equal(observations.start_calls, 0);
+  assert.equal(observations.app_calls, 1);
+  assert.equal(observations.app_environment.PW_TTS_ENGINE, "irodori");
+  assert.match(observations.prompt_text, /cpu/i);
+  assert.match(observations.prompt_text, /\d[\d,]* bytes/i);
+  assert.match(observations.prompt_text, /LocalAppData|保存先/i);
+  assert.match(observations.prompt_text, /MIT/);
+  assert.match(observations.prompt_text, /voice cloning|第三者.*音声/i);
+});
+
+test("provisions after consent and starts managed Irodori with pinned offline settings", async () => {
+  const { result, observations } = await runBootstrapHarness("accept_success");
+  assert.equal(result.status, "ready");
+  assert.equal(observations.prompt_calls, 1);
+  assert.equal(observations.provision_calls, 1);
+  assert.equal(observations.start_calls, 1);
+  assert.deepEqual(observations.start_arguments, [
+    "run", "--no-sync", "python", "-m", "irodori_openai_tts",
+    "--host", "127.0.0.1", "--port", "8088",
+  ]);
+  assert.equal(observations.start_environment.IRODORI_COMPILE_MODEL, "false");
+  assert.equal(observations.start_environment.HF_HUB_OFFLINE, "1");
+  assert.equal(observations.start_environment.TRANSFORMERS_OFFLINE, "1");
+  assert.equal(observations.app_environment.PW_TTS_ENGINE, "irodori");
+  assert.match(observations.app_environment.PW_IRODORI_DIR, /server$/i);
+  assert.equal(observations.app_calls, 1);
+  assert.equal(observations.stop_calls, 1);
+});
+
+test("degrades to app startup when provisioning fails", async () => {
+  const { result, observations } = await runBootstrapHarness("provision_failure");
+  assert.equal(result.status, "setup_failed");
+  assert.equal(observations.provision_calls, 1);
+  assert.equal(observations.start_calls, 0);
+  assert.equal(observations.app_calls, 1);
+  assert.equal(observations.app_environment.PW_TTS_ENGINE, "irodori");
+});
+
+test("reuses a completed environment without prompting", async () => {
+  const { result, observations } = await runBootstrapHarness("reuse");
+  assert.equal(result.status, "ready");
+  assert.equal(observations.prompt_calls, 0);
+  assert.equal(observations.provision_calls, 1);
+  assert.equal(observations.start_calls, 1);
+  assert.equal(observations.app_calls, 1);
+});
+
+test("prompts before any repair download when a completion-marked runtime is broken", async () => {
+  const { result, observations } = await runBootstrapHarness("broken_decline");
+  assert.equal(result.status, "declined");
+  assert.equal(observations.prompt_calls, 1);
+  assert.equal(observations.provision_calls, 0);
+  assert.equal(observations.start_calls, 0);
+  assert.equal(observations.app_calls, 1);
+});
+
+test("reports ready_without_voice and still starts the app", async () => {
+  const { result, observations } = await runBootstrapHarness("no_voice");
+  assert.equal(result.status, "ready_without_voice");
+  assert.equal(observations.start_calls, 1);
+  assert.equal(observations.app_calls, 1);
+  assert.equal(observations.stop_calls, 1);
+});
+
+test("accepts only RIFF/WAVE warm-up audio", async () => {
+  const valid = await runBootstrapHarness("valid_wav");
+  const invalid = await runBootstrapHarness("invalid_wav");
+  assert.equal(valid.result.status, "ready");
+  assert.equal(invalid.result.status, "warmup_failed");
+  assert.equal(valid.observations.app_calls, 1);
+  assert.equal(invalid.observations.app_calls, 1);
+});
+
+test("does not claim a pre-open non-Irodori port", async () => {
+  const { result, observations } = await runBootstrapHarness("port_conflict");
+  assert.equal(result.status, "port_conflict");
+  assert.equal(observations.start_calls, 0);
+  assert.equal(observations.stop_calls, 0);
+  assert.equal(observations.app_calls, 1);
+});
+
+test("preserves an explicit Aivis override without Irodori setup or startup", async () => {
+  const { result, observations } = await runBootstrapHarness("aivis_override");
+  assert.equal(result.status, "external_engine");
+  assert.equal(observations.prompt_calls, 0);
+  assert.equal(observations.provision_calls, 0);
+  assert.equal(observations.start_calls, 0);
+  assert.equal(observations.app_environment.PW_TTS_ENGINE, "aivis");
+  assert.equal(observations.app_calls, 1);
+});
+
+test("only the managed launcher calls the Irodori bootstrap entry", async () => {
+  const [entryExists, managed, direct, legacyExists] = await Promise.all([
+    pathExists(bootstrapEntryPath),
+    readFile(managedLauncherPath, "latin1").catch(() => ""),
+    readFile(directLauncherPath, "latin1"),
+    pathExists(legacyLauncherPath),
+  ]);
+  assert.equal(entryExists, true);
+  assert.match(managed, /irodori-bootstrap\.ps1/i);
+  assert.doesNotMatch(managed, /-File "tools\\scripts\\dev-up\.ps1"/i);
+  assert.match(direct, /-File "tools\\scripts\\dev-up\.ps1"/i);
+  assert.doesNotMatch(direct, /irodori-bootstrap\.ps1/i);
+  assert.equal(legacyExists, false);
 });

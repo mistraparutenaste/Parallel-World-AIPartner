@@ -24,7 +24,7 @@ echo.
 echo ビルド確認 OK
 echo.
 echo ===== [3/3] TTSエンジン確認とアプリ起動 =====
-powershell -NoProfile -ExecutionPolicy Bypass -File "tools\scripts\dev-up.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "tools\scripts\irodori-bootstrap.ps1"
 echo.
 echo アプリが終了しました。
 pause
