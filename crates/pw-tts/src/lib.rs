@@ -2,6 +2,7 @@
 
 mod aivis;
 mod cache;
+mod irodori;
 mod synthesizer;
 
 pub use aivis::{
@@ -9,4 +10,5 @@ pub use aivis::{
     UserDictWord,
 };
 pub use cache::{DEFAULT_MAX_ENTRIES, WavCache, WavCacheClearError, WavCacheStats, cache_key};
+pub use irodori::IrodoriTtsClient;
 pub use synthesizer::CachedSpeechSynthesizer;
