@@ -8,7 +8,7 @@
 
 | 検証 | 結果 | 証拠 / gate |
 | --- | --- | --- |
-| `node --test tools/scripts/*.test.mjs` | PASS | 132 passed、0 failed、外部service接続なし |
+| `node --test tools/scripts/*.test.mjs` | PASS | 138 passed、0 failed、外部service接続なし |
 | `corepack pnpm test` | BLOCKED | 依存`@tauri-apps/api@2.11.1`と`@tauri-apps/plugin-dialog@2.7.1`のcache不足。registry取得が`EACCES` / `fetch failed`で停止し、test本体は未開始 |
 | `corepack pnpm typecheck` | BLOCKED | 同上。typecheck本体は未開始 |
 | `corepack pnpm build` | BLOCKED | 同上。build本体は未開始 |
@@ -27,6 +27,7 @@ BLOCKED項目はコード失敗として扱わない一方、PASSとも扱わな
 - supply contract: manifestが8 direct artifactsのsize/SHA-256を固定。MinGit `2.54.0.windows.1`（`39,989,839` bytes、SHA-256 `04f937e1f0918b17b9be6f2294cb2bb66e96e1d9832d1c298e2de088a1d0e668`、GPL-2.0-only）は構築時の固定git dependency解決だけに使い、system Gitを参照しない。検証済みuv `0.11.29`と`UV_PYTHON_CPYTHON_BUILD=20260510`がuv内蔵metadata/checksumからmanaged CPython buildを選択し、検証済みserver archive内`uv.lock`と`uv sync --frozen`がdependencyを固定
 - reuse/runtime contract: completion markerは`python_build=20260510`まで厳密照合する。再検証と通常起動はmanaged Python限定、Python download禁止、Hugging Face/transformers/uv offlineとし、欠損環境からsystem Pythonやnetworkへfallbackしない
 - offline script testsは、hash/size不一致、HTTPS downgrade、危険なZIP、reparse point、transaction recovery、user voice/LoRA保持、外部TTS/LLM保持、owned process tree cleanupをfixtureで検証
+- managed Git testsは、親processのGit config、credential/askpass、SSH、proxy、`GIT_EXEC_PATH`をsyncへ継承しないこと、sync中の`PATH`がmanaged `tools\git\cmd`だけであること、managed `git.exe`が欠損・改変された場合に後続のsystem Gitを実行せずfail closedすること、終了後に親環境を復元することを検証
 
 ## 実環境ゲート（未実施）
 

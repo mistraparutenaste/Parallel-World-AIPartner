@@ -66,7 +66,7 @@ uv python install 3.10.20
 uv sync --frozen --extra <backend> --python 3.10.20 --managed-python
 ```
 
-system Python、system Git、repository-local venvは使いません。構築用MinGitも他の成果物と同じくmanaged root内へ配置し、system PATHのGitは参照しません。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
+system Python、system Git、repository-local venvは使いません。構築用MinGitも他の成果物と同じくmanaged root内へ配置し、sync中の`PATH`をmanaged `tools\git\cmd`だけに限定します。親processのGit config、credential/askpass、SSH、proxy、`GIT_EXEC_PATH`は継承せず、managed `git.exe`が欠損または検証結果と異なる場合はsystem Gitへfallbackせず失敗します。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
 
 uv/Python/environmentの保存先と外部設定の影響をmanaged root内へ限定するため、`UV_PYTHON_CPYTHON_BUILD`、`UV_PYTHON_INSTALL_DIR`、`UV_PROJECT_ENVIRONMENT`、`UV_CACHE_DIR`、`HF_HOME`、`UV_NO_SYSTEM_CONFIG=1`、`PYTHONDONTWRITEBYTECODE=1`を構築・再検証・起動へ渡します。再検証と通常起動はさらに`UV_MANAGED_PYTHON=1`、`UV_PYTHON_DOWNLOADS=never`、`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`を設定し、`uv run --no-sync --managed-python --no-python-downloads --offline`でsystem Pythonへのfallbackと暗黙downloadを拒否します。
 
