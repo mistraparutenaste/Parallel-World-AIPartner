@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 
 `dev-up.ps1`は既定でAivisSpeechを`127.0.0.1:10101`、LLMを`127.0.0.1:1234`で確認します。`PW_TTS_ENGINE`、`PW_TTS_PORT`、`PW_LLM_PORT`、`PW_AIVIS_ENGINE`で変更できます。Irodoriのopt-in起動は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。アプリ本体のLLM初期値は`http://127.0.0.1:8080/v1`なので、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
 
-Windowsで`ParallelWorld_run.bat`を使う場合は、managed Irodori環境を`%LOCALAPPDATA%\com.parallelworld.desktop\irodori`で確認し、未構築または破損時だけ構築するか尋ねます。リポジトリ内やsystem Pythonへ環境は作りません。外部のuser-managed Irodoriを使う場合は`PW_TTS_ENGINE`と`PW_IRODORI_DIR`を設定して`dev-up.ps1`を直接起動します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
+Windowsで`ParallelWorld_run.bat`を使う場合は、managed Irodori環境を`%LOCALAPPDATA%\com.parallelworld.desktop\irodori`で確認し、未構築または破損時だけ構築するか尋ねます。固定downloadは約2.51 GB、構築に要求する保守的な空き容量は`17,896,221,662` bytesです。リポジトリ内やsystem Pythonへ環境は作りません。BATはpause後もアプリ・cancel・errorの終了コードを保持します。外部のuser-managed Irodoriを使う場合は`PW_TTS_ENGINE`と`PW_IRODORI_DIR`を設定して`dev-up.ps1`を直接起動します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
 ## 外部モデルとサービス
 

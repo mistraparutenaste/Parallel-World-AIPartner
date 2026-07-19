@@ -2,15 +2,13 @@
 
 **記録日:** 2026-07-19
 
-**対象commit:** `65287de`以降のTask 5 documentation
-
 **方針:** 通常検証では外部networkの利用を許可せず、実Irodori server、実voice、managed Python/model環境を使用しない。実環境検証は話者同意と明示的opt-inの後に別途行う。
 
 ## 自動検証の実測
 
 | 検証 | 結果 | 証拠 / gate |
 | --- | --- | --- |
-| `node --test tools/scripts/*.test.mjs` | PASS | 118 passed、0 failed、外部service接続なし |
+| `node --test tools/scripts/*.test.mjs` | PASS | 132 passed、0 failed、外部service接続なし |
 | `corepack pnpm test` | BLOCKED | 依存`@tauri-apps/api@2.11.1`と`@tauri-apps/plugin-dialog@2.7.1`のcache不足。registry取得が`EACCES` / `fetch failed`で停止し、test本体は未開始 |
 | `corepack pnpm typecheck` | BLOCKED | 同上。typecheck本体は未開始 |
 | `corepack pnpm build` | BLOCKED | 同上。build本体は未開始 |
@@ -23,8 +21,10 @@ BLOCKED項目はコード失敗として扱わない一方、PASSとも扱わな
 
 追加のread-only確認:
 
-- `ParallelWorld_run.bat`: 1,149 bytes、SHA-256 `504419b7decc820e2ec465b4e5122a1928b5f9266575ee374e330f4347087784`、CP932 decode/encodeのbyte round-trip一致
-- manifest: schema `1`、version `2026-07-19.1`、Python `3.10.20`、backend `cpu|cu128`、7 artifacts、合計`2,505,659,887` bytes
+- `ParallelWorld_run.bat`: 1,223 bytes、SHA-256 `d0b49500767c474a49968c904cd91127e5d2f4627be431d4ce9fe25aedfd87f7`、CP932 decode/encodeのbyte round-trip一致
+- launcher tests: Irodori defaultのASCII commentと、pause後の終了コード`7` / `130` / `1`、build failure `1`を確認
+- manifest: schema `1`、version `2026-07-19.1`、Python `3.10.20`、`python_build=20260510`、`environment_reserve_bytes=12,884,901,888`、backend `cpu|cu128`、7 direct artifacts合計`2,505,659,887` bytes、必要空き容量`17,896,221,662` bytes
+- supply contract: manifestが7 direct artifactsのsize/SHA-256を固定。検証済みuv `0.11.29`と`UV_PYTHON_CPYTHON_BUILD=20260510`がuv内蔵metadata/checksumからmanaged CPython buildを選択し、検証済みserver archive内`uv.lock`と`uv sync --frozen`がdependencyを固定
 - offline script testsは、hash/size不一致、HTTPS downgrade、危険なZIP、reparse point、transaction recovery、user voice/LoRA保持、外部TTS/LLM保持、owned process tree cleanupをfixtureで検証
 
 ## 実環境ゲート（未実施）
@@ -39,7 +39,7 @@ BLOCKED項目はコード失敗として扱わない一方、PASSとも扱わな
 
 ## 明示opt-in後に使うコマンド
 
-次のコマンドはこのTaskでは実行していない。voiceの権利・話者同意を確認し、実network downloadと約7.16 GBのpeak空き容量を許可できる隔離環境でのみ実行する。
+次のコマンドはこのTaskでは実行していない。voiceの権利・話者同意を確認し、実network downloadと`17,896,221,662` bytes以上の空き容量を許可できる隔離環境でのみ実行する。
 
 ```powershell
 $env:PW_IRODORI_ACCEPT_REAL = '1'
@@ -57,7 +57,7 @@ $env:PW_IRODORI_VOICE = 'consented-sample'
 cargo test -p pw-tts --test real_engine irodori_voices_then_short_synthesis_produces_wav_and_records_latency -- --ignored --exact --nocapture
 ```
 
-このtestはvoice一覧、短文合成、RIFF/WAVE header、decode可能なPCM sample、latency記録を確認する。計画に例示されていた`irodori_real_server_synthesizes_installed_voice`というtestは現行sourceに存在しないため使用しない。
+このtestはvoice一覧、短文合成、RIFF/WAVE header、decode可能なPCM sample、latency記録を確認する。コマンドは現行sourceに存在するignored test名へ一致させる。
 
 ## 合格条件
 

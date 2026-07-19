@@ -11,7 +11,7 @@ Windows x86_64でリポジトリルートの`ParallelWorld_run.bat`を実行す�
 managed環境がない、壊れている、またはbackendが変わった場合は、ネットワーク接続前に次の情報を表示して`Y` / `N`を確認します。
 
 - 選択backend（NVIDIA GPUは`cu128`、Radeon・Intel・不明なGPUは`cpu`）
-- direct download合計`2,505,659,887` bytesと、保守的なpeak空き容量見積り`7,158,803,422` bytes
+- direct download合計`2,505,659,887` bytesと、構築用reserve `12,884,901,888` bytesを含む必要空き容量`17,896,221,662` bytes
 - 保存先、ライセンス、音声クローニングに関する注意
 
 `N`は構築せず、TTSを縮退させてアプリ起動を続行します。次回BAT起動時に再確認します。構築失敗時もcompletion markerを公開せず、次回起動でrepairを再確認します。構築中のCtrl+Cはsetupをcancelし、アプリを起動しません。
@@ -54,7 +54,9 @@ manifestは各成果物のHTTPS URL、install先、bytes、SHA-256、ライセ�
 | Sarashina tokenizer config | 同上 | 3,777 | MIT |
 | Sarashina model config | 同上 | 657 | MIT |
 
-CPythonはuv-managedの`3.10.20`へ固定し、server dependencyはupstreamのlockfileから次の引数で構築します。`<backend>`は`cpu`または`cu128`の一方です。
+manifestが直接size/SHA-256を検証する範囲は上表の7成果物です。CPython archive自体のSHA-256をmanifestへ重複記載しているわけではありません。検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡すことで、uv binaryに埋め込まれたmanaged-Python metadata/checksumからCPython `3.10.20`のbuildを選択します。server archive内の検証済み`uv.lock`と`uv sync --frozen`がdependencyの固定version/hashを使用します。これはuv公式の[Python environment variables](https://docs.astral.sh/uv/configuration/environment/)と[`--frozen` sync](https://docs.astral.sh/uv/concepts/projects/sync/#locking-and-syncing)の契約に沿うものです。
+
+実行する引数は次のとおりです。`<backend>`は`cpu`または`cu128`の一方です。
 
 ```text
 uv python install 3.10.20
@@ -63,11 +65,17 @@ uv sync --frozen --extra <backend> --python 3.10.20 --managed-python
 
 system Python、system Git、repository-local venvは使いません。詳細なURL・SHA-256・license URLは[`windows-x86_64.json`](../../content/runtime-manifests/irodori/windows-x86_64.json)が唯一の実行時contractです。
 
+uv/Python/environmentの保存先と外部設定の影響をmanaged root内へ限定するため、`UV_PYTHON_CPYTHON_BUILD`、`UV_PYTHON_INSTALL_DIR`、`UV_PROJECT_ENVIRONMENT`、`UV_CACHE_DIR`、`HF_HOME`、`UV_NO_SYSTEM_CONFIG=1`、`HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`、`PYTHONDONTWRITEBYTECODE=1`を構築・再検証・起動へ渡します。
+
+downloadはCtrl+C cancellationを受け付け、1回のstream readが既定30秒を超えるとtimeoutとして失敗します。partial fileと未完了transactionはcompletionとして公開しません。promptとerrorには`%LOCALAPPDATA%`相対または固定ラベルの安全なpathだけを表示し、ユーザー名を含む完全pathや例外詳細を出しません。
+
 ### 起動状態と終了処理
 
-`/health`の後にvoice一覧を確認します。voiceが0件なら`ready_without_voice`としてアプリを起動し、`user\voices`への配置を案内します。voiceがあれば短いRIFF/WAVE warm-upを行い、失敗時は`warmup_failed`としてTTSのみ縮退させます。
+`/health`の後にvoice一覧を確認します。voiceが0件なら`ready_without_voice`としてアプリを起動し、`user\voices`への配置を案内します。voice一覧・音声合成・RIFF/WAVE検証の通常エラーは`warmup_failed`としてTTSのみ縮退させます。Ctrl+C cancellationとPowerShell pipeline停止は縮退へ変換せず上位へ伝播します。
 
-このBAT sessionが起動したIrodoriまたはAivisSpeechだけをWindows Job Objectで所有し、アプリ終了時にそのprocess treeだけを停止します。起動前からportを使用していた外部TTSは所有・停止しません。LLMはユーザー管理のため起動も停止もせず、STTはTauri process内で動作してアプリ終了とともに解放されます。
+このBAT sessionが起動したIrodoriまたはAivisSpeechだけをWindows Job Objectへ割り当てます。終了時は記録identityに合うrootへgraceful stopを試みた後、Job Objectをauthoritative ownership boundaryとして残存descendantを終了します。rootが先に終了していてもowned descendantは残しません。起動前からportを使用していた外部TTSはJobへ割り当てないため停止しません。LLMはユーザー管理のため起動も停止もせず、STTはTauri process内で動作してアプリ終了とともに解放されます。
+
+`ParallelWorld_run.bat`はpause後もbootstrapの終了コードを保持します。アプリの終了コード（test fixtureでは`7`）、cancelの`130`、予期しないbootstrap errorまたはbuild failureの`1`を呼出元へ返します。
 
 ## B. 外部のuser-managed Irodoriを使う
 

@@ -72,6 +72,8 @@ Assert the production manifest contains these exact direct artifacts:
   "schema_version": 1,
   "manifest_version": "2026-07-19.1",
   "python_version": "3.10.20",
+  "python_build": "20260510",
+  "environment_reserve_bytes": 12884901888,
   "artifacts": [
     {
       "id": "uv-windows-x86_64",
@@ -213,7 +215,7 @@ Execute only the verified managed `uv.exe` with argument arrays:
 & $uv sync --frozen --extra $Backend --python 3.10.20 --managed-python
 ```
 
-Set `UV_PYTHON_INSTALL_DIR`, `UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`, `HF_HOME`, and `UV_NO_SYSTEM_CONFIG=1` under the managed root. Place model, codec, and tokenizer at manifest paths. Build the Hugging Face tokenizer cache at `hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\5fb086c49f49824cfc93f09cc4ed5cd5917bef3d` and write `refs\main` with that exact revision; set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` for verification and runtime.
+Set `UV_PYTHON_CPYTHON_BUILD=20260510`, `UV_PYTHON_INSTALL_DIR`, `UV_PROJECT_ENVIRONMENT`, `UV_CACHE_DIR`, `HF_HOME`, `UV_NO_SYSTEM_CONFIG=1`, and `PYTHONDONTWRITEBYTECODE=1` under the managed root. The verified uv binary's embedded managed-Python metadata/checksum selects CPython 3.10.20 build 20260510; the manifest does not duplicate the Python archive SHA. The verified server archive contains `uv.lock`, and `uv sync --frozen` consumes that dependency lock/hash contract. Place model, codec, and tokenizer at manifest paths. Build the Hugging Face tokenizer cache at `hub\models--sbintuitions--sarashina2.2-0.5b\snapshots\5fb086c49f49824cfc93f09cc4ed5cd5917bef3d` and write `refs\main` with that exact revision; set `HF_HUB_OFFLINE=1` and `TRANSFORMERS_OFFLINE=1` for verification and runtime.
 
 Verify `uv run --no-sync python -c` can import `irodori_openai_tts`, confirm the exact checkpoint/codec/tokenizer files and hashes again, then atomically replace `complete.json`. Do not require a voice at provisioning time.
 
@@ -351,7 +353,7 @@ Expected: FAIL because entry and launcher integration do not exist.
 
 - [x] **Step 3: Implement interactive flow**
 
-Prompt before network access with backend, exact direct-download bytes plus a conservative environment/peak-space estimate, LocalAppData path, MIT licenses, and voice cloning warning. Choices are `Y` and `N`; `N` continues to the app and prompts again next BAT launch.
+Prompt before network access with backend, exact direct-download bytes (`2,505,659,887`) plus manifest reserve and conservative required free space (`17,896,221,662`), redacted LocalAppData path, MIT licenses, and voice cloning warning. Choices are `Y` and `N`; `N` continues to the app and prompts again next BAT launch. Downloads accept Ctrl+C cancellation and apply a 30-second default timeout to each stream read.
 
 On a ready environment, prepend managed uv to this process's `PATH`, set `PW_IRODORI_DIR`, preserve an explicitly supplied `PW_TTS_ENGINE`, and otherwise set it to `irodori`. Invoke `dev-up.ps1` in the same PowerShell process so environment and process ownership are scoped to this BAT session.
 
@@ -361,7 +363,7 @@ Start managed Irodori with:
 uv run --no-sync python -m irodori_openai_tts --host 127.0.0.1 --port 8088
 ```
 
-Set `IRODORI_CHECKPOINT`, `IRODORI_CODEC_REPO`, `IRODORI_VOICES_DIR`, `IRODORI_COMPILE_MODEL=false`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. `/health` success is required. List voices; if empty, return `ready_without_voice`. If a voice exists, perform current RIFF/WAVE warm-up.
+Set `IRODORI_CHECKPOINT`, `IRODORI_CODEC_REPO`, `IRODORI_VOICES_DIR`, `IRODORI_COMPILE_MODEL=false`, `HF_HUB_OFFLINE=1`, and `TRANSFORMERS_OFFLINE=1`. `/health` success is required. List voices; if empty, return `ready_without_voice`. Voice-list, synthesis, or WAV validation errors become `warmup_failed`; cancellation and pipeline stop propagate. The launcher preserves the bootstrap/app exit code after `pause` (`7`, `130`, and `1` are covered by tests).
 
 - [x] **Step 4: Apply minimal launcher replacement**
 
@@ -414,14 +416,14 @@ Record commands that require explicit environment preparation:
 $env:PW_IRODORI_ACCEPT_REAL = '1'
 $env:PW_IRODORI_VOICE = 'consented-sample'
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/scripts/irodori-bootstrap.ps1
-cargo test -p pw-tts --test real_engine irodori_real_server_synthesizes_installed_voice -- --ignored --exact --nocapture
+cargo test -p pw-tts --test real_engine irodori_voices_then_short_synthesis_produces_wav_and_records_latency -- --ignored --exact --nocapture
 ```
 
 The acceptance document must leave clean-VM provisioning, real CUDA/CPU latency, real audio, and Ctrl+C/crash Job cleanup as unchecked until actually run.
 
 - [ ] **Step 3: Run complete automated verification**
 
-2026-07-19実測: offline script tests 118/118と`cargo fmt`、`git diff --check`はPASS。pnpm 3コマンドは2つのnpm package cache不足、Rust clippy/testは`sherpa-onnx-sys` native archive cache不足のため、外部取得禁止環境ではBLOCKED。詳細は[`irodori-bootstrap-acceptance.md`](../../development/irodori-bootstrap-acceptance.md)を参照。未実行項目をPASSとは扱わない。
+2026-07-19実測: offline script tests 132/132と`cargo fmt`、`git diff --check`はPASS。pnpm 3コマンドは2つのnpm package cache不足、Rust clippy/testは`sherpa-onnx-sys` native archive cache不足のため、外部取得禁止環境ではBLOCKED。詳細は[`irodori-bootstrap-acceptance.md`](../../development/irodori-bootstrap-acceptance.md)を参照。未実行項目をPASSとは扱わない。
 
 Run:
 

@@ -27,7 +27,7 @@
 4. 同意時は固定manifestに従ってruntimeとmodelを取得・検証・構築する。
 5. Irodori serverをloopback限定で起動し、healthとvoice listを確認する。voiceがある場合だけ短文WAV warm-upも確認する。
 6. Parallel Worldをforegroundで起動する。
-7. Parallel World終了後、この起動セッションが開始したSTT/TTS関連processだけを停止する。外部起動済みTTSとLLMは残す。
+7. Parallel World終了後、この起動セッションが開始したTTS processだけを停止する。STTはTauri process内で解放し、外部起動済みTTSとLLMは残す。
 
 ## Managed Environment
 
@@ -35,7 +35,7 @@ Irodori環境はrepository内ではなく、`%LOCALAPPDATA%\com.parallelworld.de
 
 参照音声とLoRAはmanaged runtimeとは別directoryに置き、runtimeの修復・更新・削除対象に含めない。Dynamic LoRAを有効にするため、managed serverは常に `IRODORI_COMPILE_MODEL=false` で起動する。
 
-system Python、Git、repository-local virtual environmentは使用しない。portable `uv`、server archive、Python、dependency lock、model、codec、`sbintuitions/sarashina2.2-0.5b` tokenizerは固定versionまたはrevisionとSHA-256をmanifestで管理する。起動時はHugging Faceをoffline modeにし、manifest外の暗黙downloadを拒否する。
+system Python、Git、repository-local virtual environmentは使用しない。manifestはportable `uv`、server archive、model、codec、`sbintuitions/sarashina2.2-0.5b` tokenizerの7直接取得物をsize/SHA-256で固定する。CPython archiveのSHAをmanifestへ重複記載せず、検証済みuv `0.11.29`へ`UV_PYTHON_CPYTHON_BUILD=20260510`を渡し、uv binary内蔵のmanaged-Python metadata/checksumからCPython `3.10.20` buildを選択する。dependencyは検証済みserver archive内の`uv.lock`と`uv sync --frozen`で固定する。起動時はHugging Faceをoffline modeにし、未固定revisionからの暗黙downloadを拒否する。
 
 ## Windows Backend Selection
 
@@ -46,7 +46,7 @@ backendは自動検出した推奨値を確認画面へ表示する。対応状�
 
 ## Bootstrap Manifest Contract
 
-`content/runtime-manifests/irodori/windows-x86_64.json` は、Windows x86_64 の直接取得物、サイズ、SHA-256、導入先相対パス、ライセンスIDおよび上流ライセンスURLを固定する。schema version は `1`、manifest version は `2026-07-19.1`、Python は `3.10.20`、backend は `cpu` と `cu128` のみとする。
+`content/runtime-manifests/irodori/windows-x86_64.json` は、Windows x86_64 の7直接取得物、サイズ、SHA-256、導入先相対パス、ライセンスIDおよび上流ライセンスURLを固定する。schema version は `1`、manifest version は `2026-07-19.1`、Python は `3.10.20`、`python_build`は`20260510`、`environment_reserve_bytes`は`12,884,901,888`、backendは`cpu`と`cu128`のみとする。直接取得物は合計`2,505,659,887` bytesで、開始前に要求する保守的な空き容量は`(direct artifacts × 2) + environment reserve = 17,896,221,662` bytesとする。これは事前チェック値であり、全環境での最大使用量を保証する上限ではない。
 
 bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`、`Get-IrodoriBackend`、`Test-IrodoriCompletion -ExpectedBackend <cpu|cu128>` とする。既定layout rootは `%LOCALAPPDATA%\com.parallelworld.desktop\irodori` であり、`runtime/<manifest-version>`、`cache/downloads`、`transactions`、`user/voices`、`user/loras` を返す。completion marker は `runtime/<manifest-version>/completion.json` に置き、`schema_version`、manifest、Python、および選択済み`ExpectedBackend`まで完全一致した場合だけ有効とする。
 
@@ -55,7 +55,8 @@ bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`�
 - HTTPSだけを許可し、redirect後のURLも検証する。
 - download sizeとSHA-256を検証してから展開する。
 - archive traversal、absolute path、symlink、hardlink、Windows reparse pointを拒否する。
-- download、展開、environment構築、model配置、warm-upに必要な最大空き容量を開始前に確認する。
+- download、展開、environment構築、model配置に必要な保守的空き容量を開始前に確認する。これは最大使用量の保証ではない。
+- downloadはCtrl+C cancellationを受け付け、各stream readに既定30秒のtimeoutを設ける。
 - incomplete環境にはcompletion markerを作らない。
 - 同じmanifest versionの完成済み環境だけを再利用する。
 - 新環境はversioned final pathで構築し、検証成功後にactive markerをatomic更新する。
@@ -66,23 +67,23 @@ bootstrap の純粋な契約は `Import-IrodoriManifest`、`Get-IrodoriLayout`�
 
 bootstrap sessionは、自身が起動したprocessのsession GUID、PID、process start time、canonical executable pathを保持する。
 
-- Irodori、bootstrap中の`uv`/Python、アプリ管理のAivisSpeechはprocess tree単位で停止する。
+- managed Irodori serverとアプリ管理のAivisSpeechはprocess tree単位で停止する。
 - アプリ内STT worker、queue、audio deviceは通常のTauri shutdownで解放する。
 - 起動前から存在したIrodori/AivisSpeech、同名の無関係process、LLM serverは停止しない。
 - port競合時は未知processを終了またはmanaged serverとして採用しない。
-- 通常終了ではgraceful stopを試み、期限後にowned process treeだけを強制終了する。
+- 通常終了ではidentityが一致するrootへgraceful stopを試み、期限後はJob Objectをauthoritative boundaryとして、rootが既に終了していてもowned descendantsだけを強制終了する。
 
 ## User Interaction
 
 `ParallelWorld_run.bat`は、呼出元が`PW_TTS_ENGINE`を設定していない場合だけ`irodori`を選ぶ。従来の`dev-up.bat`と`dev-up.ps1`の既定`aivis`は変更しない。
 
-未構築時の確認には、検出backend、download容量、必要最大空き容量、保存先、主要ライセンス、voice cloningと第三者音声利用上の注意を表示する。
+未構築時の確認には、検出backend、download容量、必要な保守的空き容量、redacted保存先、主要ライセンス、voice cloningと第三者音声利用上の注意を表示する。
 
 選択肢は「構築する」と「今回はしない」とする。「今回はしない」は恒久設定にせず、環境がない場合は次回のBAT起動時に再度確認する。構築中はstageと進捗をconsoleへ表示し、キャンセルを受け付ける。
 
 ## Failure Behavior
 
-環境検査、download、構築、server起動、warm-upの失敗はアプリ全体を停止させない。安全な短いエラーを表示してTTSを縮退させ、Parallel Worldの起動を続行する。voiceが0件の場合は構築失敗にせず`ready_without_voice`として配置先を案内する。credential、authorization header、環境変数全体、ユーザーファイルの完全pathはログへ出力しない。
+環境検査、download、構築、server起動の通常失敗はアプリ全体を停止させない。voice一覧・合成・WAV判定の通常失敗は`warmup_failed`としてTTSを縮退させ、Parallel Worldの起動を続行する。voiceが0件の場合は構築失敗にせず`ready_without_voice`として配置先を案内する。Ctrl+C cancellationとpipeline停止は上位へ伝播する。credential、authorization header、環境変数全体、ユーザーファイルの完全path、例外詳細はログへ出力しない。BATはpause後もbootstrapの終了コードを保持する。
 
 ## Verification
 
