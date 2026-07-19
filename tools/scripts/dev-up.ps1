@@ -14,6 +14,7 @@
 #   PW_AIVIS_ENGINE    AivisSpeech Engine実行ファイルのフルパス（自動検出を上書き）
 #   PW_IRODORI_DIR     ユーザーが別途セットアップしたIrodori-TTS-Serverディレクトリ
 #   PW_IRODORI_VOICE   warm-upに使うvoice ID（省略時はvoices APIの先頭）
+#   PW_IRODORI_SKIP_WARMUP  bootstrapが検証済みの場合のみ1
 
 $ErrorActionPreference = 'Stop'
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
@@ -99,6 +100,7 @@ $ttsEngine = (Get-EnvOrDefault 'PW_TTS_ENGINE' 'aivis').ToLowerInvariant()
 $defaultTtsPort = if ($ttsEngine -eq 'irodori') { '8088' } else { '10101' }
 $ttsPort = [int](Get-EnvOrDefault 'PW_TTS_PORT' $defaultTtsPort)
 $llmPort = [int](Get-EnvOrDefault 'PW_LLM_PORT' '1234')
+$skipIrodoriWarmUp = (Get-EnvOrDefault 'PW_IRODORI_SKIP_WARMUP' '0') -eq '1'
 $ttsJob = $null
 $appExitCode = 0
 $appInvoked = $false
@@ -158,7 +160,11 @@ try {
     } elseif ($ttsEngine -eq 'irodori') {
     if (Test-IrodoriHealth $ttsPort) {
         Write-Host "[TTS] Irodori-TTS Server: 起動済み (port $ttsPort)" -ForegroundColor Green
-        Invoke-IrodoriWarmUp $ttsPort
+        if ($skipIrodoriWarmUp) {
+            Write-Host '[TTS] Irodori-TTS warm-up: bootstrapで検証済み' -ForegroundColor Green
+        } else {
+            Invoke-IrodoriWarmUp $ttsPort
+        }
     } elseif (Test-Port $ttsPort) {
         Write-Host "[TTS] Irodori-TTS以外のlistenerがport ${ttsPort}を使用中です。外部processは管理せず、読み上げは縮退動作になります。" -ForegroundColor Yellow
     } else {
@@ -184,7 +190,11 @@ try {
                 }
                 if (Test-IrodoriHealth $ttsPort) {
                     Write-Host "[TTS] Irodori-TTS Serverの起動を確認しました (port $ttsPort)" -ForegroundColor Green
-                    Invoke-IrodoriWarmUp $ttsPort
+                    if ($skipIrodoriWarmUp) {
+                        Write-Host '[TTS] Irodori-TTS warm-up: bootstrapで検証済み' -ForegroundColor Green
+                    } else {
+                        Invoke-IrodoriWarmUp $ttsPort
+                    }
                 }
             } catch {
                 $startError = $_.Exception.Message

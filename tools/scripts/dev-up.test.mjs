@@ -100,20 +100,21 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-async function startHttpListenerProcess(temp) {
+async function startHttpListenerProcess(temp, { healthy = false } = {}) {
   const probe = await listenOnLoopback();
   const port = probe.address().port;
   await closeServer(probe);
   const helperPath = path.join(temp, "http-listener.mjs");
   const marker = path.join(temp, "http-listener-ready.txt");
+  const requestLog = path.join(temp, "http-listener-requests.txt");
   await writeFile(
     helperPath,
-    `import http from "node:http"; import { writeFileSync } from "node:fs"; const server = http.createServer((_request, response) => { response.statusCode = 503; response.end("not irodori"); }); server.listen(${port}, "127.0.0.1", () => writeFileSync(${JSON.stringify(marker)}, "ready"));`,
+    `import http from "node:http"; import { appendFileSync, writeFileSync } from "node:fs"; const server = http.createServer((request, response) => { appendFileSync(${JSON.stringify(requestLog)}, request.method + " " + request.url + "\\n"); if (${healthy ? "true" : "false"} && request.url === "/health") { response.statusCode = 200; response.end("ok"); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/voices") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "fixture" }] })); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/speech") { response.setHeader("content-type", "audio/wav"); response.end(Buffer.from([82,73,70,70,0,0,0,0,87,65,86,69])); return; } response.statusCode = 503; response.end("not irodori"); }); server.listen(${port}, "127.0.0.1", () => writeFileSync(${JSON.stringify(marker)}, "ready"));`,
     "utf8",
   );
   const child = spawn(process.execPath, [helperPath], { windowsHide: true });
   assert.equal(await waitFor(() => readFile(marker).then(() => true, () => false)), true);
-  return { process: child, port };
+  return { process: child, port, requestLog };
 }
 
 async function createCorepackHarness(exitCode = 0) {
@@ -189,6 +190,11 @@ test("README links the user-managed Irodori setup guide", async () => {
   assert.match(guide, /uv sync --extra cu128/);
   assert.match(guide, /uv sync --extra cpu/);
   assert.match(guide, /明示的な同意/);
+});
+
+test("managed bootstrap can suppress the duplicate dev-up warm-up", () => {
+  assert.match(source, /PW_IRODORI_SKIP_WARMUP/);
+  assert.match(source, /if \(\$skipIrodoriWarmUp\)[\s\S]*else\s*\{\s*Invoke-IrodoriWarmUp/);
 });
 
 test("TTS ownership uses a kill-on-close Job and suspended assignment", async () => {
@@ -312,6 +318,34 @@ test(
       assert.doesNotMatch(result.stdout, /Irodori-TTS Serverを起動します/);
     } finally {
       stopProcess(externalTts.process.pid);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "does not repeat voices or speech warm-up after managed bootstrap validation",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(irodori.port),
+        PW_IRODORI_SKIP_WARMUP: "1",
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+      assert.equal(isAlive(irodori.process.pid), true);
+      const requests = await readFile(irodori.requestLog, "utf8");
+      assert.match(requests, /GET \/health/);
+      assert.doesNotMatch(requests, /\/v1\/audio\/voices|\/v1\/audio\/speech/);
+      assert.match(result.stdout, /bootstrap.*検証済み/i);
+    } finally {
+      stopProcess(irodori.process.pid);
       await rm(harness.temp, { recursive: true, force: true });
     }
   },

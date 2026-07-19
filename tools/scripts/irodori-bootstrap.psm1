@@ -804,7 +804,7 @@ function Invoke-IrodoriBootstrap {
     $savedEnvironment = @{}
     $managedEnvironmentNames = @(
         'PATH', 'PW_TTS_ENGINE', 'PW_TTS_PORT', 'PW_IRODORI_DIR', 'IRODORI_CHECKPOINT',
-        'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
+        'PW_IRODORI_SKIP_WARMUP', 'IRODORI_CODEC_REPO', 'IRODORI_VOICES_DIR', 'IRODORI_COMPILE_MODEL',
         'HF_HOME', 'HF_HUB_OFFLINE', 'TRANSFORMERS_OFFLINE'
     )
     foreach ($name in $managedEnvironmentNames) { $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name) }
@@ -848,10 +848,12 @@ Build now? [Y/N]
                     $isComplete = $true
                 }
             } else {
-                $provision = if ($Adapters.ContainsKey('Provision')) { $Adapters.Provision } else {
-                    { param($Manifest, $Layout, $Backend, $ProvisionAdapters) Invoke-IrodoriProvision -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $ProvisionAdapters }
+                $uvArtifact = Get-IrodoriArtifactById $manifest 'uv-windows-x86_64'
+                $provisionResult = [pscustomobject]@{
+                    status = 'reused'
+                    runtime_path = $layout.runtime
+                    uv_path = Join-Path $layout.runtime $uvArtifact.install_relative_path
                 }
-                $provisionResult = & $provision $manifest $layout $backend $Adapters
             }
 
             if ($isComplete) {
@@ -869,7 +871,6 @@ Build now? [Y/N]
                 [void] [IO.Directory]::CreateDirectory($layout.voices)
                 [void] [IO.Directory]::CreateDirectory($layout.loras)
                 $env:PATH = ([IO.Path]::GetDirectoryName($uvPath)) + [IO.Path]::PathSeparator + $env:PATH
-                $env:PW_TTS_ENGINE = 'irodori'
                 $env:PW_TTS_PORT = '8088'
                 $env:PW_IRODORI_DIR = $serverPath
                 foreach ($entry in $runtimeEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, [string] $entry.Value) }
@@ -918,11 +919,15 @@ Build now? [Y/N]
                             $status = 'warmup_failed'
                         } else { $status = 'ready' }
                     }
+                    if ($status -in @('ready', 'ready_without_voice', 'warmup_failed')) {
+                        $env:PW_IRODORI_SKIP_WARMUP = '1'
+                    }
                 }
             }
         } catch [OperationCanceledException] { throw } catch [Management.Automation.PipelineStoppedException] { throw } catch {
             $status = 'setup_failed'
-            if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'error' $_.Exception.Message } else { Write-Warning "Irodori setup failed; continuing without managed TTS: $($_.Exception.Message)" }
+            $safeMessage = 'Irodori setup failed; continuing without managed TTS.'
+            if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'error' $safeMessage } else { Write-Warning $safeMessage }
         }
 
         $appExitCode = & $runApp
