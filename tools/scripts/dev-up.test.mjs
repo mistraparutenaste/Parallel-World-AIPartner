@@ -218,6 +218,11 @@ test("TTS ownership uses a kill-on-close Job and suspended assignment", async ()
   assert.match(moduleSource, /CleanupFailures/);
   assert.match(moduleSource, /TryTerminateProcess/);
   assert.match(moduleSource, /TryCloseHandle/);
+  assert.doesNotMatch(moduleSource, /ReleaseWithoutTerminate/);
+  assert.match(
+    moduleSource,
+    /function Stop-ManagedProcessJob[\s\S]*ManagedProcessJobNative\]::Terminate[\s\S]*finally\s*\{[\s\S]*\.Dispose\(\)/,
+  );
 });
 
 test("dev-up preserves pre-open TTS and never manages LLM", () => {
@@ -584,21 +589,40 @@ test(
 );
 
 test(
-  "stale process identity is released without killing the process",
+  "identity mismatch still stops the owned Job tree without killing an external process",
   { skip: process.platform !== "win32" },
-  () => {
-    const command = [
-      `Import-Module ${quotePowerShell(jobModulePath)} -Force`,
-      `$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())`,
-      `$identity = Start-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WorkingDirectory $PWD.Path`,
-      `$identity.start_time_utc_ticks = [long]$identity.start_time_utc_ticks + 1`,
-      `Stop-ManagedProcessJob -Job $job -GraceSeconds 0`,
-      `$alive = $null -ne (Get-Process -Id $identity.pid -ErrorAction SilentlyContinue)`,
-      `Stop-Process -Id $identity.pid -Force -ErrorAction SilentlyContinue`,
-      `if (-not $alive) { throw 'stale identity process was killed' }`,
-    ].join("; ");
-    const result = runPowerShell(command);
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+  async () => {
+    const temp = await mkdtemp(path.join(os.tmpdir(), "pw-job-mismatch-"));
+    const marker = path.join(temp, "pids.json");
+    const helper = path.join(temp, "owned-helper.ps1");
+    const external = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
+      windowsHide: true,
+    });
+    try {
+      await writeFile(
+        helper,
+        `param([string]$Marker)\n$child = Start-Process powershell.exe -ArgumentList @('-NoProfile','-Command','Start-Sleep -Seconds 30') -WindowStyle Hidden -PassThru\n$rootProcess = Get-Process -Id $PID\n@{ root = $PID; root_start_time_utc_ticks = $rootProcess.StartTime.ToUniversalTime().Ticks.ToString(); child = $child.Id; child_start_time_utc_ticks = $child.StartTime.ToUniversalTime().Ticks.ToString() } | ConvertTo-Json -Compress | Set-Content -LiteralPath $Marker -Encoding UTF8\nStart-Sleep -Seconds 30\n`,
+        "utf8",
+      );
+      const command = [
+        `Import-Module ${quotePowerShell(jobModulePath)} -Force`,
+        `$job = New-ManagedProcessJob -SessionId ([guid]::NewGuid())`,
+        `$identity = Start-ManagedProcess -Job $job -FilePath $PSHOME\\powershell.exe -ArgumentList @('-NoProfile','-File',${quotePowerShell(helper)},'-Marker',${quotePowerShell(marker)}) -WorkingDirectory ${quotePowerShell(temp)}`,
+        `while (-not (Test-Path -LiteralPath ${quotePowerShell(marker)})) { Start-Sleep -Milliseconds 20 }`,
+        `$identity.pid = ${external.pid}`,
+        `Stop-ManagedProcessJob -Job $job -GraceSeconds 0`,
+      ].join("; ");
+      const result = runPowerShell(command);
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      const pids = JSON.parse((await readFile(marker, "utf8")).replace(/^\uFEFF/, ""));
+      assert.equal(await waitFor(() => !isAlive(pids.root)), true);
+      assert.equal(await waitFor(() => !isAlive(pids.child)), true);
+      assert.equal(isAlive(external.pid), true);
+    } finally {
+      await cleanupOwnedProcessesFromMarker(marker);
+      stopProcess(external.pid);
+      await rm(temp, { recursive: true, force: true });
+    }
   },
 );
 

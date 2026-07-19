@@ -56,6 +56,32 @@ function runBootstrapEntryHarness(mode) {
   }
 }
 
+function runManagedLauncherHarness(powerShellExitCode, { corepackExitCode = 0, cargoExitCode = 0 } = {}) {
+  const temp = mkdtempSync(path.join(os.tmpdir(), "pw-managed-launcher-"));
+  writeFileSync(path.join(temp, "corepack.cmd"), `@exit /b ${corepackExitCode}\r\n`, "ascii");
+  writeFileSync(path.join(temp, "cargo.cmd"), `@exit /b ${cargoExitCode}\r\n`, "ascii");
+  writeFileSync(
+    path.join(temp, "powershell.cmd"),
+    `@exit /b ${powerShellExitCode}\r\n`,
+    "ascii",
+  );
+  try {
+    return spawnSync(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/c", "call", managedLauncherPath],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, PATH: `${temp}${path.delimiter}${process.env.PATH ?? ""}` },
+        input: "",
+        timeout: 20_000,
+        windowsHide: true,
+      },
+    );
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
+
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -1793,6 +1819,45 @@ test("only the managed launcher calls the Irodori bootstrap entry", async () => 
   assert.doesNotMatch(direct, /irodori-bootstrap\.ps1/i);
   assert.equal(legacyExists, false);
 });
+
+test("managed launcher documents its Irodori default with an ASCII comment", async () => {
+  const managed = await readFile(managedLauncherPath, "latin1");
+  assert.match(
+    managed,
+    /rem    2\. TTS engine \(Irodori default for this launcher\) startup check/,
+  );
+});
+
+test(
+  "managed launcher preserves bootstrap exit codes after pause",
+  { skip: process.platform !== "win32" },
+  () => {
+    for (const expected of [7, 130, 1]) {
+      const result = runManagedLauncherHarness(expected);
+      assert.equal(
+        result.status,
+        expected,
+        JSON.stringify({
+          expected,
+          status: result.status,
+          signal: result.signal,
+          error: result.error?.message,
+          stdout: result.stdout?.toString("latin1"),
+          stderr: result.stderr?.toString("latin1"),
+        }),
+      );
+    }
+  },
+);
+
+test(
+  "managed launcher keeps the existing build failure exit code",
+  { skip: process.platform !== "win32" },
+  () => {
+    const result = runManagedLauncherHarness(0, { corepackExitCode: 1 });
+    assert.equal(result.status, 1);
+  },
+);
 
 test("bootstrap entry returns the app exit code", () => {
   const result = runBootstrapEntryHarness("success");

@@ -242,9 +242,6 @@ namespace ParallelWorld.Runtime {
             }
         }
 
-        public static void ReleaseWithoutTerminate(JobHandle job) {
-            if (!job.IsClosed && !job.IsInvalid) SetKillOnClose(job, false);
-        }
     }
 }
 '@
@@ -352,10 +349,6 @@ function Stop-ManagedProcessJob {
                 status = $(if ($_.session_id -ne $Job.session_id) { 'mismatch' } else { Get-ManagedProcessIdentityStatus $_ })
             }
         })
-        if (@($statuses | Where-Object { $_.status -eq 'mismatch' }).Count -gt 0) {
-            [ParallelWorld.Runtime.ManagedProcessJobNative]::ReleaseWithoutTerminate($Job.handle)
-            return
-        }
         $matching = @($statuses | Where-Object { $_.status -eq 'matching' } | ForEach-Object { $_.identity })
 
         foreach ($identity in $matching) {
