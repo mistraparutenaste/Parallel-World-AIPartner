@@ -32,6 +32,7 @@ pub use dto::{
     SAFEWORD_TRIGGERED_EVENT, SCHEMA_VERSION, SafewordTriggeredEventDto, ScheduleActivationRuleDto,
     ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto, StaticExpressionDto, SttPhaseDto,
     SttStateEventDto, TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto,
-    TranscriptEventDto, TriggerPolicyDto, TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto,
-    UiPreferencesDto, UpdateStateDto, UpdateStatusDto, UserDictWordDto, normalize_activity_app_id,
+    TranscriptEventDto, TriggerPolicyDto, TtsEngineKind, TtsSettingsDto, TtsSpeakerDto,
+    TtsStateEventDto, TtsVoiceDto, UiPreferencesDto, UpdateStateDto, UpdateStatusDto,
+    UserDictWordDto, normalize_activity_app_id,
 };

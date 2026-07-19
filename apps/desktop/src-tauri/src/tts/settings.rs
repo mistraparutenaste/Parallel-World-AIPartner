@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_contracts::{SCHEMA_VERSION, TtsSettingsDto};
+use pw_contracts::{SCHEMA_VERSION, TtsEngineKind, TtsSettingsDto};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "tts.json";
@@ -15,6 +15,8 @@ pub fn default_tts_settings() -> TtsSettingsDto {
         schema_version: SCHEMA_VERSION,
         enabled: true,
         base_url: "http://127.0.0.1:10101".to_owned(),
+        engine: TtsEngineKind::Aivis,
+        voice_id: String::new(),
         style_id: 888_753_760,
         volume: 1.0,
         speed: 1.0,
