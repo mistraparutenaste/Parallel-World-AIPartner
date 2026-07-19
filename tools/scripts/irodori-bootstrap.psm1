@@ -120,9 +120,13 @@ function Test-IrodoriCompletion {
     try {
         $completion = Get-Content -LiteralPath $Layout.completion_marker -Raw | ConvertFrom-Json -ErrorAction Stop
         Assert-IrodoriExactFields $completion @('schema_version', 'manifest_version', 'backend', 'python_version', 'python_build', 'completed_at') 'Irodori completion marker'
+        if (-not (Test-IrodoriPositiveInteger $completion.schema_version) -or [int64] $completion.schema_version -ne 1) { return $false }
+        foreach ($field in @('manifest_version', 'backend', 'python_version', 'python_build', 'completed_at')) {
+            if (-not (Test-IrodoriString $completion.$field)) { return $false }
+        }
         [DateTimeOffset]::Parse($completion.completed_at) | Out-Null
     } catch { return $false }
-    return $completion.schema_version -eq 1 -and $completion.manifest_version -eq $Manifest.manifest_version -and $completion.backend -in @($Manifest.backends) -and $completion.backend -eq $ExpectedBackend -and $completion.python_version -eq $Manifest.python_version -and $completion.python_build -eq $Manifest.python_build
+    return $completion.manifest_version -ceq $Manifest.manifest_version -and @($Manifest.backends) -ccontains $completion.backend -and $completion.backend -ceq $ExpectedBackend -and $completion.python_version -ceq $Manifest.python_version -and $completion.python_build -ceq $Manifest.python_build
 }
 
 function Get-IrodoriCanonicalPath {
@@ -577,15 +581,37 @@ function Get-IrodoriProvisionEnvironment {
     return $environment
 }
 
+function Assert-IrodoriManagedGitExecutable {
+    param([hashtable] $Layout)
+    $expectedPath = Join-Path $Layout.runtime 'tools\git\cmd\git.exe'
+    if (-not (Test-IrodoriDescendantPath -Root $Layout.runtime -Candidate $expectedPath)) { throw 'Managed git.exe escapes the Irodori runtime.' }
+    Assert-IrodoriCleanupTarget -Root $Layout.root -Target $expectedPath
+    if (-not (Test-Path -LiteralPath $expectedPath -PathType Leaf)) { throw 'Verified managed git.exe is missing.' }
+    $item = Get-Item -LiteralPath $expectedPath -Force
+    if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or (Get-IrodoriCanonicalPath $item.FullName) -cne (Get-IrodoriCanonicalPath $expectedPath)) {
+        throw 'Verified managed git.exe is not the exact managed leaf.'
+    }
+    return $expectedPath
+}
+
 function Get-IrodoriSyncEnvironment {
     param([hashtable] $Layout, [psobject] $Manifest)
+    $gitExecutable = Assert-IrodoriManagedGitExecutable -Layout $Layout
     $environment = Get-IrodoriProvisionEnvironment -Layout $Layout -Manifest $Manifest
-    $gitCmd = Join-Path $Layout.runtime 'tools\git\cmd'
-    $processPath = [Environment]::GetEnvironmentVariable('PATH', 'Process')
-    $environment['PATH'] = $gitCmd + [IO.Path]::PathSeparator + $processPath
+    $environment['PATH'] = [IO.Path]::GetDirectoryName($gitExecutable)
+    $environment['GIT_CONFIG_GLOBAL'] = 'NUL'
     $environment['GIT_CONFIG_NOSYSTEM'] = '1'
+    $environment['GIT_CONFIG_COUNT'] = '0'
     $environment['GIT_TERMINAL_PROMPT'] = '0'
     $environment['GCM_INTERACTIVE'] = 'Never'
+    $environment['GCM_GUI_PROMPT'] = '0'
+    foreach ($name in @('GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'GIT_EXEC_PATH', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_PROXY_COMMAND')) {
+        $environment[$name] = $null
+    }
+    foreach ($name in @([Environment]::GetEnvironmentVariables([EnvironmentVariableTarget]::Process).Keys)) {
+        if ([string] $name -match '^GIT_CONFIG_(?:KEY|VALUE)_\d+$') { $environment[[string] $name] = $null }
+    }
+    if ((Assert-IrodoriManagedGitExecutable -Layout $Layout) -cne $gitExecutable) { throw 'Verified managed git.exe changed while preparing sync.' }
     return $environment
 }
 
@@ -757,7 +783,9 @@ function Invoke-IrodoriProvisionLocked {
         $provisionEnvironment = Get-IrodoriProvisionEnvironment -Layout $Layout -Manifest $Manifest
         $pythonInstall = & $runAdapter $uvPath @('python', 'install', $Manifest.python_version) $serverPath $provisionEnvironment
         Assert-IrodoriRunSucceeded -Result $pythonInstall -Stage 'Python installation'
+        $managedGitPath = Assert-IrodoriManagedGitExecutable -Layout $Layout
         $syncEnvironment = Get-IrodoriSyncEnvironment -Layout $Layout -Manifest $Manifest
+        if ((Assert-IrodoriManagedGitExecutable -Layout $Layout) -cne $managedGitPath) { throw 'Verified managed git.exe changed before sync.' }
         $sync = & $runAdapter $uvPath @('sync', '--frozen', '--extra', $Backend, '--python', $Manifest.python_version, '--managed-python') $serverPath $syncEnvironment
         Assert-IrodoriRunSucceeded -Result $sync -Stage 'environment sync'
         foreach ($artifact in @($modelArtifact, $codecArtifact, $tokenizerModel, $tokenizerConfig, $modelConfig)) {

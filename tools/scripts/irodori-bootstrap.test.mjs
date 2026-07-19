@@ -823,6 +823,19 @@ test("production manifest pins the direct Windows artifacts and their licenses",
     assert.match(artifact.license_id, /^(Apache-2\.0 OR MIT|GPL-2\.0-only|MIT)$/);
     assert.match(artifact.license_url, /^https:\/\//);
   }
+  assert.deepEqual(
+    manifest.artifacts.map(({ id, license_id, license_url }) => ({ id, license_id, license_url })),
+    [
+      { id: "uv-windows-x86_64", license_id: "Apache-2.0 OR MIT", license_url: "https://github.com/astral-sh/uv/blob/0.11.29/LICENSE-MIT" },
+      { id: "mingit-windows-x86_64", license_id: "GPL-2.0-only", license_url: "https://github.com/git-for-windows/git/blob/v2.54.0.windows.1/COPYING" },
+      { id: "irodori-server", license_id: "MIT", license_url: "https://github.com/Aratako/Irodori-TTS-Server/blob/1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce/LICENSE" },
+      { id: "irodori-model", license_id: "MIT", license_url: "https://huggingface.co/Aratako/Irodori-TTS-500M-v3/blob/main/LICENSE" },
+      { id: "irodori-codec", license_id: "MIT", license_url: "https://huggingface.co/Aratako/Semantic-DACVAE-Japanese-32dim/blob/main/LICENSE" },
+      { id: "sarashina-tokenizer-model", license_id: "MIT", license_url: "https://huggingface.co/sbintuitions/sarashina2.2-0.5b/blob/main/LICENSE" },
+      { id: "sarashina-tokenizer-config", license_id: "MIT", license_url: "https://huggingface.co/sbintuitions/sarashina2.2-0.5b/blob/main/LICENSE" },
+      { id: "sarashina-config", license_id: "MIT", license_url: "https://huggingface.co/sbintuitions/sarashina2.2-0.5b/blob/main/LICENSE" },
+    ],
+  );
 });
 
 test("requires the exact managed Python build and an int64 environment reserve", async () => {
@@ -1161,6 +1174,80 @@ test("default runner scopes environment and working directory then restores it",
   }
 });
 
+test("sync runner isolates Git configuration and restores every inherited variable", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-git-environment-"));
+  try {
+    const probeScript = path.join(temporaryDirectory, "probe.ps1");
+    const managedGit = path.join(temporaryDirectory, "runtime", "2026-07-19.2", "tools", "git", "cmd", "git.exe");
+    await mkdir(path.dirname(managedGit), { recursive: true });
+    await writeFile(managedGit, "fixture", "utf8");
+    await writeFile(probeScript, [
+      "$expected = @{ GIT_CONFIG_GLOBAL = 'NUL'; GIT_CONFIG_NOSYSTEM = '1'; GIT_CONFIG_COUNT = '0'; GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'Never'; GCM_GUI_PROMPT = '0' }",
+      "foreach ($name in $expected.Keys) { if ([Environment]::GetEnvironmentVariable($name, 'Process') -cne $expected[$name]) { exit 7 } }",
+      "foreach ($name in @('GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0', 'GIT_ASKPASS', 'SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE', 'GIT_EXEC_PATH', 'GIT_SSH', 'GIT_SSH_COMMAND', 'GIT_PROXY_COMMAND')) { if ($null -ne [Environment]::GetEnvironmentVariable($name, 'Process')) { exit 8 } }",
+      `if ($env:PATH -cne ${quotePowerShell(path.dirname(managedGit))}) { exit 9 }`,
+      "exit 0",
+    ].join("\n"), "utf8");
+    const result = await invokePowerShell(`
+      $parentValues = @{
+        GIT_CONFIG_GLOBAL = 'parent-global'; GIT_CONFIG_NOSYSTEM = 'parent-nosystem'; GIT_CONFIG_COUNT = '1'
+        GIT_CONFIG_KEY_0 = 'credential.helper'; GIT_CONFIG_VALUE_0 = 'manager'
+        GIT_ASKPASS = 'parent-askpass'; SSH_ASKPASS = 'parent-ssh-askpass'; SSH_ASKPASS_REQUIRE = 'force'
+        GIT_EXEC_PATH = 'parent-exec-path'; GIT_SSH = 'parent-ssh'; GIT_SSH_COMMAND = 'parent-ssh-command'; GIT_PROXY_COMMAND = 'parent-proxy-command'
+        GIT_TERMINAL_PROMPT = '1'; GCM_INTERACTIVE = 'Always'; GCM_GUI_PROMPT = '1'
+      }
+      foreach ($name in $parentValues.Keys) { [Environment]::SetEnvironmentVariable($name, $parentValues[$name], 'Process') }
+      $layout = Get-IrodoriLayout -Root ${quotePowerShell(temporaryDirectory)} -ManifestVersion '2026-07-19.2'
+      $manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestPath)}
+      $environment = & (Get-Module irodori-bootstrap) { param($Layout, $Manifest) Get-IrodoriSyncEnvironment -Layout $Layout -Manifest $Manifest } $layout $manifest
+      $before = @{}
+      foreach ($name in $environment.Keys) { $before[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
+      $run = & (Get-Module irodori-bootstrap) {
+        param($Executable, $Probe, $WorkingDirectory, $Environment)
+        Invoke-IrodoriDefaultRunApp -Executable $Executable -Arguments @('-NoProfile', '-NonInteractive', '-File', $Probe) -WorkingDirectory $WorkingDirectory -Environment $Environment
+      } ${quotePowerShell(powerShell)} ${quotePowerShell(probeScript)} ${quotePowerShell(temporaryDirectory)} $environment
+      [pscustomobject]@{
+        exit_code = $run.exit_code
+        restored = @($environment.Keys | Where-Object { [Environment]::GetEnvironmentVariable($_, 'Process') -cne $before[$_] }).Count -eq 0
+      }
+    `);
+    assert.deepEqual(result, { exit_code: 0, restored: true });
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
+test("missing managed git fails closed without running a later system Git", async () => {
+  const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "irodori-missing-managed-git-"));
+  try {
+    const systemBin = path.join(temporaryDirectory, "system-bin");
+    const sentinel = path.join(temporaryDirectory, "system-git-ran.txt");
+    await mkdir(systemBin, { recursive: true });
+    await writeFile(path.join(systemBin, "git.cmd"), `@echo fallback>${sentinel}\r\n@exit /b 0\r\n`, "ascii");
+    const result = await invokePowerShell(`
+      $layout = Get-IrodoriLayout -Root ${quotePowerShell(temporaryDirectory)} -ManifestVersion '2026-07-19.2'
+      $manifest = Import-IrodoriManifest -Path ${quotePowerShell(manifestPath)}
+      [IO.Directory]::CreateDirectory((Join-Path $layout.runtime 'tools\\git\\cmd')) | Out-Null
+      $savedPath = $env:PATH
+      $failure = $null
+      try {
+        $env:PATH = ${quotePowerShell(systemBin)}
+        $syncEnvironment = & (Get-Module irodori-bootstrap) { param($Layout, $Manifest) Get-IrodoriSyncEnvironment -Layout $Layout -Manifest $Manifest } $layout $manifest
+        & (Get-Module irodori-bootstrap) {
+          param($WorkingDirectory, $Environment)
+          Invoke-IrodoriDefaultRunApp -Executable 'git.cmd' -Arguments @() -WorkingDirectory $WorkingDirectory -Environment $Environment
+        } ${quotePowerShell(temporaryDirectory)} $syncEnvironment | Out-Null
+      } catch { $failure = $_.Exception.Message }
+      finally { $env:PATH = $savedPath }
+      [pscustomobject]@{ failure = $failure; system_git_ran = Test-Path -LiteralPath ${quotePowerShell(sentinel)} }
+    `);
+    assert.match(result.failure, /managed git\.exe/i);
+    assert.equal(result.system_git_ran, false);
+  } finally {
+    await rm(temporaryDirectory, { force: true, recursive: true });
+  }
+});
+
 test("default runner restores managed environment when changing directory fails", async () => {
   const missingDirectory = path.join(os.tmpdir(), `irodori-missing-${Date.now()}`);
   const result = await invokePowerShell(`
@@ -1230,6 +1317,26 @@ test("rejects legacy completion markers without the exact managed Python build",
     };
     if (pythonBuild === undefined) delete marker.python_build;
     assert.equal(await inspectCompletion(marker, "cpu"), false);
+  }
+});
+
+test("rejects completion identity fields with coercible but wrong JSON types", async () => {
+  const valid = {
+    schema_version: 1,
+    manifest_version: "2026-07-19.2",
+    backend: "cpu",
+    python_version: "3.10.20",
+    python_build: "20260510",
+    completed_at: "2026-07-19T00:00:00Z",
+  };
+  for (const [field, value] of [
+    ["schema_version", "1"],
+    ["manifest_version", 20260719.2],
+    ["backend", true],
+    ["python_version", 3.1],
+    ["python_build", 20260510],
+  ]) {
+    assert.equal(await inspectCompletion({ ...valid, [field]: value }, "cpu"), false, field);
   }
 });
 
