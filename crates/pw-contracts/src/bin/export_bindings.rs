@@ -25,7 +25,7 @@ use pw_contracts::{
     SafewordTriggeredEventDto, ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto,
     SpeechStopEventDto, StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto, TtsEngineKind,
-    TtsSettingsDto, TtsSpeakerDto, TtsStateEventDto, TtsVoiceDto, UiPreferencesDto, UpdateStateDto,
+    TtsSettingsDto, TtsStateEventDto, TtsVoiceDto, UiPreferencesDto, UpdateStateDto,
     UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
@@ -106,7 +106,6 @@ fn main() {
     LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");
     TtsEngineKind::export_all(&config).expect("export TtsEngineKind bindings");
     TtsSettingsDto::export_all(&config).expect("export TtsSettingsDto bindings");
-    TtsSpeakerDto::export_all(&config).expect("export TtsSpeakerDto bindings");
     TtsVoiceDto::export_all(&config).expect("export TtsVoiceDto bindings");
     SpeechAudioEventDto::export_all(&config).expect("export SpeechAudioEventDto bindings");
     SpeechStopEventDto::export_all(&config).expect("export SpeechStopEventDto bindings");

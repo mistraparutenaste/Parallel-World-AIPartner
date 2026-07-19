@@ -14,14 +14,14 @@ use pw_application::recovery::{
 use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue};
 use pw_contracts::{
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
-    SpeechStopEventDto, TtsSettingsDto, TtsStateEventDto,
+    SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
 };
 use pw_domain::reply::TurnId;
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_platform::paths::AppDataLayout;
 use pw_tts::{
-    AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, SynthesisParams,
-    TtsClientConfig, WavCache,
+    AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, EngineClient,
+    IrodoriTtsClient, SynthesisParams, TtsClientConfig, WavCache,
 };
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
@@ -179,9 +179,24 @@ impl Default for TtsService {
 
 fn fingerprint(settings: &TtsSettingsDto) -> String {
     format!(
-        "{}|{}|{}|{}",
-        settings.base_url, settings.style_id, settings.volume, settings.speed
+        "{:?}|{}|{}|{}|{}",
+        settings.engine, settings.base_url, settings.voice_id, settings.volume, settings.speed
     )
+}
+
+fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
+    let config = TtsClientConfig {
+        base_url: settings.base_url.clone(),
+        timeout: ADAPTER_TIMEOUT,
+    };
+    match settings.engine {
+        TtsEngineKind::Aivis => AivisSpeechClient::new(&config)
+            .map(EngineClient::Aivis)
+            .map_err(|error| error.to_string()),
+        TtsEngineKind::Irodori => IrodoriTtsClient::new(&config)
+            .map(EngineClient::Irodori)
+            .map_err(|error| error.to_string()),
+    }
 }
 
 impl TtsService {
@@ -414,17 +429,13 @@ impl TtsService {
         app: AppHandle<R>,
         settings: &TtsSettingsDto,
     ) -> Result<Worker, String> {
-        let client = AivisSpeechClient::new(&TtsClientConfig {
-            base_url: settings.base_url.clone(),
-            timeout: ADAPTER_TIMEOUT,
-        })
-        .map_err(|error| error.to_string())?;
+        let client = engine_client(settings)?;
         let layout = app.state::<AppDataLayout>();
         let cache = WavCache::new(layout.cache.join("tts"), DEFAULT_MAX_ENTRIES);
         let synthesizer = CachedSpeechSynthesizer::new(
             client,
             cache,
-            settings.style_id,
+            &settings.voice_id,
             SynthesisParams {
                 volume: settings.volume,
                 speed: settings.speed,
@@ -565,6 +576,18 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_fingerprint_changes_for_engine_or_voice() {
+        let base = super::settings::default_tts_settings();
+        let mut changed_engine = base.clone();
+        changed_engine.engine = pw_contracts::TtsEngineKind::Irodori;
+        let mut changed_voice = base.clone();
+        changed_voice.voice_id = "different".to_owned();
+
+        assert_ne!(fingerprint(&base), fingerprint(&changed_engine));
+        assert_ne!(fingerprint(&base), fingerprint(&changed_voice));
+    }
 
     #[test]
     fn production_tts_timeout_covers_slow_local_synthesis_without_extending_backpressure() {

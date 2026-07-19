@@ -47,18 +47,6 @@ pub struct TtsVoiceDto {
     pub label: String,
 }
 
-/// One selectable voice style, retained until the desktop command migration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "TtsSpeakerDto.ts")]
-pub struct TtsSpeakerDto {
-    /// Speaker (voice) name.
-    pub name: String,
-    /// Style name within the speaker.
-    pub style_name: String,
-    /// Style id passed to synthesis.
-    pub style_id: u32,
-}
-
 /// `speech-audio` event payload: one synthesized sentence ready for
 /// playback. The `WebView` receives a file path only (基本設計 8章).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
