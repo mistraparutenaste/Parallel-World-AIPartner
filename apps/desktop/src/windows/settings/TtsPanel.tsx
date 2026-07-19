@@ -89,8 +89,14 @@ export function TtsPanel() {
   };
 
   const fetchVoices = () => {
+    if (!settings) {
+      return;
+    }
     setMessage(null);
-    invoke<TtsVoiceDto[]>('list_tts_voices')
+    invoke<TtsVoiceDto[]>('list_tts_voices', {
+      engine: settings.engine,
+      baseUrl: settings.base_url,
+    })
       .then(setVoices)
       .catch((error: unknown) => {
         const engineLabel = settings

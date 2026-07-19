@@ -579,7 +579,7 @@ mod tests {
 
     #[test]
     fn worker_fingerprint_changes_for_engine_or_voice() {
-        let base = super::settings::default_tts_settings();
+        let base = crate::tts::settings::default_tts_settings();
         let mut changed_engine = base.clone();
         changed_engine.engine = pw_contracts::TtsEngineKind::Irodori;
         let mut changed_voice = base.clone();

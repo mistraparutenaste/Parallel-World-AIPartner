@@ -55,6 +55,26 @@ fn irodori_voices(voice_ids: Vec<String>) -> Vec<TtsVoiceDto> {
         .collect()
 }
 
+enum VoiceClient {
+    Aivis(AivisSpeechClient),
+    Irodori(IrodoriTtsClient),
+}
+
+fn voice_client(engine: TtsEngineKind, base_url: String) -> Result<VoiceClient, String> {
+    let config = TtsClientConfig {
+        base_url,
+        timeout: Duration::from_secs(10),
+    };
+    match engine {
+        TtsEngineKind::Aivis => AivisSpeechClient::new(&config)
+            .map(VoiceClient::Aivis)
+            .map_err(|error| error.to_string()),
+        TtsEngineKind::Irodori => IrodoriTtsClient::new(&config)
+            .map(VoiceClient::Irodori)
+            .map_err(|error| error.to_string()),
+    }
+}
+
 /// Returns the persisted TTS settings (defaults when unset).
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
@@ -85,23 +105,19 @@ pub fn set_tts_settings(
 /// Returns an error message when the engine is unreachable.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
-pub fn list_tts_voices(layout: State<'_, AppDataLayout>) -> Result<Vec<TtsVoiceDto>, String> {
-    let (engine, config) = client_config(&layout);
-    match engine {
-        TtsEngineKind::Aivis => {
-            let client = AivisSpeechClient::new(&config).map_err(|error| error.to_string())?;
-            client
-                .speakers()
-                .map(aivis_voices)
-                .map_err(|error| error.to_string())
-        }
-        TtsEngineKind::Irodori => {
-            let client = IrodoriTtsClient::new(&config).map_err(|error| error.to_string())?;
-            client
-                .voices()
-                .map(irodori_voices)
-                .map_err(|error| error.to_string())
-        }
+pub fn list_tts_voices(
+    engine: TtsEngineKind,
+    base_url: String,
+) -> Result<Vec<TtsVoiceDto>, String> {
+    match voice_client(engine, base_url)? {
+        VoiceClient::Aivis(client) => client
+            .speakers()
+            .map(aivis_voices)
+            .map_err(|error| error.to_string()),
+        VoiceClient::Irodori(client) => client
+            .voices()
+            .map(irodori_voices)
+            .map_err(|error| error.to_string()),
     }
 }
 
@@ -170,7 +186,37 @@ mod tests {
     use pw_contracts::{TtsEngineKind, TtsVoiceDto};
     use pw_tts::{Speaker, SpeakerStyle};
 
-    use super::{aivis_voices, ensure_dictionary_supported, irodori_voices};
+    use super::{
+        VoiceClient, aivis_voices, ensure_dictionary_supported, irodori_voices, voice_client,
+    };
+
+    #[test]
+    fn voice_preview_selects_aivis_from_transient_arguments() {
+        let client =
+            voice_client(TtsEngineKind::Aivis, "http://127.0.0.1:10101".to_owned()).unwrap();
+
+        assert!(matches!(client, VoiceClient::Aivis(_)));
+    }
+
+    #[test]
+    fn voice_preview_selects_irodori_from_transient_arguments() {
+        let client =
+            voice_client(TtsEngineKind::Irodori, "http://127.0.0.1:8088".to_owned()).unwrap();
+
+        assert!(matches!(client, VoiceClient::Irodori(_)));
+    }
+
+    #[test]
+    fn voice_preview_rejects_remote_transient_url_before_transport() {
+        let Err(error) = voice_client(
+            TtsEngineKind::Irodori,
+            "http://tts.example.com:8088".to_owned(),
+        ) else {
+            panic!("remote URL must be rejected");
+        };
+
+        assert!(error.contains("loopback"));
+    }
 
     #[test]
     fn aivis_voices_flatten_speaker_and_style_names() {

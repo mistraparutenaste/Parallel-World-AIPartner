@@ -82,6 +82,11 @@ describe('TtsPanel', () => {
     );
     expect(screen.getByLabelText('音声')).toHaveValue('');
     expect(screen.queryByRole('heading', { name: 'ユーザー辞書' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:8088',
+    });
   });
 
   it('switches the irodori default URL back to the Aivis default', async () => {
@@ -101,6 +106,11 @@ describe('TtsPanel', () => {
       'http://127.0.0.1:10101',
     );
     expect(screen.getByLabelText('音声')).toHaveValue('');
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'aivis',
+      baseUrl: 'http://127.0.0.1:10101',
+    });
   });
 
   it('preserves a custom URL when switching engines', async () => {
@@ -114,6 +124,11 @@ describe('TtsPanel', () => {
     expect(screen.getByLabelText('接続先 (irodori-TTS)')).toHaveValue(
       'http://127.0.0.1:18080',
     );
+    fireEvent.click(screen.getByRole('button', { name: '音声一覧を取得' }));
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:18080',
+    });
   });
 
   it('fetches normalized voices and saves the selected irodori string id', async () => {
@@ -141,7 +156,10 @@ describe('TtsPanel', () => {
         voice_id: 'irodori-voice',
       },
     });
-    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices');
+    expect(invokeMock).toHaveBeenCalledWith('list_tts_voices', {
+      engine: 'irodori',
+      baseUrl: 'http://127.0.0.1:8088',
+    });
   });
 
   it('shows the irodori operational and consent notices', async () => {
