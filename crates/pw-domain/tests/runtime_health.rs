@@ -54,6 +54,14 @@ fn diagnostic_redaction_covers_wire_formats_and_is_bounded() {
         ("Authorization:Bearer abc", "abc"),
         (r#"{"token":"json-secret"}"#, "json-secret"),
         ("https://x.test/?api_key=query-secret&x=1", "query-secret"),
+        (
+            "error sending request for url (http://127.0.0.1:10101/query?text=spoken-secret&speaker=1)",
+            "spoken-secret",
+        ),
+        (
+            r#"{"input":"spoken-secret","voice":"voice-a"}"#,
+            "spoken-secret",
+        ),
         ("password = 'quoted secret'", "quoted secret"),
         ("APIキー=日本語秘密", "日本語秘密"),
     ] {

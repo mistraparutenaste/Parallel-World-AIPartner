@@ -282,9 +282,10 @@ async function runBootstrapHarness(scenario) {
     } elseif ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
     if ($scenario -eq 'stale_failure') { $env:PW_IRODORI_SKIP_WARMUP = '1'; $env:PW_IRODORI_BOOTSTRAP_STATUS = 'ready' }
     $result = Invoke-IrodoriBootstrap -ManifestPath $manifestPath -DataRoot $root -Adapters $adapters
+    $diagnosticLines = if (Test-Path -LiteralPath $layout.diagnostic_log -PathType Leaf) { @(Get-Content -LiteralPath $layout.diagnostic_log) } else { @() }
     $restoredEnvironment = [ordered]@{}
     foreach ($entry in $originalEnvironment.GetEnumerator()) { $restoredEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key) }
-    [pscustomobject]@{ result = $result; observations = $observations; original_environment = $originalEnvironment; restored_environment = $restoredEnvironment }
+    [pscustomobject]@{ result = $result; observations = $observations; diagnostics = $diagnosticLines; original_environment = $originalEnvironment; restored_environment = $restoredEnvironment }
   `;
   try {
     return await invokePowerShell(expression);
@@ -941,6 +942,7 @@ test("returns the fixed managed-runtime layout below the supplied root", async (
     loras: path.join(root, "user", "loras"),
     completion_marker: path.join(root, "runtime", "2026-07-19.1", "completion.json"),
     active_marker: path.join(root, "runtime", "active.json"),
+    diagnostic_log: path.join(root, "diagnostics", "irodori.jsonl"),
   });
 });
 
@@ -1715,6 +1717,29 @@ test("continues app startup without network work when managed setup is declined"
   assert.match(observations.prompt_text, /voice cloning|第三者.*音声/i);
   assert.match(observations.prompt_text, /Storage.*<Irodori data>/i);
   assert.doesNotMatch(observations.prompt_text, /[A-Z]:\\Users\\|pw-irodori-bootstrap-/i);
+});
+
+test("persists bounded structured bootstrap diagnostics without managed paths", async () => {
+  const data = await runBootstrapHarness("decline");
+  assert.ok(data.diagnostics.length >= 3);
+  const records = data.diagnostics.map((line) => JSON.parse(line));
+  assert.deepEqual(records.at(0), {
+    schema_version: 1,
+    timestamp: records.at(0).timestamp,
+    run_id: records.at(0).run_id,
+    stage: "bootstrap",
+    status: "started",
+  });
+  assert.ok(records.some((record) => record.stage === "manifest" && record.status === "completed"));
+  const completed = records.at(-1);
+  assert.equal(completed.stage, "bootstrap");
+  assert.equal(completed.status, "completed");
+  assert.equal(completed.reason_code, "declined");
+  assert.equal(new Set(records.map((record) => record.run_id)).size, 1);
+  assert.doesNotMatch(JSON.stringify(records), /[A-Z]:\\Users\\|pw-irodori-bootstrap-/i);
+  for (const record of records) {
+    assert.deepEqual(Object.keys(record).filter((key) => !["schema_version", "timestamp", "run_id", "stage", "status", "backend", "reason_code", "app_exit_code", "duration_ms", "artifact_count", "port", "owned_process"].includes(key)), []);
+  }
 });
 
 test("uses a LOCALAPPDATA-relative storage label without exposing the username", async () => {

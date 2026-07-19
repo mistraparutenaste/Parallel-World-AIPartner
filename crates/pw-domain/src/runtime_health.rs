@@ -298,7 +298,27 @@ fn is_labeled_credential_value(value: &str) -> bool {
 /// Diagnostic-only redaction additionally bounds emitted text.
 #[must_use]
 pub fn redact_diagnostic(input: &str) -> String {
-    redact_credentials(input).chars().take(256).collect()
+    use std::sync::OnceLock;
+
+    static PAYLOAD_QUERY: OnceLock<regex::Regex> = OnceLock::new();
+    static PAYLOAD_JSON: OnceLock<regex::Regex> = OnceLock::new();
+
+    let query = PAYLOAD_QUERY.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)([?&](?:text|input|prompt|content|message|query|transcript|utterance)=)[^&\s)]+",
+        )
+        .expect("diagnostic query regex is constant and valid")
+    });
+    let json = PAYLOAD_JSON.get_or_init(|| {
+        regex::Regex::new(
+            r#"(?i)(\"(?:text|input|prompt|content|message|query|transcript|utterance)\"\s*:\s*\")[^\"\\]*(?:\\.[^\"\\]*)*(\")"#,
+        )
+        .expect("diagnostic JSON regex is constant and valid")
+    });
+    let safe = redact_credentials(input);
+    let safe = query.replace_all(&safe, "$1[REDACTED]");
+    let safe = json.replace_all(&safe, "$1[REDACTED]$2");
+    safe.chars().take(256).collect()
 }
 
 /// Persistent content retains its full length except for replaced secret values.

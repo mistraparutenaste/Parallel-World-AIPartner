@@ -101,6 +101,7 @@ function Get-IrodoriLayout {
         downloads = Join-Path $cacheRoot 'downloads'; transactions = Join-Path $Root 'transactions'
         user_root = $userRoot; voices = Join-Path $userRoot 'voices'; loras = Join-Path $userRoot 'loras'
         completion_marker = Join-Path $runtime 'completion.json'; active_marker = Join-Path $runtimeRoot 'active.json'
+        diagnostic_log = Join-Path $Root 'diagnostics\irodori.jsonl'
     }
 }
 
@@ -199,6 +200,39 @@ function Write-IrodoriAtomicText {
 function Write-IrodoriJson {
     param([hashtable] $Layout, [string] $Path, [object] $Value)
     Write-IrodoriAtomicText -Layout $Layout -Path $Path -Text ($Value | ConvertTo-Json -Depth 10 -Compress)
+}
+
+function Write-IrodoriDiagnostic {
+    param(
+        [hashtable] $Layout,
+        [Parameter(Mandatory)] [string] $RunId,
+        [Parameter(Mandatory)] [string] $Stage,
+        [Parameter(Mandatory)] [ValidateSet('started', 'completed', 'failed', 'skipped')] [string] $Status,
+        [hashtable] $Fields = @{}
+    )
+    try {
+        $record = [ordered]@{
+            schema_version = 1
+            timestamp = [DateTimeOffset]::UtcNow.ToString('o')
+            run_id = $RunId
+            stage = $Stage
+            status = $Status
+        }
+        foreach ($name in @('backend', 'reason_code', 'app_exit_code', 'duration_ms', 'artifact_count', 'port', 'owned_process')) {
+            if ($Fields.ContainsKey($name) -and $null -ne $Fields[$name]) { $record[$name] = $Fields[$name] }
+        }
+        $path = [string] $Layout.diagnostic_log
+        Assert-IrodoriCleanupTarget -Root $Layout.root -Target $path
+        [void] [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($path))
+        [IO.File]::AppendAllText($path, (($record | ConvertTo-Json -Compress -Depth 5) + [Environment]::NewLine), [Text.UTF8Encoding]::new($false))
+        $item = Get-Item -LiteralPath $path -Force
+        if ($item.Length -gt 262144) {
+            $kept = @([IO.File]::ReadAllLines($path) | Select-Object -Last 512)
+            Write-IrodoriAtomicText -Layout $Layout -Path $path -Text (($kept -join [Environment]::NewLine) + [Environment]::NewLine)
+        }
+    } catch {
+        # Diagnostics must never change bootstrap behavior.
+    }
 }
 
 function Test-IrodoriVerifiedFile {
@@ -925,9 +959,14 @@ function Invoke-IrodoriBootstrap {
     $runApp = if ($Adapters.ContainsKey('RunApp')) { $Adapters.RunApp } else {
         { & (Join-Path $PSScriptRoot 'dev-up.ps1'); return $LASTEXITCODE }
     }
+    $runId = [Guid]::NewGuid().ToString('D')
+    $bootstrapStarted = [Diagnostics.Stopwatch]::StartNew()
+    $diagnosticLayout = @{ root = $DataRoot; diagnostic_log = Join-Path $DataRoot 'diagnostics\irodori.jsonl' }
+    Write-IrodoriDiagnostic -Layout $diagnosticLayout -RunId $runId -Stage 'bootstrap' -Status 'started'
     $explicitEngine = [Environment]::GetEnvironmentVariable('PW_TTS_ENGINE')
     if (-not [string]::IsNullOrWhiteSpace($explicitEngine) -and $explicitEngine.ToLowerInvariant() -ne 'irodori') {
         $appExitCode = & $runApp
+        Write-IrodoriDiagnostic -Layout $diagnosticLayout -RunId $runId -Stage 'bootstrap' -Status 'skipped' -Fields @{ reason_code = 'external_engine'; app_exit_code = [int] $appExitCode; duration_ms = [int64] $bootstrapStarted.ElapsedMilliseconds }
         return [pscustomobject]@{ status = 'external_engine'; app_exit_code = [int] $appExitCode; backend = $null }
     }
 
@@ -950,10 +989,12 @@ function Invoke-IrodoriBootstrap {
         try {
             $manifest = Import-IrodoriManifest -Path $ManifestPath
             $layout = Get-IrodoriLayout -Root $DataRoot -ManifestVersion $manifest.manifest_version
+            Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'manifest' -Status 'completed' -Fields @{ artifact_count = @($manifest.artifacts).Count }
             $detectGpuNames = if ($Adapters.ContainsKey('DetectGpuNames')) { $Adapters.DetectGpuNames } else {
                 { @((Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })) }
             }
             $backend = Get-IrodoriBackend -GpuNames @(& $detectGpuNames)
+            Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'backend' -Status 'completed' -Fields @{ backend = $backend }
             $testRuntime = if ($Adapters.ContainsKey('TestRuntime')) { $Adapters.TestRuntime } else {
                 { param($Manifest, $Layout, $Backend, $RuntimeAdapters) Test-IrodoriRuntimeReady -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $RuntimeAdapters }
             }
@@ -984,6 +1025,7 @@ Build now? [Y/N]
                         { param($Manifest, $Layout, $Backend, $ProvisionAdapters) Invoke-IrodoriProvision -Manifest $Manifest -Layout $Layout -Backend $Backend -Adapters $ProvisionAdapters }
                     }
                     $provisionResult = & $provision $manifest $layout $backend $Adapters
+                    Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'provision' -Status 'completed' -Fields @{ backend = $backend }
                     $isComplete = $true
                 }
             } else {
@@ -1020,6 +1062,7 @@ Build now? [Y/N]
                 $portWasOpen = [bool] (& $testPort 8088)
                 if ($portWasOpen -and -not (Test-IrodoriBootstrapHealth -InvokeHttp $invokeHttp -Port 8088)) {
                     $status = 'port_conflict'
+                    Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'server' -Status 'failed' -Fields @{ backend = $backend; port = 8088; reason_code = 'port_conflict' }
                 } else {
                     if (-not $portWasOpen) {
                         $startOwned = if ($Adapters.ContainsKey('StartOwnedProcess')) { $Adapters.StartOwnedProcess } else {
@@ -1042,6 +1085,7 @@ Build now? [Y/N]
                             & $sleep 500
                         }
                         if (-not $healthy) { throw 'Irodori /health did not become ready.' }
+                        Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'server' -Status 'completed' -Fields @{ backend = $backend; port = 8088; owned_process = $true }
                     }
                     try {
                         $voicesResponse = & $invokeHttp 'GET' 'http://127.0.0.1:8088/v1/audio/voices' $null
@@ -1063,15 +1107,18 @@ Build now? [Y/N]
                         $env:PW_IRODORI_SKIP_WARMUP = '1'
                         $env:PW_IRODORI_BOOTSTRAP_STATUS = $status
                     }
+                    Write-IrodoriDiagnostic -Layout $layout -RunId $runId -Stage 'warmup' -Status $(if ($status -eq 'warmup_failed') { 'failed' } else { 'completed' }) -Fields @{ backend = $backend; port = 8088; reason_code = $status }
                 }
             }
         } catch [OperationCanceledException] { throw } catch [Management.Automation.PipelineStoppedException] { throw } catch {
             $status = 'setup_failed'
+            Write-IrodoriDiagnostic -Layout $diagnosticLayout -RunId $runId -Stage 'bootstrap' -Status 'failed' -Fields @{ backend = $backend; reason_code = 'setup_failed' }
             $safeMessage = 'Irodori setup failed; continuing without managed TTS.'
             if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'error' $safeMessage } else { Write-Warning $safeMessage }
         }
 
         $appExitCode = & $runApp
+        Write-IrodoriDiagnostic -Layout $diagnosticLayout -RunId $runId -Stage 'bootstrap' -Status 'completed' -Fields @{ backend = $backend; reason_code = $status; app_exit_code = [int] $appExitCode; duration_ms = [int64] $bootstrapStarted.ElapsedMilliseconds }
         return [pscustomobject]@{ status = $status; app_exit_code = [int] $appExitCode; backend = $backend }
     } finally {
         try {
@@ -1083,6 +1130,7 @@ Build now? [Y/N]
                     & $stopOwned $owned
                 } catch {
                     $safeCleanupMessage = 'Managed Irodori cleanup failed; continuing app shutdown.'
+                    Write-IrodoriDiagnostic -Layout $diagnosticLayout -RunId $runId -Stage 'cleanup' -Status 'failed' -Fields @{ backend = $backend; reason_code = 'cleanup_failed' }
                     try {
                         if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'cleanup' $safeCleanupMessage } else { Write-Warning $safeCleanupMessage }
                     } catch { Write-Warning $safeCleanupMessage }

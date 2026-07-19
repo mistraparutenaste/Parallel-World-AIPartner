@@ -17,7 +17,7 @@ use pw_contracts::{
     SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
 };
 use pw_domain::reply::TurnId;
-use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
+use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, redact_diagnostic};
 use pw_platform::paths::AppDataLayout;
 use pw_tts::{
     AivisSpeechClient, CachedSpeechSynthesizer, DEFAULT_MAX_ENTRIES, EngineClient,
@@ -508,10 +508,16 @@ impl TtsService {
             event_gate,
         };
         let queue_metrics = Arc::clone(&self.queue_metrics);
+        let engine_name = match settings.engine {
+            TtsEngineKind::Aivis => "aivis",
+            TtsEngineKind::Irodori => "irodori",
+        };
+        let voice_id_chars = settings.voice_id.chars().count();
 
         let thread = std::thread::Builder::new()
             .name("pw-tts".into())
             .spawn(move || {
+                tracing::info!(engine = engine_name, voice_id_chars, "tts worker started");
                 let mut queue = SpeechSynthesisQueue::new(synthesizer, sink);
                 while let Ok(command) = rx.recv() {
                     queue_metrics.dequeued();
@@ -523,10 +529,22 @@ impl TtsService {
                             if turn.value() <= invalid.load(Ordering::SeqCst) {
                                 continue;
                             }
+                            let started = Instant::now();
+                            tracing::info!(
+                                turn_id = turn.value(),
+                                text_chars = text.chars().count(),
+                                "tts synthesis started"
+                            );
                             queue.push_sentence(turn, &text);
+                            tracing::info!(
+                                turn_id = turn.value(),
+                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                "tts synthesis processed"
+                            );
                         }
                     }
                 }
+                tracing::info!(engine = engine_name, "tts worker exited");
             })
             .map_err(|error| format!("failed to spawn tts worker: {error}"))?;
 
@@ -621,9 +639,15 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
         emit_stop(&self.app);
     }
 
-    fn on_error(&self, _turn: TurnId, message: &str) {
-        tracing::warn!(%message, "tts synthesis failed; continuing text-only");
-        emit_state(&self.app, false, Some(message.to_owned()));
+    fn on_error(&self, turn: TurnId, message: &str) {
+        let safe_message = redact_diagnostic(message);
+        tracing::warn!(
+            turn_id = turn.value(),
+            error = %safe_message,
+            message_chars = message.chars().count(),
+            "tts synthesis failed; continuing text-only"
+        );
+        emit_state(&self.app, false, Some(safe_message));
         emit_tts_health(&self.app, &self.health, false);
     }
 }
@@ -631,6 +655,15 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tts_error_messages_redact_spoken_query_payloads() {
+        let message =
+            "error sending request for url (http://127.0.0.1:10101/query?text=spoken-secret)";
+        let safe = redact_diagnostic(message);
+        assert!(!safe.contains("spoken-secret"));
+        assert!(safe.contains("text=[REDACTED]"));
+    }
 
     #[test]
     fn worker_fingerprint_changes_for_engine_or_voice() {
