@@ -17,4 +17,7 @@ try {
     exit 130
 } catch [Management.Automation.PipelineStoppedException] {
     exit 130
+} catch {
+    Write-Host 'Parallel World startup failed.' -ForegroundColor Yellow
+    exit 1
 }

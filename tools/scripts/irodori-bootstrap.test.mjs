@@ -38,7 +38,7 @@ function runBootstrapEntryHarness(mode) {
   const behavior = mode === "cancel"
     ? `throw [OperationCanceledException]::new('cancelled')`
     : mode === "failure"
-      ? `throw [InvalidOperationException]::new('fixture failure')`
+      ? `throw [InvalidOperationException]::new('Bearer TOP-SECRET Authorization=C:\\Users\\SensitiveUser-DoNotLeak\\app.bin')`
       : `[pscustomobject]@{ app_exit_code = 7 }`;
   writeFileSync(
     module,
@@ -212,7 +212,11 @@ async function runBootstrapHarness(scenario) {
         $observations.start_environment = $Environment
         return [pscustomobject]@{ fixture = 'owned' }
       }
-      StopOwnedProcess = { param($Owned) $observations.stop_calls++ }
+      StopOwnedProcess = {
+        param($Owned)
+        $observations.stop_calls++
+        if ($scenario -eq 'stop_failure') { throw 'Bearer TOP-SECRET Authorization=C:\\Users\\secret\\cleanup.bin' }
+      }
       InvokeHttp = {
         param($Method, $Uri, $Body)
         if ($Uri -match '/health$') {
@@ -221,11 +225,13 @@ async function runBootstrapHarness(scenario) {
         }
         if ($Uri -match '/v1/audio/voices$') {
           $observations.voice_calls++
+          if ($scenario -eq 'voices_throw') { throw 'Bearer TOP-SECRET Authorization=C:\\Users\\secret\\voices.bin' }
           $data = if ($scenario -eq 'no_voice') { @() } else { @([pscustomobject]@{ id = 'fixture-voice' }) }
           return [pscustomobject]@{ status_code = 200; body = [pscustomobject]@{ data = $data }; bytes = $null }
         }
         if ($Uri -match '/v1/audio/speech$') {
           $observations.speech_calls++
+          if ($scenario -eq 'speech_throw') { throw 'Bearer TOP-SECRET Authorization=C:\\Users\\secret\\speech.bin' }
           $bytes = if ($scenario -eq 'invalid_wav') { [Text.Encoding]::ASCII.GetBytes('not a wav') } else { [byte[]](82,73,70,70,0,0,0,0,87,65,86,69) }
           return [pscustomobject]@{ status_code = 200; body = $null; bytes = $bytes }
         }
@@ -235,10 +241,24 @@ async function runBootstrapHarness(scenario) {
       RunApp = { $observations.app_calls++; $observations.app_environment = @{ PW_TTS_ENGINE = $env:PW_TTS_ENGINE; PW_IRODORI_DIR = $env:PW_IRODORI_DIR; PW_IRODORI_SKIP_WARMUP = $env:PW_IRODORI_SKIP_WARMUP; PW_IRODORI_BOOTSTRAP_STATUS = $env:PW_IRODORI_BOOTSTRAP_STATUS; PATH = $env:PATH; IRODORI_CHECKPOINT = $env:IRODORI_CHECKPOINT; IRODORI_CODEC_REPO = $env:IRODORI_CODEC_REPO; IRODORI_VOICES_DIR = $env:IRODORI_VOICES_DIR; IRODORI_COMPILE_MODEL = $env:IRODORI_COMPILE_MODEL; UV_PYTHON_CPYTHON_BUILD = $env:UV_PYTHON_CPYTHON_BUILD; UV_PROJECT_ENVIRONMENT = $env:UV_PROJECT_ENVIRONMENT; UV_PYTHON_INSTALL_DIR = $env:UV_PYTHON_INSTALL_DIR; UV_CACHE_DIR = $env:UV_CACHE_DIR; UV_NO_SYSTEM_CONFIG = $env:UV_NO_SYSTEM_CONFIG; PYTHONDONTWRITEBYTECODE = $env:PYTHONDONTWRITEBYTECODE; HF_HOME = $env:HF_HOME; HF_HUB_OFFLINE = $env:HF_HUB_OFFLINE; TRANSFORMERS_OFFLINE = $env:TRANSFORMERS_OFFLINE }; return 0 }
       WriteProgress = { param($Stage, $Message) [void] $observations.progress.Add("$Stage|$Message") }
     }
-    if ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
+    $originalEnvironment = [ordered]@{}
+    if ($scenario -eq 'stop_failure') {
+      $originalEnvironment = [ordered]@{
+        PATH = 'original-path'; PW_TTS_ENGINE = 'irodori'; PW_TTS_PORT = 'original-port'; PW_IRODORI_DIR = 'original-irodori-dir';
+        IRODORI_CHECKPOINT = 'original-checkpoint'; IRODORI_CODEC_REPO = 'original-codec'; IRODORI_VOICES_DIR = 'original-voices'; IRODORI_COMPILE_MODEL = 'original-compile';
+        PW_IRODORI_SKIP_WARMUP = 'original-skip'; PW_IRODORI_BOOTSTRAP_STATUS = 'original-status';
+        UV_PYTHON_CPYTHON_BUILD = 'original-python-build'; UV_PROJECT_ENVIRONMENT = 'original-project-env'; UV_PYTHON_INSTALL_DIR = 'original-python-dir';
+        UV_CACHE_DIR = 'original-uv-cache'; UV_NO_SYSTEM_CONFIG = 'original-no-system'; PYTHONDONTWRITEBYTECODE = 'original-no-bytecode';
+        HF_HOME = 'original-hf'; HF_HUB_OFFLINE = 'original-hf-offline';
+        TRANSFORMERS_OFFLINE = 'original-transformers-offline'
+      }
+      foreach ($entry in $originalEnvironment.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) }
+    } elseif ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
     if ($scenario -eq 'stale_failure') { $env:PW_IRODORI_SKIP_WARMUP = '1'; $env:PW_IRODORI_BOOTSTRAP_STATUS = 'ready' }
     $result = Invoke-IrodoriBootstrap -ManifestPath $manifestPath -DataRoot $root -Adapters $adapters
-    [pscustomobject]@{ result = $result; observations = $observations }
+    $restoredEnvironment = [ordered]@{}
+    foreach ($entry in $originalEnvironment.GetEnumerator()) { $restoredEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key) }
+    [pscustomobject]@{ result = $result; observations = $observations; original_environment = $originalEnvironment; restored_environment = $restoredEnvironment }
   `;
   try {
     return await invokePowerShell(expression);
@@ -1501,6 +1521,28 @@ test("continues app startup without network work when managed setup is declined"
   assert.match(observations.prompt_text, /LocalAppData|保存先/i);
   assert.match(observations.prompt_text, /MIT/);
   assert.match(observations.prompt_text, /voice cloning|第三者.*音声/i);
+  assert.match(observations.prompt_text, /Storage.*<Irodori data>/i);
+  assert.doesNotMatch(observations.prompt_text, /[A-Z]:\\Users\\|pw-irodori-bootstrap-/i);
+});
+
+test("uses a LOCALAPPDATA-relative storage label without exposing the username", async () => {
+  const result = await invokePowerShell(`
+    $env:LOCALAPPDATA = 'C:\\Users\\SensitiveUser-DoNotLeak\\AppData\\Local'
+    $dataRoot = Join-Path $env:LOCALAPPDATA 'com.parallelworld.desktop\\irodori'
+    $script:prompt = ''
+    $adapters = @{
+      DetectGpuNames = { @('AMD Radeon') }
+      TestRuntime = { $false }
+      PromptConsent = { param($Message) $script:prompt = $Message; return $false }
+      RunApp = { 0 }
+      WriteProgress = { param($Stage, $Message) }
+    }
+    $bootstrap = Invoke-IrodoriBootstrap -ManifestPath ${quotePowerShell(manifestPath)} -DataRoot $dataRoot -Adapters $adapters
+    [pscustomobject]@{ status = $bootstrap.status; prompt = $script:prompt }
+  `);
+  assert.equal(result.status, "declined");
+  assert.match(result.prompt, /%LOCALAPPDATA%\\com\.parallelworld\.desktop\\irodori/i);
+  assert.doesNotMatch(result.prompt, /SensitiveUser-DoNotLeak|C:\\Users\\/i);
 });
 
 test("provisions after consent and starts managed Irodori with pinned offline settings", async () => {
@@ -1651,6 +1693,29 @@ test("accepts only RIFF/WAVE warm-up audio", async () => {
   assert.equal(invalid.observations.app_calls, 1);
 });
 
+test("maps voices and speech HTTP exceptions to warmup_failed without retry trust loss", async () => {
+  for (const scenario of ["voices_throw", "speech_throw"]) {
+    const data = await runBootstrapHarness(scenario);
+    assert.equal(data.result.status, "warmup_failed");
+    assert.equal(data.observations.app_environment.PW_IRODORI_SKIP_WARMUP, "1");
+    assert.equal(data.observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "warmup_failed");
+    assert.equal(data.observations.app_calls, 1);
+    assert.equal(data.observations.stop_calls, 1);
+    assert.doesNotMatch(JSON.stringify(data), /TOP-SECRET|Authorization|Users\\secret|\.bin/i);
+  }
+});
+
+test("restores every managed environment value when owned-process cleanup throws", async () => {
+  const data = await runBootstrapHarness("stop_failure");
+  assert.equal(data.result.status, "ready");
+  assert.equal(data.result.app_exit_code, 0);
+  assert.equal(data.observations.app_calls, 1);
+  assert.equal(data.observations.stop_calls, 1);
+  assert.deepEqual(data.restored_environment, data.original_environment);
+  assert.match(data.observations.progress.join("\n"), /managed Irodori cleanup failed/i);
+  assert.doesNotMatch(JSON.stringify(data), /TOP-SECRET|Authorization|Users\\secret|cleanup\.bin/i);
+});
+
 test("does not claim a pre-open non-Irodori port", async () => {
   const { result, observations } = await runBootstrapHarness("port_conflict");
   assert.equal(result.status, "port_conflict");
@@ -1743,4 +1808,7 @@ test("bootstrap entry fails nonzero for an unexpected error", () => {
   const result = runBootstrapEntryHarness("failure");
   assert.notEqual(result.status, 0, result.stderr || result.stdout);
   assert.notEqual(result.status, 130, result.stderr || result.stdout);
+  const output = `${result.stdout}\n${result.stderr}`;
+  assert.match(output, /Parallel World startup failed\./);
+  assert.doesNotMatch(output, /TOP-SECRET|Authorization|SensitiveUser-DoNotLeak|app\.bin/i);
 });

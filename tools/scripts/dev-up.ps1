@@ -79,9 +79,9 @@ function Invoke-IrodoriWarmUp {
             [System.Text.Encoding]::ASCII.GetString($bytes, 8, 4) -ne 'WAVE') {
             throw 'warm-upの応答がWAVではありません。'
         }
-        Write-Host "[TTS] Irodori-TTS warm-upを確認しました (voice $voiceId)" -ForegroundColor Green
+        Write-Host '[TTS] Irodori-TTS warm-upを確認しました。' -ForegroundColor Green
     } catch {
-        Write-Host "[TTS] Irodori-TTS warm-upに失敗しました。読み上げは縮退動作になります: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host '[TTS] Irodori-TTS warm-upに失敗しました。読み上げは縮退動作になります。' -ForegroundColor Yellow
     } finally {
         Remove-Item -LiteralPath $warmUpFile -Force -ErrorAction SilentlyContinue
     }
@@ -135,7 +135,7 @@ function Stop-FailedTtsJob {
     try {
         Stop-ManagedProcessJob -Job $Job -GraceSeconds 0
     } catch {
-        Write-Host "[TTS] $EngineName の起動失敗後cleanupにも失敗しました: $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "[TTS] $EngineName の起動失敗後cleanupにも失敗しました。" -ForegroundColor Yellow
     }
 }
 
@@ -173,18 +173,17 @@ try {
             Write-Host "[TTS] AivisSpeech Engineが見つかりません。手動で起動してください（未起動でも読み上げのみ縮退し、アプリは動作します）。" -ForegroundColor Yellow
             Write-Host "      実行ファイルの場所が分かる場合は `$env:PW_AIVIS_ENGINE で指定できます。" -ForegroundColor Yellow
         } else {
-            Write-Host "[TTS] AivisSpeech Engineを起動します: $engine" -ForegroundColor Cyan
+            Write-Host '[TTS] AivisSpeech Engineを起動します。' -ForegroundColor Cyan
             $aivisStarted = $false
             try {
                 $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
                 Start-ManagedProcess -Job $ttsJob -FilePath $engine -ArgumentList @('--host', '127.0.0.1', '--port', "$ttsPort") -WorkingDirectory $repoRoot | Out-Null
                 $aivisStarted = $true
             } catch {
-                $startError = $_.Exception.Message
                 $failedJob = $ttsJob
                 $ttsJob = $null
                 Stop-FailedTtsJob -Job $failedJob -EngineName 'AivisSpeech Engine'
-                Write-Host "[TTS] AivisSpeech Engineを起動できません。読み上げは縮退動作になります: $startError" -ForegroundColor Yellow
+                Write-Host '[TTS] AivisSpeech Engineを起動できません。読み上げは縮退動作になります。' -ForegroundColor Yellow
             }
             if ($aivisStarted) {
                 $deadline = (Get-Date).AddSeconds(60)
@@ -215,7 +214,7 @@ try {
         } elseif ($null -eq $uv) {
             Write-Host '[TTS] uvが見つかりません。Irodoriの環境を手動セットアップしてください。自動インストールは行いません（読み上げのみ縮退し、アプリは動作します）。' -ForegroundColor Yellow
         } else {
-            Write-Host "[TTS] Irodori-TTS Serverを起動します: $irodoriDir" -ForegroundColor Cyan
+            Write-Host '[TTS] Irodori-TTS Serverを起動します。' -ForegroundColor Cyan
             $irodoriArguments = @('run', '--no-sync', 'python', '-m', 'irodori_openai_tts', '--host', '127.0.0.1', '--port', "$ttsPort")
             try {
                 $ttsJob = New-ManagedProcessJob -SessionId ([guid]::NewGuid())
@@ -233,16 +232,15 @@ try {
                     Invoke-IrodoriPostHealthCheck -Port $ttsPort -SkipWarmUp $skipIrodoriWarmUp -BootstrapStatus $irodoriBootstrapStatus
                 }
             } catch {
-                $startError = $_.Exception.Message
                 $failedJob = $ttsJob
                 $ttsJob = $null
                 Stop-FailedTtsJob -Job $failedJob -EngineName 'Irodori-TTS Server'
-                Write-Host "[TTS] Irodori-TTS Serverを起動できません。読み上げは縮退動作になります: $startError" -ForegroundColor Yellow
+                Write-Host '[TTS] Irodori-TTS Serverを起動できません。読み上げは縮退動作になります。' -ForegroundColor Yellow
             }
         }
     }
     } else {
-        Write-Host "[TTS] PW_TTS_ENGINE '$ttsEngine' は未対応です。aivisまたはirodoriを指定してください（読み上げのみ縮退し、アプリは動作します）。" -ForegroundColor Yellow
+        Write-Host '[TTS] 未対応のTTS engineです。aivisまたはirodoriを指定してください（読み上げのみ縮退し、アプリは動作します）。' -ForegroundColor Yellow
     }
 
     # --- 2. LLMサーバー -----------------------------------------------------
@@ -270,7 +268,11 @@ try {
     $appInvoked = $true
 } finally {
     if ($null -ne $ttsJob) {
-        Stop-ManagedProcessJob -Job $ttsJob -GraceSeconds 5
+        try {
+            Stop-ManagedProcessJob -Job $ttsJob -GraceSeconds 5
+        } catch {
+            Write-Host '[TTS] managed TTS cleanupに失敗しました。' -ForegroundColor Yellow
+        }
     }
 }
 if ($appInvoked) {

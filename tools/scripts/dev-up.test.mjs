@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { spawn, spawnSync } from "node:child_process";
 import net from "node:net";
 import os from "node:os";
@@ -100,7 +100,7 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-async function startHttpListenerProcess(temp, { healthy = false } = {}) {
+async function startHttpListenerProcess(temp, { healthy = false, voiceId = "fixture" } = {}) {
   const probe = await listenOnLoopback();
   const port = probe.address().port;
   await closeServer(probe);
@@ -109,7 +109,7 @@ async function startHttpListenerProcess(temp, { healthy = false } = {}) {
   const requestLog = path.join(temp, "http-listener-requests.txt");
   await writeFile(
     helperPath,
-    `import http from "node:http"; import { appendFileSync, writeFileSync } from "node:fs"; const server = http.createServer((request, response) => { appendFileSync(${JSON.stringify(requestLog)}, request.method + " " + request.url + "\\n"); if (${healthy ? "true" : "false"} && request.url === "/health") { response.statusCode = 200; response.end("ok"); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/voices") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: "fixture" }] })); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/speech") { response.setHeader("content-type", "audio/wav"); response.end(Buffer.from([82,73,70,70,0,0,0,0,87,65,86,69])); return; } response.statusCode = 503; response.end("not irodori"); }); server.listen(${port}, "127.0.0.1", () => writeFileSync(${JSON.stringify(marker)}, "ready"));`,
+    `import http from "node:http"; import { appendFileSync, writeFileSync } from "node:fs"; const server = http.createServer((request, response) => { appendFileSync(${JSON.stringify(requestLog)}, request.method + " " + request.url + "\\n"); if (${healthy ? "true" : "false"} && request.url === "/health") { response.statusCode = 200; response.end("ok"); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/voices") { response.setHeader("content-type", "application/json"); response.end(JSON.stringify({ data: [{ id: ${JSON.stringify(voiceId)} }] })); return; } if (${healthy ? "true" : "false"} && request.url === "/v1/audio/speech") { response.setHeader("content-type", "audio/wav"); response.end(Buffer.from([82,73,70,70,0,0,0,0,87,65,86,69])); return; } response.statusCode = 503; response.end("not irodori"); }); server.listen(${port}, "127.0.0.1", () => writeFileSync(${JSON.stringify(marker)}, "ready"));`,
     "utf8",
   );
   const child = spawn(process.execPath, [helperPath], { windowsHide: true });
@@ -178,6 +178,12 @@ test("Irodori waits for health and performs a WAV warm-up without blocking app s
   assert.match(source, /縮退/);
 });
 
+test("TTS logs never interpolate raw engine paths or exception messages", () => {
+  assert.doesNotMatch(source, /Exception\.Message|\$startError/);
+  assert.doesNotMatch(source, /起動します:\s*\$(?:engine|irodoriDir)/);
+  assert.doesNotMatch(source, /voice \$voiceId/);
+});
+
 test("README links the user-managed Irodori setup guide", async () => {
   const readme = await readFile(path.join(repositoryRoot, "README.md"), "utf8");
   const guide = await readFile(
@@ -233,7 +239,10 @@ test(
     const ttsPort = closedPortProbe.address().port;
     await closeServer(closedPortProbe);
     const externalLlm = await listenOnLoopback();
-    const invalidEngine = path.join(harness.temp, "not-an-executable.txt");
+    const secretPathSegment = "Bearer-TOP-SECRET-Authorization-SensitiveUser-DoNotLeak";
+    const secretDirectory = path.join(harness.temp, secretPathSegment);
+    const invalidEngine = path.join(secretDirectory, "not-an-executable.txt");
+    await mkdir(secretDirectory, { recursive: true });
     await writeFile(invalidEngine, "invalid", "utf8");
     try {
       const result = runDevUp({
@@ -247,8 +256,64 @@ test(
       assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
       assert.equal(externalLlm.listening, true);
       assert.match(result.stdout, /AivisSpeech Engine.*起動できません/);
+      assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /TOP-SECRET|Authorization|SensitiveUser-DoNotLeak|not-an-executable/i);
     } finally {
       await closeServer(externalLlm);
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "Irodori start failure hides managed paths and exception details",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const secretPathSegment = "Bearer-TOP-SECRET-Authorization-SensitiveUser-DoNotLeak";
+    const irodoriDir = path.join(harness.temp, secretPathSegment, "irodori-server");
+    const invalidUv = path.join(harness.temp, "uv.exe");
+    const closedPortProbe = await listenOnLoopback();
+    const ttsPort = closedPortProbe.address().port;
+    await closeServer(closedPortProbe);
+    await mkdir(irodoriDir, { recursive: true });
+    await writeFile(invalidUv, "not an executable", "utf8");
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(ttsPort),
+        PW_IRODORI_DIR: irodoriDir,
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(await readFile(harness.marker, "utf8").then(() => true, () => false), true);
+      assert.match(result.stdout, /Irodori-TTS Server.*起動できません/);
+      assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /TOP-SECRET|Authorization|SensitiveUser-DoNotLeak|irodori-server|uv\.exe/i);
+    } finally {
+      await rm(harness.temp, { recursive: true, force: true });
+    }
+  },
+);
+
+test(
+  "warm-up success does not expose a server-provided voice identifier",
+  { skip: process.platform !== "win32" },
+  async () => {
+    const harness = await createCorepackHarness(0);
+    const secretVoice = "Bearer-TOP-SECRET-Authorization-C:\\Users\\SensitiveUser-DoNotLeak\\voice.wav";
+    const irodori = await startHttpListenerProcess(harness.temp, { healthy: true, voiceId: secretVoice });
+    try {
+      const result = runDevUp({
+        ...harness.env,
+        PW_TTS_ENGINE: "irodori",
+        PW_TTS_PORT: String(irodori.port),
+        PW_LLM_PORT: "49152",
+      });
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.match(result.stdout, /warm-up/);
+      assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /TOP-SECRET|Authorization|SensitiveUser-DoNotLeak|voice\.wav/i);
+    } finally {
+      stopProcess(irodori.process.pid);
       await rm(harness.temp, { recursive: true, force: true });
     }
   },
@@ -356,7 +421,7 @@ test(
 );
 
 test(
-  "reports managed voice absence and WAV failure without repeating warm-up requests",
+  "composes managed bootstrap voice absence and warmup failure without HTTP retry",
   { skip: process.platform !== "win32" },
   async () => {
     for (const scenario of [

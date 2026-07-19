@@ -814,6 +814,23 @@ function Test-IrodoriWaveBytes {
         [Text.Encoding]::ASCII.GetString($Bytes, 8, 4) -eq 'WAVE'
 }
 
+function Get-IrodoriDataRootDisplayPath {
+    param([AllowNull()][string] $DataRoot)
+    $fallback = '<Irodori data>'
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if ([string]::IsNullOrWhiteSpace($DataRoot) -or [string]::IsNullOrWhiteSpace($localAppData)) { return $fallback }
+    try {
+        $expected = [IO.Path]::GetFullPath((Join-Path $localAppData 'com.parallelworld.desktop\irodori'))
+        $candidate = [IO.Path]::GetFullPath($DataRoot)
+        if ($candidate.Equals($expected, [StringComparison]::OrdinalIgnoreCase)) {
+            return '%LOCALAPPDATA%\com.parallelworld.desktop\irodori'
+        }
+    } catch {
+        # Display-only redaction: malformed and custom paths use the fixed label.
+    }
+    return $fallback
+}
+
 function Test-IrodoriRuntimeReady {
     param(
         [psobject] $Manifest,
@@ -885,12 +902,13 @@ function Invoke-IrodoriBootstrap {
                 [int64] $downloadBytes = 0
                 foreach ($artifact in @($manifest.artifacts)) { $downloadBytes += [int64] $artifact.size }
                 [int64] $peakBytes = Get-IrodoriRequiredBytes -Manifest $manifest
+                $storageDisplayPath = Get-IrodoriDataRootDisplayPath -DataRoot $DataRoot
                 $promptMessage = @"
 Irodori-TTS managed environment is not ready.
 Backend: $backend
 Direct downloads: $downloadBytes bytes
 Conservative peak free space: $peakBytes bytes
-Storage (LocalAppData): $DataRoot
+Storage (LocalAppData): $storageDisplayPath
 Licenses: Irodori/model/codec/tokenizer MIT; uv Apache-2.0 OR MIT
 Voice cloning / third-party voice: use only recordings with the speaker's explicit consent.
 Build now? [Y/N]
@@ -964,17 +982,21 @@ Build now? [Y/N]
                         }
                         if (-not $healthy) { throw 'Irodori /health did not become ready.' }
                     }
-                    $voicesResponse = & $invokeHttp 'GET' 'http://127.0.0.1:8088/v1/audio/voices' $null
-                    if ($null -eq $voicesResponse -or [int] $voicesResponse.status_code -ne 200) { throw 'Irodori voice list request failed.' }
-                    $voices = @($voicesResponse.body.data)
-                    if ($voices.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string] $voices[0].id)) {
-                        $status = 'ready_without_voice'
-                    } else {
-                        $speechBody = [ordered]@{ model = 'irodori-tts'; input = 'Irodori startup check.'; voice = [string] $voices[0].id; response_format = 'wav'; speed = 1.0 }
-                        $speechResponse = & $invokeHttp 'POST' 'http://127.0.0.1:8088/v1/audio/speech' $speechBody
-                        if ($null -eq $speechResponse -or [int] $speechResponse.status_code -ne 200 -or -not (Test-IrodoriWaveBytes -Bytes $speechResponse.bytes)) {
-                            $status = 'warmup_failed'
-                        } else { $status = 'ready' }
+                    try {
+                        $voicesResponse = & $invokeHttp 'GET' 'http://127.0.0.1:8088/v1/audio/voices' $null
+                        if ($null -eq $voicesResponse -or [int] $voicesResponse.status_code -ne 200) { throw 'Irodori voice list request failed.' }
+                        $voices = @($voicesResponse.body.data)
+                        if ($voices.Count -eq 0 -or [string]::IsNullOrWhiteSpace([string] $voices[0].id)) {
+                            $status = 'ready_without_voice'
+                        } else {
+                            $speechBody = [ordered]@{ model = 'irodori-tts'; input = 'Irodori startup check.'; voice = [string] $voices[0].id; response_format = 'wav'; speed = 1.0 }
+                            $speechResponse = & $invokeHttp 'POST' 'http://127.0.0.1:8088/v1/audio/speech' $speechBody
+                            if ($null -eq $speechResponse -or [int] $speechResponse.status_code -ne 200 -or -not (Test-IrodoriWaveBytes -Bytes $speechResponse.bytes)) {
+                                $status = 'warmup_failed'
+                            } else { $status = 'ready' }
+                        }
+                    } catch [OperationCanceledException] { throw } catch [Management.Automation.PipelineStoppedException] { throw } catch {
+                        $status = 'warmup_failed'
                     }
                     if ($status -in @('ready', 'ready_without_voice', 'warmup_failed')) {
                         $env:PW_IRODORI_SKIP_WARMUP = '1'
@@ -991,13 +1013,23 @@ Build now? [Y/N]
         $appExitCode = & $runApp
         return [pscustomobject]@{ status = $status; app_exit_code = [int] $appExitCode; backend = $backend }
     } finally {
-        if ($null -ne $owned) {
-            $stopOwned = if ($Adapters.ContainsKey('StopOwnedProcess')) { $Adapters.StopOwnedProcess } else {
-                { param($Owned) Stop-ManagedProcessJob -Job $Owned -GraceSeconds 5 }
+        try {
+            if ($null -ne $owned) {
+                $stopOwned = if ($Adapters.ContainsKey('StopOwnedProcess')) { $Adapters.StopOwnedProcess } else {
+                    { param($Owned) Stop-ManagedProcessJob -Job $Owned -GraceSeconds 5 }
+                }
+                try {
+                    & $stopOwned $owned
+                } catch {
+                    $safeCleanupMessage = 'Managed Irodori cleanup failed; continuing app shutdown.'
+                    try {
+                        if ($Adapters.ContainsKey('WriteProgress')) { & $Adapters.WriteProgress 'cleanup' $safeCleanupMessage } else { Write-Warning $safeCleanupMessage }
+                    } catch { Write-Warning $safeCleanupMessage }
+                }
             }
-            & $stopOwned $owned
+        } finally {
+            foreach ($name in $managedEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }
         }
-        foreach ($name in $managedEnvironmentNames) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name]) }
     }
 }
 
