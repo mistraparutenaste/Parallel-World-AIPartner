@@ -6,6 +6,7 @@ pub mod epistemic;
 mod lifecycle;
 mod observation;
 mod promotion;
+mod state;
 mod validator;
 
 pub use consolidation::{
@@ -34,6 +35,12 @@ pub use observation::{
 pub use promotion::{
     MemoryPromoter, PromotionResult, ProvenanceLink, ProvisionalMemoryChangeSet,
     VersionedMemoryAction,
+};
+pub use state::{
+    AsyncStateWrite, AsyncStateWriter, CasOutcome, Commitment, CommitmentStatus,
+    CompanionStateStore, DialogueState, DomainConsent, DomainControl, MemoryDomain, MemoryLink,
+    MemoryLinkRelation, MemoryTombstone, MemoryVersion, MemoryWriteClass, MemoryWriteDisposition,
+    TemporaryConversationSettings, enqueue_state_fail_open, memory_write_disposition,
 };
 pub use validator::{
     CandidateRelation, NormalizationEdit, TypedCandidate, ValidationError, validate_candidate,

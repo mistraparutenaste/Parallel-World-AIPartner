@@ -202,6 +202,25 @@ impl ObservationStore for SqliteMemoryStore {
                 "memory observation requires conversation and user text".into(),
             ));
         }
+        let temporary: bool = self
+            .database
+            .connection()
+            .query_row(
+                "SELECT temporary FROM temporary_conversations WHERE conversation_id=?1",
+                [&input.conversation_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(memory_error)?
+            .unwrap_or(false);
+        if temporary {
+            // A temporary conversation is intentionally absent from the
+            // observation ledger, so a later worker cannot derive semantic or
+            // relationship state after the user has left the transient chat.
+            return Err(PortError(
+                "temporary conversation cannot persist memory".into(),
+            ));
+        }
         let user_text = redact_persistent_content(&input.user_text);
         let hash = input_hash(&user_text);
         let connection = self.database.connection();
@@ -2944,6 +2963,32 @@ mod tests {
                 .upsert_summary("missing", "パスワード=x", 1, 1)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn temporary_conversation_never_enters_the_durable_observation_ledger() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        store
+            .database
+            .connection()
+            .execute(
+                "INSERT INTO temporary_conversations(conversation_id,temporary,revision,updated_at) VALUES('temporary',1,1,1)",
+                [],
+            )
+            .unwrap();
+        assert!(
+            store
+                .insert_observation(NewObservation::new("temporary", 1, "do not persist", 1))
+                .is_err()
+        );
+        let count: i64 = store
+            .database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memory_observations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

@@ -21,7 +21,10 @@ const OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION: &str =
     include_str!("../migrations/0011_observation_recovery_and_privacy.sql");
 const PROMOTION_REPLAY_FENCE_MIGRATION: &str =
     include_str!("../migrations/0012_promotion_replay_fence.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 12;
+const MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION: &str =
+    include_str!("../migrations/0013_memory_domains_and_commitments.sql");
+const DIALOGUE_STATE_MIGRATION: &str = include_str!("../migrations/0014_dialogue_state.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 14;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -55,8 +58,7 @@ impl Database {
     /// Returns an error when `SQLite` cannot open/configure the database, a
     /// migration fails, or the bundled `SQLite` is too old for safe WAL use.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
-        let connection = Connection::open(path)?;
-        Self::configure(connection, true, Duration::from_secs(5))
+        Self::open_with_busy_timeout(path, Duration::from_secs(5))
     }
 
     /// Opens the durable database with a bounded lock wait.  Event paths use
@@ -65,8 +67,23 @@ impl Database {
         path: impl AsRef<Path>,
         busy_timeout: Duration,
     ) -> Result<Self, StorageError> {
-        let connection = Connection::open(path)?;
-        Self::configure(connection, true, busy_timeout)
+        // Two application workers can create the database concurrently during
+        // startup. `PRAGMA journal_mode=WAL` itself needs the write lock, so a
+        // bounded retry closes the small migration/configuration race instead
+        // of making an otherwise healthy conversation fail open prematurely.
+        const OPEN_BUSY_RETRIES: u32 = 8;
+        let path = path.as_ref();
+        for attempt in 0..=OPEN_BUSY_RETRIES {
+            let connection = Connection::open(path)?;
+            match Self::configure(connection, true, busy_timeout) {
+                Ok(database) => return Ok(database),
+                Err(error) if is_busy_error(&error) && attempt < OPEN_BUSY_RETRIES => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded open retry always returns")
     }
 
     /// Opens a migrated in-memory database for tests and ephemeral work.
@@ -184,6 +201,20 @@ impl Database {
             transaction.pragma_update(None, "user_version", 12)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 13 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 13)?;
+            transaction.commit()?;
+        }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 14 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(DIALOGUE_STATE_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 14)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -195,6 +226,14 @@ impl Database {
     pub const fn connection_mut(&mut self) -> &mut Connection {
         &mut self.connection
     }
+}
+
+fn is_busy_error(error: &StorageError) -> bool {
+    matches!(
+        error,
+        StorageError::Sqlite(rusqlite::Error::SqliteFailure(sqlite_error, _))
+            if sqlite_error.code == rusqlite::ErrorCode::DatabaseBusy
+    )
 }
 
 #[cfg(test)]
@@ -258,7 +297,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
 
         for table in [
@@ -271,6 +310,13 @@ mod tests {
             "memory_classification_runs",
             "memory_promotions",
             "memory_provenance",
+            "memory_domain_controls",
+            "memory_versions",
+            "memory_links",
+            "memory_tombstones",
+            "commitments",
+            "temporary_conversations",
+            "dialogue_states",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -287,13 +333,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 13).unwrap();
+        connection.pragma_update(None, "user_version", 15).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 13,
-                supported: 12
+                found: 15,
+                supported: 14
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -321,7 +367,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
 
         drop(reopened);
@@ -362,7 +408,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -486,7 +532,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -530,7 +576,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 12);
+        assert_eq!(version, 14);
         let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
@@ -570,7 +616,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -646,7 +692,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -703,9 +749,66 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            12
+            14
         );
         drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn populated_v12_fixture_upgrades_through_v14_and_reopens() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-v12-companion-state-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+                MEMORY_LIFECYCLE_MIGRATION,
+                super::MESSAGES_ID_CURSOR_MIGRATION,
+                MEMORY_TYPED_MIGRATION,
+                MEMORY_OBSERVATION_LEDGER_MIGRATION,
+                OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION,
+                super::PROMOTION_REPLAY_FENCE_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection
+                .execute_batch(
+                    "INSERT INTO conversations(id,created_at,updated_at) VALUES('chat',1,1);
+                     PRAGMA user_version=12;",
+                )
+                .unwrap();
+        }
+        let database = Database::open(&path).unwrap();
+        let controls: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memory_domain_controls", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(controls, 8);
+        let version: i64 = database
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 14);
+        drop(database);
+        assert_eq!(
+            Database::open(&path)
+                .unwrap()
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            14
+        );
         let _ = std::fs::remove_file(path);
     }
 }
