@@ -157,6 +157,26 @@ pub trait MemoryStore {
     ) -> Result<Option<i64>, PortError> {
         Err(PortError("memory lifecycle mutation unsupported".into()))
     }
+    /// Applies a lifecycle action only if its target still has the revision
+    /// observed during validation. Target-less actions must pass `None`.
+    ///
+    /// The default preserves legacy adapters: they may still support
+    /// target-less actions, but must explicitly implement this boundary before
+    /// accepting a versioned target mutation.
+    fn apply_action_versioned(
+        &mut self,
+        action: &MemoryAction,
+        expected_target_revision: Option<i64>,
+        source: &EvidenceSource,
+        now: i64,
+    ) -> Result<Option<i64>, PortError> {
+        if expected_target_revision.is_some() {
+            return Err(PortError(
+                "versioned memory lifecycle mutation unsupported".into(),
+            ));
+        }
+        self.apply_action(action, source, now)
+    }
     fn record_recalled(
         &mut self,
         _ids: &[i64],

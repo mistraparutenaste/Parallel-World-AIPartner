@@ -39,6 +39,8 @@ pub enum ValidationError {
         actual_source_id: String,
     },
     SourceSpansNotStrictlyOrdered,
+    DisjointSourceSpansForbidden,
+    SourceSpanMustCoverSource,
     SourceSpanOutOfBounds,
     SourceSpanNotCharBoundary,
     NormalizationTraceDoesNotCoverChangedBytes,
@@ -64,6 +66,7 @@ pub enum ValidationError {
         action_target_memory_id: i64,
         candidate_target_memory_id: Option<i64>,
     },
+    ActionContentMismatch,
     TargetLifecycleForbidden {
         target_memory_id: i64,
         state: MemoryState,
@@ -100,6 +103,7 @@ pub fn validate_candidate_for_source(
 ) -> Result<(), ValidationError> {
     validate_spans(&candidate.atom.source_spans, expected_source_id, source)?;
     validate_normalization(candidate, source)?;
+    validate_action_content(candidate)?;
     validate_markers(
         candidate,
         &source_text(&candidate.atom.source_spans, source),
@@ -127,6 +131,12 @@ fn validate_spans(
     if spans.is_empty() {
         return Err(ValidationError::MissingSourceSpan);
     }
+    // A memory atom is an auditable projection of one source clause.  Joining
+    // disjoint slices would make the omitted text (including negation or
+    // modality) invisible to the marker checks below.
+    if spans.len() != 1 {
+        return Err(ValidationError::DisjointSourceSpansForbidden);
+    }
     let mut previous_end = None;
     for span in spans {
         if span.source_id != expected_source_id {
@@ -148,6 +158,29 @@ fn validate_spans(
             return Err(ValidationError::SourceSpansNotStrictlyOrdered);
         }
         previous_end = Some(span.end);
+    }
+    let span = &spans[0];
+    if span.start != 0 || span.end != source.len() {
+        return Err(ValidationError::SourceSpanMustCoverSource);
+    }
+    Ok(())
+}
+
+fn validate_action_content(candidate: &TypedCandidate) -> Result<(), ValidationError> {
+    let action_content = match &candidate.proposed_action {
+        ProposedAction::Add { content } | ProposedAction::Supersede { content, .. } => {
+            Some(content)
+        }
+        ProposedAction::Pin {
+            memory_id: None,
+            content: Some(content),
+        } => Some(content),
+        ProposedAction::Reinforce { .. } | ProposedAction::Pin { .. } | ProposedAction::Ignore => {
+            None
+        }
+    };
+    if action_content.is_some_and(|content| content != &candidate.atom.content) {
+        return Err(ValidationError::ActionContentMismatch);
     }
     Ok(())
 }
@@ -224,6 +257,21 @@ fn validate_target(
     candidate: &TypedCandidate,
     targets: &[MemoryCandidate],
 ) -> Result<(), ValidationError> {
+    let creates_replacement = matches!(
+        candidate.proposed_action,
+        ProposedAction::Add { .. }
+            | ProposedAction::Pin {
+                memory_id: None,
+                ..
+            }
+            | ProposedAction::Supersede { .. }
+    );
+    if creates_replacement && candidate.atom.lifecycle_state != MemoryState::Active {
+        return Err(ValidationError::LifecycleTransitionForbidden {
+            from: MemoryState::Active,
+            to: candidate.atom.lifecycle_state,
+        });
+    }
     let action_target = match candidate.proposed_action {
         ProposedAction::Reinforce { memory_id } => Some(memory_id),
         ProposedAction::Supersede { old_memory_id, .. } => Some(old_memory_id),
@@ -305,7 +353,10 @@ fn validate_target(
                     state: target.state,
                 });
             }
-            if candidate.atom.lifecycle_state != MemoryState::Superseded {
+            // The candidate is the newly-created replacement.  The target is
+            // superseded by the storage action, while the replacement must be
+            // born active.
+            if candidate.atom.lifecycle_state != MemoryState::Active {
                 return Err(ValidationError::LifecycleTransitionForbidden {
                     from: target.state,
                     to: candidate.atom.lifecycle_state,
@@ -482,6 +533,153 @@ mod tests {
         assert_eq!(
             validate_candidate(&value, "turn:1", "I like cats", &[]),
             Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes)
+        );
+    }
+
+    #[test]
+    fn rejects_add_content_that_differs_from_the_validated_atom() {
+        let mut value = candidate("I like cats");
+        value.proposed_action = ProposedAction::Add {
+            content: "I own a yacht".into(),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::ActionContentMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_supersede_content_that_differs_from_the_validated_atom() {
+        let target = MemoryCandidate {
+            id: 3,
+            revision: Some(1),
+            content: "I like cats".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 0,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut value = candidate("I like dogs");
+        value.relation = CandidateRelation::Contradicts;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Supersede {
+            old_memory_id: 3,
+            content: "I own a yacht".into(),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like dogs", &[target]),
+            Err(ValidationError::ActionContentMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_targetless_pin_content_that_differs_from_the_validated_atom() {
+        let mut value = candidate("I like cats");
+        value.proposed_action = ProposedAction::Pin {
+            memory_id: None,
+            content: Some("I own a yacht".into()),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::ActionContentMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_disjoint_spans_that_elide_negation_and_modality() {
+        let source = "I might not like cats";
+        let mut value = candidate("I like cats");
+        value.atom.source_spans = vec![
+            SourceSpan {
+                source_id: "turn:1".into(),
+                start: 0,
+                end: 2,
+            },
+            SourceSpan {
+                source_id: "turn:1".into(),
+                start: "I might not ".len(),
+                end: source.len(),
+            },
+        ];
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", source, &[]),
+            Err(ValidationError::DisjointSourceSpansForbidden)
+        );
+    }
+
+    #[test]
+    fn rejects_a_partial_span_that_elides_modal_context() {
+        let source = "I might like cats";
+        let mut value = candidate("like cats");
+        value.atom.source_spans[0] = SourceSpan {
+            source_id: "turn:1".into(),
+            start: "I might ".len(),
+            end: source.len(),
+        };
+        value.proposed_action = ProposedAction::Add {
+            content: "like cats".into(),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", source, &[]),
+            Err(ValidationError::SourceSpanMustCoverSource)
+        );
+    }
+
+    #[test]
+    fn rejects_additions_with_a_non_active_lifecycle_state() {
+        let mut value = candidate("I like cats");
+        value.atom.lifecycle_state = MemoryState::Dormant;
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::LifecycleTransitionForbidden {
+                from: MemoryState::Active,
+                to: MemoryState::Dormant,
+            })
+        ));
+
+        value.atom.lifecycle_state = MemoryState::Superseded;
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::LifecycleTransitionForbidden {
+                from: MemoryState::Active,
+                to: MemoryState::Superseded,
+            })
+        ));
+    }
+
+    #[test]
+    fn accepts_supersede_with_an_active_replacement_atom() {
+        let target = MemoryCandidate {
+            id: 3,
+            revision: Some(1),
+            content: "I like cats".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 0,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut value = candidate("I like dogs");
+        value.relation = CandidateRelation::Contradicts;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Supersede {
+            old_memory_id: 3,
+            content: "I like dogs".into(),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like dogs", &[target]),
+            Ok(())
         );
     }
 
