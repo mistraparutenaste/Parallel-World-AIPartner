@@ -774,8 +774,8 @@ mod tests {
         ] {
             let mut pipeline = ResponsePipeline::new(
                 MismatchedKindPlanner(returned),
-                PassThrough,
-                PassThrough,
+                CountingRetriever(0),
+                CountingRealizer(0),
                 PlanningBudget::default(),
             );
             assert!(
@@ -783,6 +783,16 @@ mod tests {
                     .try_prepare(requested, "planned", &MemoryContext::default())
                     .is_none(),
                 "{requested:?} must reject a {returned:?} plan"
+            );
+            assert_eq!(
+                pipeline.retriever.as_ref().expect("retriever restored").0,
+                0,
+                "{requested:?} must reject a {returned:?} plan before retrieval"
+            );
+            assert_eq!(
+                pipeline.realizer.as_ref().expect("realizer restored").0,
+                0,
+                "{requested:?} must reject a {returned:?} plan before realization"
             );
         }
     }
