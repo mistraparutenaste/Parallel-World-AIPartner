@@ -3,6 +3,7 @@
 mod companion;
 mod consolidation;
 mod context;
+mod embedding;
 pub mod epistemic;
 mod lifecycle;
 mod observation;
@@ -22,6 +23,10 @@ pub use context::{
     MemoryContext, MemoryRecord, MemoryStore, PersistentFactGenerator, RollingSummaryGenerator,
     StoredSummary, SummaryEntry, SummaryGenerator, SummaryWorker, is_role_preserving_summary,
     is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
+};
+pub use embedding::{
+    EmbeddingHit, LexicalFallback, MAX_EMBEDDING_CANDIDATE_CHARS, MAX_EMBEDDING_CANDIDATES,
+    MAX_EMBEDDING_QUERY_CHARS, MAX_EMBEDDING_TIMEOUT, MemoryEmbedder,
 };
 pub use epistemic::{
     Attribution, Conditionality, DiscourseFeatures, EpistemicForm, Fictionality, MemoryAtom,
