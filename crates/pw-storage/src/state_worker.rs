@@ -41,6 +41,12 @@ impl SqlitePlannedStateContext {
 impl PlannedStateContextProvider for SqlitePlannedStateContext {
     fn retrieve_state(&mut self, _plan: &ResponsePlan) -> Result<BoundedStateContext, PortError> {
         let now = unix_timestamp();
+        if self
+            .store
+            .is_temporary_conversation(&self.conversation_id)?
+        {
+            return Ok(BoundedStateContext::default());
+        }
         let relationship_allowed = matches!(
             self.store
                 .get_domain_control(MemoryDomain::Relationship)?
@@ -89,6 +95,12 @@ impl PlannedStateContextProvider for SqlitePlannedStateContext {
                 .and_then(|state| state.reflection_cursor.clone()),
             open_commitments: commitments,
         };
+        if self
+            .store
+            .is_temporary_conversation(&self.conversation_id)?
+        {
+            return Ok(BoundedStateContext::default());
+        }
         context.validate()?;
         Ok(context)
     }
