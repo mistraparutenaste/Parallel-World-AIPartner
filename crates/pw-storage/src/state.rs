@@ -1,8 +1,8 @@
 use pw_application::PortError;
 use pw_application::memory::{
-    CasOutcome, Commitment, CompanionStateStore, DialogueState, DomainConsent, DomainControl,
-    MemoryDomain, MemoryLink, MemoryTombstone, MemoryVersion, TemporaryConversationSettings,
-    is_safe_persistent_content,
+    CasOutcome, Commitment, CommitmentStatus, CompanionStateStore, DialogueState, DomainConsent,
+    DomainControl, MemoryDomain, MemoryLink, MemoryTombstone, MemoryVersion,
+    TemporaryConversationSettings, is_safe_persistent_content,
 };
 use rusqlite::{OptionalExtension, params};
 
@@ -172,6 +172,38 @@ impl CompanionStateStore for SqliteCompanionStateStore {
         };
         transaction.commit().map_err(state_error)?;
         Ok(outcome)
+    }
+
+    fn list_open_commitments(
+        &self,
+        conversation_id: &str,
+        now: i64,
+        limit: usize,
+    ) -> Result<Vec<Commitment>, PortError> {
+        let limit = i64::try_from(limit.min(32)).unwrap_or(32);
+        let mut statement = self
+            .database
+            .connection()
+            .prepare(
+                "SELECT id,content,status,due_at,next_check_at,expires_at,revision FROM commitments WHERE conversation_id=?1 AND status='open' AND (expires_at IS NULL OR expires_at>?2) ORDER BY id LIMIT ?3",
+            )
+            .map_err(state_error)?;
+        let rows = statement
+            .query_map(params![conversation_id, now, limit], |row| {
+                Ok(Commitment {
+                    id: row.get(0)?,
+                    conversation_id: conversation_id.to_owned(),
+                    content: row.get(1)?,
+                    status: CommitmentStatus::parse(&row.get::<_, String>(2)?)
+                        .map_err(port_to_sqlite)?,
+                    due_at: row.get(3)?,
+                    next_check_at: row.get(4)?,
+                    expires_at: row.get(5)?,
+                    revision: row.get(6)?,
+                })
+            })
+            .map_err(state_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(state_error)
     }
 
     fn expire_commitments(&mut self, now: i64) -> Result<usize, PortError> {

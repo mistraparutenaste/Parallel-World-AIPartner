@@ -255,6 +255,53 @@ pub struct DialogueState {
     pub revision: i64,
 }
 
+/// Bounded signals derived from one completed turn.  This record intentionally
+/// carries no user or assistant transcript; only a small deterministic delta is
+/// handed to the asynchronous companion-state writer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DialogueSignals {
+    pub conversation_id: String,
+    pub mood: Option<String>,
+    pub reaction: Option<String>,
+    pub relationship_delta: i64,
+    pub reflection_cursor: Option<String>,
+    pub reflection_state: Option<String>,
+    pub commitment: Option<Commitment>,
+    pub observed_at: i64,
+    pub expires_at: i64,
+}
+
+impl DialogueSignals {
+    pub fn validate(&self) -> Result<(), PortError> {
+        if self.conversation_id.trim().is_empty()
+            || self.conversation_id.chars().count() > 96
+            || self.conversation_id.contains(char::is_control)
+            || self.observed_at < 0
+            || self.expires_at <= self.observed_at
+            || !(-10..=10).contains(&self.relationship_delta)
+            || [
+                self.mood.as_deref(),
+                self.reaction.as_deref(),
+                self.reflection_cursor.as_deref(),
+                self.reflection_state.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| value.trim().is_empty() || value.chars().count() > 96)
+        {
+            return Err(PortError("invalid bounded dialogue signals".into()));
+        }
+        if let Some(commitment) = &self.commitment {
+            if commitment.conversation_id != self.conversation_id
+                || commitment.content.chars().count() > 160
+            {
+                return Err(PortError("invalid bounded commitment signal".into()));
+            }
+        }
+        Ok(())
+    }
+}
+
 impl DialogueState {
     pub fn validate(&self) -> Result<(), PortError> {
         if self.conversation_id.trim().is_empty()
@@ -308,6 +355,17 @@ pub trait CompanionStateStore {
         expected_revision: Option<i64>,
         now: i64,
     ) -> Result<CasOutcome, PortError>;
+    /// Loads a bounded set of open commitments for planned/proactive context.
+    /// Implementations may return an opaque error; callers fail closed.
+    fn list_open_commitments(
+        &self,
+        conversation_id: &str,
+        now: i64,
+        limit: usize,
+    ) -> Result<Vec<Commitment>, PortError> {
+        let _ = (conversation_id, now, limit);
+        Err(PortError("open commitment listing unavailable".into()))
+    }
     fn expire_commitments(&mut self, now: i64) -> Result<usize, PortError>;
     fn compare_and_set_dialogue_state(
         &mut self,
@@ -337,6 +395,7 @@ pub enum AsyncStateWrite {
     TemporaryConversation(TemporaryConversationSettings),
     Commitment(Commitment),
     DialogueState(DialogueState),
+    DialogueSignals(DialogueSignals),
 }
 
 pub trait AsyncStateWriter {

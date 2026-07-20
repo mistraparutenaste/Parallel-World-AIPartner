@@ -1,5 +1,6 @@
 //! Long-term memory ports and non-blocking summary work boundaries.
 
+mod companion;
 mod consolidation;
 mod context;
 pub mod epistemic;
@@ -9,6 +10,9 @@ mod promotion;
 mod state;
 mod validator;
 
+pub use companion::{
+    MAX_COMMITMENT_CHARS, MAX_SIGNAL_CHARS, derive_dialogue_signals, detect_explicit_commitment,
+};
 pub use consolidation::{
     HybridConsolidator, LlmMemoryClassifier, MemoryClassifier, ProposedAction,
     has_explicit_pin_intent,
@@ -38,9 +42,10 @@ pub use promotion::{
 };
 pub use state::{
     AsyncStateWrite, AsyncStateWriter, CasOutcome, Commitment, CommitmentStatus,
-    CompanionStateStore, DialogueState, DomainConsent, DomainControl, MemoryDomain, MemoryLink,
-    MemoryLinkRelation, MemoryTombstone, MemoryVersion, MemoryWriteClass, MemoryWriteDisposition,
-    TemporaryConversationSettings, enqueue_state_fail_open, memory_write_disposition,
+    CompanionStateStore, DialogueSignals, DialogueState, DomainConsent, DomainControl,
+    MemoryDomain, MemoryLink, MemoryLinkRelation, MemoryTombstone, MemoryVersion, MemoryWriteClass,
+    MemoryWriteDisposition, TemporaryConversationSettings, enqueue_state_fail_open,
+    memory_write_disposition,
 };
 pub use validator::{
     CandidateRelation, NormalizationEdit, TypedCandidate, ValidationError, validate_candidate,

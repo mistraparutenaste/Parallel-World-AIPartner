@@ -9,8 +9,9 @@ pub use orchestrator::{ConversationOrchestrator, OrchestratorConfig};
 pub use ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 pub use prompt::PromptBuilder;
 pub use routing::{
-    ConfiguredResponsePipeline, ExistingContextRetriever, FixedSurfaceRealizer, IntentRouter,
-    LexicalResponsePlanner, PlanningBudget, PreparedResponse, ResponseContextRetriever,
-    ResponsePipeline, ResponsePlan, ResponsePlanner, SurfaceContext, SurfaceRealizer, TurnKind,
+    BoundedStateContext, ConfiguredResponsePipeline, ExistingContextRetriever,
+    FixedSurfaceRealizer, IntentRouter, LexicalResponsePlanner, PlannedStateContextProvider,
+    PlanningBudget, PreparedResponse, ResponseContextRetriever, ResponsePipeline, ResponsePlan,
+    ResponsePlanner, StateAwareRetriever, SurfaceContext, SurfaceRealizer, TurnKind,
     default_response_pipeline, response_pipeline,
 };

@@ -418,6 +418,51 @@ pub fn eligible_to_evaluate<H: FrequencyHistory>(
     }
 }
 
+/// Inputs shared by the desktop behavior settings and the application gate.
+/// Any unavailable/unsafe state is represented as `false` and fails closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProactiveGatePolicy {
+    pub master_enabled: bool,
+    pub profile_enabled: bool,
+    pub snoozed_until: Option<i64>,
+    pub temporary_conversation: bool,
+    pub policy_error: bool,
+    pub now: i64,
+    pub frequency: FrequencyPolicy,
+}
+
+/// Grants one optional proactive turn only while the captured idle epoch is
+/// still current and the durable frequency snapshot allows it.
+#[must_use]
+pub fn grant_proactive_turn<H: FrequencyHistory>(
+    gate: &InteractionGate,
+    history: &H,
+    candidate: &Candidate,
+    policy: ProactiveGatePolicy,
+) -> bool {
+    if !policy.master_enabled
+        || !policy.profile_enabled
+        || policy.temporary_conversation
+        || policy.policy_error
+        || policy.now < 0
+        || policy.snoozed_until.is_some_and(|until| until > policy.now)
+    {
+        return false;
+    }
+    let Some(epoch) = gate.capture_idle_epoch() else {
+        return false;
+    };
+    if !eligible_to_evaluate(
+        history,
+        *candidate.topic_hash(),
+        policy.now,
+        policy.frequency,
+    ) {
+        return false;
+    }
+    gate.commit_if_idle(epoch, || true).unwrap_or(false)
+}
+
 #[derive(Debug, Default)]
 struct GateState {
     epoch: u64,
@@ -478,7 +523,40 @@ impl InteractionGate {
 mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
 
-    use super::InteractionGate;
+    use super::{
+        CandidateEngine, CategoryId, FrequencyHistory, FrequencyPolicy, FrequencySnapshot,
+        HistoryQuery, InteractionGate, Observation, ProactiveGatePolicy, ProactiveThresholds,
+        grant_proactive_turn,
+    };
+
+    struct History(FrequencySnapshot);
+    impl FrequencyHistory for History {
+        type Error = ();
+        fn snapshot(&self, _query: HistoryQuery) -> Result<FrequencySnapshot, Self::Error> {
+            Ok(self.0)
+        }
+    }
+
+    fn candidate() -> super::Candidate {
+        let mut engine = CandidateEngine::new(ProactiveThresholds::default());
+        let category = CategoryId::new("chat").unwrap();
+        engine.observe(Observation::new(1, 0, 0, category.clone()).unwrap());
+        engine
+            .observe(Observation::new(2, 601, 1_201, category).unwrap())
+            .expect("return candidate")
+    }
+
+    fn policy() -> ProactiveGatePolicy {
+        ProactiveGatePolicy {
+            master_enabled: true,
+            profile_enabled: true,
+            snoozed_until: None,
+            temporary_conversation: false,
+            policy_error: false,
+            now: 1_000,
+            frequency: FrequencyPolicy::default(),
+        }
+    }
 
     #[test]
     fn poisoned_gate_fails_closed() {
@@ -490,5 +568,35 @@ mod tests {
         assert_eq!(gate.capture_idle_epoch(), None);
         assert!(gate.is_cancelled(0));
         assert_eq!(gate.commit_if_idle(0, || 1), None);
+    }
+
+    #[test]
+    fn proactive_gate_fails_closed_for_user_turn_privacy_settings_and_rate_limits() {
+        let gate = InteractionGate::new();
+        let candidate = candidate();
+        let history = History(FrequencySnapshot::default());
+        assert!(grant_proactive_turn(&gate, &history, &candidate, policy()));
+
+        for mutate in [
+            |value: &mut ProactiveGatePolicy| value.master_enabled = false,
+            |value: &mut ProactiveGatePolicy| value.snoozed_until = Some(2_000),
+            |value: &mut ProactiveGatePolicy| value.temporary_conversation = true,
+            |value: &mut ProactiveGatePolicy| value.policy_error = true,
+        ] {
+            let mut blocked = policy();
+            mutate(&mut blocked);
+            assert!(!grant_proactive_turn(&gate, &history, &candidate, blocked));
+        }
+
+        let limited = History(FrequencySnapshot {
+            topic_exists: true,
+            ..FrequencySnapshot::default()
+        });
+        assert!(!grant_proactive_turn(&gate, &limited, &candidate, policy()));
+
+        gate.begin_user_turn();
+        assert!(!grant_proactive_turn(&gate, &history, &candidate, policy()));
+        gate.end_user_turn();
+        assert!(grant_proactive_turn(&gate, &history, &candidate, policy()));
     }
 }

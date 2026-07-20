@@ -155,6 +155,101 @@ pub struct SurfaceContext {
     pub relevant_facts: Vec<String>,
 }
 
+/// Bounded dialogue/commitment facts supplied only to planned turns.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BoundedStateContext {
+    pub mood: Option<String>,
+    pub reaction: Option<String>,
+    pub relationship_score: Option<i64>,
+    pub reflection_cursor: Option<String>,
+    pub open_commitments: Vec<String>,
+}
+
+impl BoundedStateContext {
+    pub fn validate(&self) -> Result<(), PortError> {
+        if self
+            .relationship_score
+            .is_some_and(|score| !(-100..=100).contains(&score))
+            || [
+                self.mood.as_deref(),
+                self.reaction.as_deref(),
+                self.reflection_cursor.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|value| value.trim().is_empty() || value.chars().count() > 96)
+            || self.open_commitments.len() > 4
+            || self
+                .open_commitments
+                .iter()
+                .any(|value| value.trim().is_empty() || value.chars().count() > 160)
+        {
+            return Err(PortError("invalid bounded state context".into()));
+        }
+        Ok(())
+    }
+
+    fn as_facts(&self) -> Vec<String> {
+        let mut facts = Vec::new();
+        if let Some(mood) = &self.mood {
+            facts.push(format!("dialogue.mood={mood}"));
+        }
+        if let Some(reaction) = &self.reaction {
+            facts.push(format!("dialogue.reaction={reaction}"));
+        }
+        if let Some(score) = self.relationship_score {
+            facts.push(format!("dialogue.relationship_score={score}"));
+        }
+        if let Some(cursor) = &self.reflection_cursor {
+            facts.push(format!("dialogue.reflection_cursor={cursor}"));
+        }
+        facts.extend(
+            self.open_commitments
+                .iter()
+                .map(|commitment| format!("commitment.open={commitment}")),
+        );
+        facts
+    }
+}
+
+/// Provider used by a response retriever; implementations must return
+/// metadata only and never a transcript.
+pub trait PlannedStateContextProvider: Send {
+    fn retrieve_state(&mut self, plan: &ResponsePlan) -> Result<BoundedStateContext, PortError>;
+}
+
+/// Decorates an existing retriever with companion state. It is invoked only
+/// after `ResponsePipeline` has classified a turn as planned.
+pub struct StateAwareRetriever<R, P> {
+    inner: R,
+    state: P,
+}
+
+impl<R, P> StateAwareRetriever<R, P> {
+    #[must_use]
+    pub const fn new(inner: R, state: P) -> Self {
+        Self { inner, state }
+    }
+}
+
+impl<R, P> ResponseContextRetriever for StateAwareRetriever<R, P>
+where
+    R: ResponseContextRetriever,
+    P: PlannedStateContextProvider,
+{
+    fn retrieve(
+        &mut self,
+        plan: &ResponsePlan,
+        context: &MemoryContext,
+    ) -> Result<MemoryContext, PortError> {
+        let mut context = self.inner.retrieve(plan, context)?.bounded();
+        let state = self.state.retrieve_state(plan)?;
+        state.validate()?;
+        context.memories.extend(state.as_facts());
+        Ok(context.bounded())
+    }
+}
+
 impl SurfaceContext {
     /// # Errors
     /// Returns an error for unbounded or blank surface data.
@@ -571,6 +666,47 @@ mod tests {
                 .is_none()
         );
         assert_eq!(pipeline.planner.as_ref().unwrap().0, 0);
+    }
+
+    struct FixedState;
+    impl PlannedStateContextProvider for FixedState {
+        fn retrieve_state(
+            &mut self,
+            _plan: &ResponsePlan,
+        ) -> Result<BoundedStateContext, PortError> {
+            Ok(BoundedStateContext {
+                mood: Some("positive".into()),
+                reaction: None,
+                relationship_score: Some(4),
+                reflection_cursor: None,
+                open_commitments: vec!["資料を確認する".into()],
+            })
+        }
+    }
+
+    #[test]
+    fn state_context_is_retrieved_only_for_planned_turns() {
+        let mut pipeline = ResponsePipeline::new(
+            CountingPlanner(0),
+            StateAwareRetriever::new(PassThrough, FixedState),
+            PassThrough,
+            PlanningBudget::default(),
+        );
+        assert!(
+            pipeline
+                .try_prepare(TurnKind::Simple, "hello", &MemoryContext::default())
+                .is_none()
+        );
+        let prepared = pipeline
+            .try_prepare(TurnKind::Memory, "remember", &MemoryContext::default())
+            .expect("planned state context");
+        assert!(
+            prepared
+                .context
+                .memories
+                .iter()
+                .any(|fact| fact.contains("commitment.open"))
+        );
     }
 
     struct SlowPlanner;

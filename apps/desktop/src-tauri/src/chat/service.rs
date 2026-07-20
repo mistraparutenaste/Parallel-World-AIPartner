@@ -11,19 +11,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use pw_application::PortError;
 use pw_application::behavior::proactive::InteractionGate;
 use pw_application::conversation::{
-    ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, OrchestratorConfig,
-    PromptBuilder,
+    ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, ExistingContextRetriever,
+    FixedSurfaceRealizer, LexicalResponsePlanner, OrchestratorConfig, PlanningBudget,
+    PromptBuilder, StateAwareRetriever, response_pipeline,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
-    CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome, ClassificationRun,
-    DEFAULT_MEMORY_LIMIT, DiscourseFeatures, EpistemicForm, Fictionality, HybridConsolidator,
-    LlmMemoryClassifier, MemoryAtom, MemoryClassifier, MemoryContext, MemoryStore, NewObservation,
-    ObservationOutcome, ObservationStore, PersistCandidateOutcome, PersistedCandidate, Polarity,
-    ProposedAction, ProvenanceLink, ProvisionalMemoryChangeSet, RollingSummaryGenerator,
-    SourceMode, SourceSpan, SpeechAct, SubjectScope, SummaryGenerator, TemporalScope,
-    VerificationStatus, VersionedMemoryAction, is_role_preserving_summary,
-    is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
+    AsyncStateWrite, CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome,
+    ClassificationRun, DEFAULT_MEMORY_LIMIT, DiscourseFeatures, EpistemicForm, Fictionality,
+    HybridConsolidator, LlmMemoryClassifier, MemoryAtom, MemoryClassifier, MemoryContext,
+    MemoryStore, NewObservation, ObservationOutcome, ObservationStore, PersistCandidateOutcome,
+    PersistedCandidate, Polarity, ProposedAction, ProvenanceLink, ProvisionalMemoryChangeSet,
+    RollingSummaryGenerator, SourceMode, SourceSpan, SpeechAct, SubjectScope, SummaryGenerator,
+    TemporalScope, VerificationStatus, VersionedMemoryAction, derive_dialogue_signals,
+    is_role_preserving_summary, is_safe_persistent_content, merge_rolling_summaries,
+    redact_persistent_content,
 };
 #[cfg(test)]
 use pw_application::memory::{EvidenceSource, has_explicit_pin_intent};
@@ -39,7 +41,10 @@ use pw_domain::reply::{ReplyControl, TurnId};
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
-use pw_storage::{Database, SqliteConversationHistory, SqliteMemoryStore};
+use pw_storage::{
+    CompanionStateWorker, DEFAULT_STATE_QUEUE_CAPACITY, Database, SqliteConversationHistory,
+    SqliteMemoryStore, SqlitePlannedStateContext,
+};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 use crate::character::CharacterCapabilities;
@@ -1087,6 +1092,7 @@ struct PersistentConversationEvents<E, H> {
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
     enrichment: Option<EnrichmentSender>,
     observation_writer: Option<ObservationWriter>,
+    companion_state_writer: Option<SyncSender<AsyncStateWrite>>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
@@ -1094,12 +1100,30 @@ impl<E, H> PersistentConversationEvents<E, H> {
     fn new(inner: E, history: H, conversation_id: impl Into<String>) -> Self {
         Self::new_with_enrichment(inner, history, conversation_id, None, None)
     }
+    #[allow(dead_code)]
     fn new_with_enrichment(
         inner: E,
         history: H,
         conversation_id: impl Into<String>,
         enrichment: Option<EnrichmentSender>,
         observation_writer: Option<ObservationWriter>,
+    ) -> Self {
+        Self::new_with_enrichment_and_state(
+            inner,
+            history,
+            conversation_id,
+            enrichment,
+            observation_writer,
+            None,
+        )
+    }
+    fn new_with_enrichment_and_state(
+        inner: E,
+        history: H,
+        conversation_id: impl Into<String>,
+        enrichment: Option<EnrichmentSender>,
+        observation_writer: Option<ObservationWriter>,
+        companion_state_writer: Option<SyncSender<AsyncStateWrite>>,
     ) -> Self {
         Self {
             inner,
@@ -1108,6 +1132,29 @@ impl<E, H> PersistentConversationEvents<E, H> {
             pending_users: Mutex::new(HashMap::new()),
             enrichment,
             observation_writer,
+            companion_state_writer,
+        }
+    }
+
+    fn enqueue_companion_signals(&self, user_text: &str, assistant_text: &str) {
+        let Some(writer) = &self.companion_state_writer else {
+            return;
+        };
+        let Some(signals) = derive_dialogue_signals(
+            &self.conversation_id,
+            user_text,
+            assistant_text,
+            unix_timestamp(),
+        ) else {
+            return;
+        };
+        // The queue is bounded and deliberately lossy.  A full/disconnected
+        // companion worker must never delay the ordinary reply or TTS.
+        if writer
+            .try_send(AsyncStateWrite::DialogueSignals(signals))
+            .is_err()
+        {
+            tracing::debug!("companion state queue unavailable; continuing without state update");
         }
     }
 
@@ -1191,6 +1238,7 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
                     );
                 }
                 pending.remove(&retry_turn);
+                self.enqueue_companion_signals(&user, &assistant);
             }
         }
         pending.insert(turn, (text.to_owned(), None));
@@ -1221,6 +1269,7 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             self.finalize_observation(turn, ObservationOutcome::HistoryPersistFailed);
         } else {
             self.finalize_observation(turn, ObservationOutcome::Completed);
+            self.enqueue_companion_signals(user_text, speech_text);
             if let Some(enrichment) = &self.enrichment
                 && enrichment
                     .replace_latest(EnrichmentJob {
@@ -1313,6 +1362,7 @@ struct Worker {
     context_thread: Option<std::thread::JoinHandle<()>>,
     enrichment_thread: Option<std::thread::JoinHandle<()>>,
     observation_writer_thread: Option<std::thread::JoinHandle<()>>,
+    companion_state_worker: Option<CompanionStateWorker>,
     enrichment_cancel: Arc<AtomicBool>,
 }
 
@@ -1327,10 +1377,15 @@ impl Worker {
         let observation_writer =
             join_worker(self.observation_writer_thread.take(), "observation writer");
         let enrichment = join_worker(self.enrichment_thread.take(), "enrichment");
+        let companion = self
+            .companion_state_worker
+            .take()
+            .map_or(Ok(()), CompanionStateWorker::shutdown);
         result
             .and(conversation)
             .and(observation_writer)
             .and(enrichment)
+            .and(companion)
     }
 }
 
@@ -1670,6 +1725,9 @@ impl ChatService {
             .state::<AppDataLayout>()
             .data
             .join("parallel-world.sqlite3");
+        let companion_state_worker =
+            CompanionStateWorker::start(database_path.clone(), DEFAULT_STATE_QUEUE_CAPACITY)
+                .map_err(|error| format!("failed to spawn companion state worker: {error}"))?;
         let database = Database::open(&database_path).or_else(|error| {
             tracing::warn!(%error, path = %database_path.display(), "conversation history unavailable; using temporary history");
             Database::open_in_memory()
@@ -1679,6 +1737,12 @@ impl ChatService {
             tracing::warn!(%error, "memory database unavailable; using empty temporary context");
             Database::open_in_memory()
         }).map(SqliteMemoryStore::new).map_err(|error| format!("failed to initialize temporary memory context: {error}"))?;
+        let state_context_database = Database::open(&database_path).or_else(|error| {
+            tracing::warn!(%error, "companion state context unavailable; using temporary state context");
+            Database::open_in_memory()
+        }).map_err(|error| format!("failed to initialize companion state context: {error}"))?;
+        let state_context =
+            SqlitePlannedStateContext::new(state_context_database, DEFAULT_CONVERSATION_ID);
         let seed = load_recent_history(&history, DEFAULT_CONVERSATION_ID, MAX_HISTORY_MESSAGES)
             .unwrap_or_else(|error| {
                 tracing::warn!(%error, "conversation history restore failed; continuing without restored history");
@@ -1702,7 +1766,7 @@ impl ChatService {
                 }
             })
             .map_err(|error| format!("failed to spawn observation writer: {error}"))?;
-        let events = PersistentConversationEvents::new_with_enrichment(
+        let events = PersistentConversationEvents::new_with_enrichment_and_state(
             TauriConversationEvents {
                 runtime: AppConversationEventRuntime {
                     app,
@@ -1714,6 +1778,7 @@ impl ChatService {
             DEFAULT_CONVERSATION_ID,
             Some(enrichment_tx),
             Some(observation_writer),
+            Some(companion_state_worker.sender()),
         );
 
         let context_thread = std::thread::Builder::new()
@@ -1772,14 +1837,22 @@ impl ChatService {
         let thread = std::thread::Builder::new()
             .name("pw-conversation".into())
             .spawn(move || {
-                let mut orchestrator = ConversationOrchestrator::new_with_history_after(
-                    config,
-                    llm,
-                    events,
-                    cancel,
-                    seed,
-                    last_turn_id,
+                let response_pipeline = response_pipeline(
+                    LexicalResponsePlanner,
+                    StateAwareRetriever::new(ExistingContextRetriever, state_context),
+                    FixedSurfaceRealizer,
+                    PlanningBudget::default(),
                 );
+                let mut orchestrator =
+                    ConversationOrchestrator::new_with_history_after_and_response_pipeline(
+                        config,
+                        llm,
+                        events,
+                        cancel,
+                        seed,
+                        last_turn_id,
+                        response_pipeline,
+                    );
                 while let Ok(command) = rx.recv() {
                     conversation_metrics_for_worker.dequeued();
                     let _ = run_prepared_command(command, |text, turn_id, context| {
@@ -1798,6 +1871,7 @@ impl ChatService {
             context_thread: Some(context_thread),
             enrichment_thread: Some(enrichment_thread),
             observation_writer_thread: Some(observation_writer_thread),
+            companion_state_worker: Some(companion_state_worker),
             enrichment_cancel,
         })
     }
@@ -2818,6 +2892,7 @@ mod tests {
             context_thread: None,
             enrichment_thread: None,
             observation_writer_thread: None,
+            companion_state_worker: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert_eq!(gate.capture_idle_epoch(), None);
@@ -2839,6 +2914,7 @@ mod tests {
             context_thread: None,
             enrichment_thread: None,
             observation_writer_thread: None,
+            companion_state_worker: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert!(service.reset().is_err());
@@ -4661,6 +4737,7 @@ mod tests {
             context_thread: None,
             enrichment_thread: None,
             observation_writer_thread: None,
+            companion_state_worker: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         worker
@@ -4843,6 +4920,7 @@ mod tests {
             context_thread: Some(context),
             enrichment_thread: None,
             observation_writer_thread: None,
+            companion_state_worker: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         let started = std::time::Instant::now();
@@ -4897,6 +4975,7 @@ mod tests {
             context_thread: None,
             enrichment_thread: Some(enrichment_thread),
             observation_writer_thread: None,
+            companion_state_worker: None,
             enrichment_cancel: cancel,
         };
 

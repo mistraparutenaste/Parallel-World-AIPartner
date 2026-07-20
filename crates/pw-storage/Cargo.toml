@@ -11,6 +11,7 @@ pw-application = { workspace = true }
 rusqlite.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 pw-platform = { workspace = true }
