@@ -11,6 +11,7 @@ use pw_domain::reply::{
 
 use super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 use super::prompt::PromptBuilder;
+use super::routing::{ConfiguredResponsePipeline, IntentRouter, default_response_pipeline};
 use crate::memory::MemoryContext;
 
 /// Tuning for [`ConversationOrchestrator`].
@@ -36,6 +37,8 @@ pub struct ConversationOrchestrator<L, E> {
     tracker: TurnTracker,
     state: ConversationState,
     history: VecDeque<ChatMessage>,
+    router: IntentRouter,
+    response_pipeline: ConfiguredResponsePipeline,
 }
 
 impl<L, E> ConversationOrchestrator<L, E>
@@ -45,6 +48,26 @@ where
 {
     pub fn new(config: OrchestratorConfig, llm: L, events: E, cancel: Arc<AtomicBool>) -> Self {
         Self::new_with_history(config, llm, events, cancel, Vec::new())
+    }
+
+    /// Builds an orchestrator with explicitly configured planned-turn ports.
+    /// Ordinary turns still bypass these ports and use one streamed LLM call.
+    pub fn new_with_response_pipeline(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        response_pipeline: ConfiguredResponsePipeline,
+    ) -> Self {
+        Self::new_with_history_after_and_response_pipeline(
+            config,
+            llm,
+            events,
+            cancel,
+            Vec::new(),
+            0,
+            response_pipeline,
+        )
     }
 
     /// Builds an orchestrator with previously confirmed messages as prompt context.
@@ -71,6 +94,29 @@ where
         history: Vec<ChatMessage>,
         last_turn_id: u64,
     ) -> Self {
+        Self::new_with_history_after_and_response_pipeline(
+            config,
+            llm,
+            events,
+            cancel,
+            history,
+            last_turn_id,
+            default_response_pipeline(),
+        )
+    }
+
+    /// Restores prompt history and injects planned-turn ports.  This keeps
+    /// the legacy constructors source-compatible while allowing adapters to
+    /// provide bounded retrieval or surface realization.
+    pub fn new_with_history_after_and_response_pipeline(
+        config: OrchestratorConfig,
+        llm: L,
+        events: E,
+        cancel: Arc<AtomicBool>,
+        history: Vec<ChatMessage>,
+        last_turn_id: u64,
+        response_pipeline: ConfiguredResponsePipeline,
+    ) -> Self {
         let mut history: VecDeque<_> = history.into();
         while history.len() > config.max_history_messages {
             history.pop_front();
@@ -83,6 +129,8 @@ where
             tracker: TurnTracker::after(last_turn_id),
             state: ConversationState::Idle,
             history,
+            router: IntentRouter,
+            response_pipeline,
         };
         orchestrator.events.on_state(orchestrator.state);
         orchestrator
@@ -126,10 +174,20 @@ where
         self.set_state(ConversationState::Thinking);
 
         let history: Vec<ChatMessage> = self.history.iter().cloned().collect();
-        let messages = self
-            .config
-            .prompt
-            .build_with_context(&history, text, context);
+        let kind = self.router.classify(text);
+        let prepared = self.response_pipeline.try_prepare(kind, text, context);
+        let messages = if let Some(prepared) = prepared {
+            self.config.prompt.build_with_context_and_surface(
+                &history,
+                text,
+                &prepared.context,
+                &prepared.surface,
+            )
+        } else {
+            self.config
+                .prompt
+                .build_with_context(&history, text, context)
+        };
 
         let mut parser = ReplyParser::new();
         let mut splitter = SentenceSplitter::new();
@@ -263,8 +321,13 @@ mod tests {
 
     use super::super::ports::{ChatMessage, ConversationEvents, LlmClient};
     use super::super::prompt::PromptBuilder;
+    use super::super::routing::{
+        ExistingContextRetriever, FixedSurfaceRealizer, PlanningBudget, ResponsePlan,
+        ResponsePlanner, TurnKind, response_pipeline,
+    };
     use super::{ConversationOrchestrator, OrchestratorConfig};
     use crate::PortError;
+    use crate::memory::MemoryContext;
 
     /// Emits scripted chunks, honouring the cancel flag.
     struct ScriptedLlm {
@@ -628,5 +691,84 @@ mod tests {
         let sentences = recording.sentences.lock().unwrap();
         assert!(sentences.iter().take(2).all(|(turn, _)| *turn == first));
         assert!(sentences.iter().skip(2).all(|(turn, _)| *turn == second));
+    }
+
+    struct FailingPlanner;
+
+    impl ResponsePlanner for FailingPlanner {
+        fn plan(
+            &mut self,
+            _kind: TurnKind,
+            _utterance: &str,
+            _context: &MemoryContext,
+        ) -> Result<ResponsePlan, PortError> {
+            Err(PortError("planned preparation failed".into()))
+        }
+    }
+
+    #[test]
+    fn planned_preparation_failure_keeps_the_single_streamed_reply_path() {
+        let recording = Arc::new(Recording::default());
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["fallback reply。"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let pipeline = response_pipeline(
+            FailingPlanner,
+            ExistingContextRetriever,
+            FixedSurfaceRealizer,
+            PlanningBudget::default(),
+        );
+        let mut orchestrator = ConversationOrchestrator::new_with_response_pipeline(
+            config(),
+            llm,
+            Events(Arc::clone(&recording)),
+            Arc::new(AtomicBool::new(false)),
+            pipeline,
+        );
+
+        orchestrator.submit_user_text("これを覚えて");
+
+        assert_eq!(
+            recording.completions.lock().unwrap().as_slice(),
+            ["fallback reply。"]
+        );
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1, "planning cannot create another LLM call");
+        assert!(
+            prompts[0]
+                .iter()
+                .all(|message| !message.content.contains("response_surface_context"))
+        );
+    }
+
+    #[test]
+    fn planned_turn_adds_a_bounded_surface_but_still_calls_llm_once() {
+        let recording = Arc::new(Recording::default());
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["memory reply。"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config(),
+            llm,
+            Events(recording),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("これを覚えて");
+
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert!(
+            prompts[0]
+                .iter()
+                .any(|message| message.content.contains("<response_surface_context>"))
+        );
+        assert_eq!(prompts[0].last().unwrap().content, "これを覚えて");
     }
 }
