@@ -474,6 +474,25 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     Ok(true)
 }
 
+/// Converts SQLite's durable epoch-second eligibility timestamp into the
+/// worker's monotonic deadline.  The database remains the source of truth;
+/// this only prevents an in-process retry wake from being dropped early.
+fn observation_follow_up_deadline(database_path: &Path) -> Option<std::time::Instant> {
+    let now = unix_timestamp();
+    let due_at = Database::open(database_path)
+        .map(SqliteMemoryStore::new)
+        .map_err(|error| error.to_string())
+        .and_then(|store| {
+            store
+                .next_observation_due_at(now)
+                .map_err(|error| error.to_string())
+        })
+        .ok()
+        .flatten()?;
+    let delay_seconds = due_at.saturating_sub(now);
+    Some(std::time::Instant::now() + std::time::Duration::from_secs(delay_seconds as u64))
+}
+
 fn retry_observation(
     memory: &mut SqliteMemoryStore,
     lease: &pw_application::memory::ObservationLease,
@@ -878,9 +897,21 @@ fn run_enrichment_until_cancelled(
                 *pending = Some(vec![EnrichmentJob::wake(0)]);
             }
         }
-        if (jobs_remaining || summary_remaining || durable_processed || retry_scheduled)
+        let durable_due = observation_follow_up_deadline(database_path);
+        if (jobs_remaining || summary_remaining || durable_processed)
             && !cancel.load(Ordering::Acquire)
         {
+            follow_up_due = Some(std::time::Instant::now() + ENRICHMENT_FOLLOWUP_DELAY);
+        } else if let Some(deadline) = durable_due {
+            // `Ok(false)` only means that no row is eligible *yet*.  Keep the
+            // worker alive until the durable retry/lease deadline instead of
+            // depending on a later user turn to wake it again.
+            follow_up_due = Some(deadline);
+        } else if retry_scheduled && !cancel.load(Ordering::Acquire) {
+            // When SQLite itself is temporarily unavailable there is no
+            // readable deadline.  Preserve the previous bounded retry rather
+            // than abandoning the worker; a recovered database will provide
+            // its durable deadline on the next pass.
             follow_up_due = Some(std::time::Instant::now() + ENRICHMENT_FOLLOWUP_DELAY);
         } else if Arc::strong_count(&wake) == 1 {
             break;
@@ -3822,6 +3853,69 @@ mod tests {
     }
 
     #[test]
+    fn durable_retry_reaches_the_bounded_limit_without_an_external_wake() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-enrichment-retry-without-wake-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        store
+            .insert_observation(NewObservation::new(
+                DEFAULT_CONVERSATION_ID,
+                1,
+                "retryable durable observation",
+                unix_timestamp(),
+            ))
+            .unwrap();
+        // Fail only candidate INSERTs.  The retry finalization itself remains
+        // writable, modelling a transient classifier/persistence failure that
+        // must be resumed by the durable deadline.
+        Database::open(&path)
+            .unwrap()
+            .connection()
+            .execute_batch(
+                "CREATE TRIGGER fail_candidate_insert BEFORE INSERT ON memory_candidates BEGIN SELECT RAISE(ABORT, 'injected transient candidate write failure'); END;",
+            )
+            .unwrap();
+        drop(store);
+
+        // No sender retains or writes to this channel.  After the bootstrap
+        // drain, each attempt must be resumed exclusively from SQLite's
+        // retry_after_at deadline.
+        let (wake, rx) = sync_channel(ENRICHMENT_QUEUE_CAPACITY);
+        let worker = std::thread::spawn({
+            let worker_path = path.clone();
+            move || {
+                run_enrichment(
+                    &worker_path,
+                    rx,
+                    Arc::new(wake),
+                    Arc::new(Mutex::new(None)),
+                    Arc::new(QueueMetrics::new("test_enrichment", 8)),
+                    HybridConsolidator::new(
+                        Box::new(ExactFakeClassifier) as Box<dyn MemoryClassifier>
+                    ),
+                );
+            }
+        });
+        worker.join().unwrap();
+
+        let database = Database::open(&path).unwrap();
+        let (attempt_count, state): (i64, String) = database
+            .connection()
+            .query_row(
+                "SELECT attempt_count,processing_state FROM memory_observations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(attempt_count, 3);
+        assert_eq!(state, "deferred");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn failed_or_cancelled_reply_keeps_the_accepted_user_observation() {
         let path = std::env::temp_dir().join(format!(
             "pw-observation-terminal-{}.sqlite3",
@@ -3862,6 +3956,40 @@ mod tests {
             .unwrap();
         assert_eq!(outcomes, ["llm_failed", "cancelled"]);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saturated_observation_queue_never_delays_the_ordinary_user_turn() {
+        let (observation_tx, _observation_rx) = sync_channel(1);
+        // Keep the only writer slot occupied.  `on_user_message` must use
+        // try_send and remain entirely outside SQLite in this condition.
+        observation_tx
+            .send(ObservationWrite::Insert {
+                conversation_id: DEFAULT_CONVERSATION_ID.into(),
+                turn_id: 0,
+                text: "queued before measurement".into(),
+            })
+            .unwrap();
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            SqliteConversationHistory::new(Database::open_in_memory().unwrap()),
+            DEFAULT_CONVERSATION_ID,
+            None,
+            Some(ObservationWriter { tx: observation_tx }),
+        );
+        let mut tracker = TurnTracker::new();
+        let mut samples = Vec::new();
+        for _ in 0..100 {
+            let started = std::time::Instant::now();
+            events.on_user_message(tracker.begin_turn(), "ordinary user turn");
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        let p95 = samples[94];
+        assert!(
+            p95 < std::time::Duration::from_millis(25),
+            "saturated observation queue p95 was {p95:?}"
+        );
     }
 
     struct FailOnceHistory {

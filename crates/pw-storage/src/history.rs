@@ -483,7 +483,8 @@ mod tests {
         ConversationHistory, MessageRole, StoredConversation, StoredMessage, StoredTurn,
     };
 
-    use crate::{Database, SqliteConversationHistory};
+    use crate::{Database, SqliteConversationHistory, SqliteMemoryStore};
+    use pw_application::memory::{NewObservation, ObservationStore};
 
     fn conversation(id: &str, created_at: i64, updated_at: i64) -> StoredConversation {
         StoredConversation {
@@ -612,6 +613,154 @@ mod tests {
             );
         }
 
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn deleting_history_tombstones_claims_preserves_supported_or_pinned_memory_and_keeps_fts_valid()
+    {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("pw-history-memory-delete-{nonce}.sqlite3"));
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        history
+            .upsert_conversation(&conversation("deleted", 1, 1))
+            .unwrap();
+        history
+            .upsert_conversation(&conversation("kept", 1, 1))
+            .unwrap();
+        let connection = history.database().connection();
+        connection.execute_batch(
+            "INSERT INTO memories(id,content,pinned,created_at,updated_at) VALUES
+               (1,'deleted-only memory',0,1,1),
+               (2,'supported by both conversations',0,1,1),
+               (3,'pinned deleted memory',1,1,1);
+             INSERT INTO memory_observations(id,conversation_id,turn_id,user_text,input_hash,observed_at,response_outcome,processing_state,attempt_count,created_at,updated_at) VALUES
+               (10,'deleted',1,'removed observation','hash-deleted','1','completed','completed',1,1,1),
+               (11,'kept',1,'retained observation','hash-kept','1','completed','completed',1,1,1);
+             INSERT INTO memory_classification_runs(id,observation_id,classifier_version,schema_version,input_hash,lease_attempt_token,transport_outcome,candidate_count,created_at,completed_at) VALUES
+               (20,10,'fixture',1,'hash-deleted','lease-deleted','completed',3,1,1),
+               (21,11,'fixture',1,'hash-kept','lease-kept','completed',1,1,1);
+             INSERT INTO memory_candidates(id,observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,source_start,source_end,candidate_state,created_at,updated_at) VALUES
+               (30,10,20,0,'deleted-only memory','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,1,'promoted',1,1),
+               (31,10,20,1,'supported by both conversations','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,1,'promoted',1,1),
+               (32,10,20,2,'pinned deleted memory','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,1,'promoted',1,1),
+               (33,11,21,0,'supported by both conversations','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,1,'promoted',1,1);
+             INSERT INTO memory_provenance(memory_id,observation_id,candidate_id,relation,created_at) VALUES
+               (1,10,30,'originated',1),(2,10,31,'originated',1),(3,10,32,'originated',1),(2,11,33,'originated',1);",
+        ).unwrap();
+        drop(history);
+
+        let mut store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        store
+            .insert_observation(NewObservation::new(
+                "deleted",
+                2,
+                "claimed before delete",
+                2,
+            ))
+            .unwrap();
+        let lease = store
+            .claim_next_observation("worker", 2, 30)
+            .unwrap()
+            .unwrap();
+        drop(store);
+
+        let mut history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        assert!(history.delete_conversation("deleted").unwrap());
+        drop(history);
+
+        let mut store = SqliteMemoryStore::new(Database::open(&path).unwrap());
+        assert!(
+            store
+                .retry_or_defer_observation(&lease, "late worker", 3, 3, 1)
+                .is_err()
+        );
+        assert!(
+            store
+                .claim_next_observation("worker", 40, 30)
+                .unwrap()
+                .is_none()
+        );
+        drop(store);
+        let database = Database::open(&path).unwrap();
+        let connection = database.connection();
+        let tombstone: (String, String, String, i64) = connection
+            .query_row(
+                "SELECT user_text,processing_state,COALESCE(last_error,''),deletion_generation FROM memory_observations WHERE id=?1",
+                [lease.observation_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            tombstone,
+            (
+                "[deleted]".into(),
+                "deferred".into(),
+                "history deleted".into(),
+                1
+            )
+        );
+        let candidate: (String, String, String) = connection
+            .query_row(
+                "SELECT content,candidate_state,rejection_reason FROM memory_candidates WHERE id=30",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            candidate,
+            (
+                "[deleted]".into(),
+                "rejected".into(),
+                "history deleted".into()
+            )
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM memories WHERE id=1", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM memories WHERE id=2", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM memories WHERE id=3", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        // The sole-support atom is physically removed (and its foreign-key
+        // provenance cascades); the surviving shared and pinned atoms retain
+        // their content-free deletion tombstones.
+        assert_eq!(connection.query_row("SELECT COUNT(*) FROM memory_provenance WHERE observation_id=10 AND tombstoned_at IS NOT NULL", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        connection
+            .execute(
+                "INSERT INTO memories_fts(memories_fts) VALUES('integrity-check')",
+                [],
+            )
+            .unwrap();
+        drop(database);
+        let reopened = Database::open(&path).unwrap();
+        reopened
+            .connection()
+            .execute(
+                "INSERT INTO memories_fts(memories_fts) VALUES('integrity-check')",
+                [],
+            )
+            .unwrap();
+        drop(reopened);
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));

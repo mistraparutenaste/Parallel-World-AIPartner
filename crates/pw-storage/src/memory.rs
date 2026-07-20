@@ -52,6 +52,20 @@ impl SqliteMemoryStore {
         <Self as ObservationStore>::claim_next_observation(self, owner, now, lease_seconds)
     }
 
+    /// Returns the earliest durable observation eligibility timestamp.  The
+    /// enrichment worker uses this to keep a content-free wake alive across a
+    /// retry backoff; it must not rely on a later chat event to resume work.
+    pub fn next_observation_due_at(&self, now: i64) -> Result<Option<i64>, PortError> {
+        self.database
+            .connection()
+            .query_row(
+                "SELECT MIN(CASE processing_state WHEN 'pending' THEN COALESCE(retry_after_at, ?1) WHEN 'processing' THEN lease_expires_at END) FROM memory_observations WHERE deleted_at IS NULL AND processing_state IN ('pending','processing')",
+                [now],
+                |row| row.get(0),
+            )
+            .map_err(memory_error)
+    }
+
     pub fn finalize_observation_by_turn(
         &mut self,
         conversation_id: &str,
@@ -2091,8 +2105,8 @@ mod tests {
         Attribution, CandidateOperation, CandidateProvenanceRelation, ClassificationRun,
         DORMANT_DELETE_AFTER_SECONDS, DiscourseFeatures, EpistemicForm, EvidenceSource,
         Fictionality, MemoryAction, MemoryAtom, MemoryState, MemoryStore, NewObservation,
-        PersistedCandidate, Polarity, ProvenanceLink, ProvisionalMemoryChangeSet, SourceMode,
-        SourceSpan, SpeechAct, SubjectScope, TemporalScope, VerificationStatus,
+        ObservationStore, PersistedCandidate, Polarity, ProvenanceLink, ProvisionalMemoryChangeSet,
+        SourceMode, SourceSpan, SpeechAct, SubjectScope, TemporalScope, VerificationStatus,
         VersionedMemoryAction, memory_strength, prompt_rank, should_become_dormant,
     };
 
@@ -2141,6 +2155,36 @@ mod tests {
             .unwrap();
         assert_eq!(second.observation_id, observation_id);
         assert_ne!(first.attempt_token, second.attempt_token);
+    }
+
+    #[test]
+    fn observation_due_time_tracks_retry_backoff_and_expired_leases() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        store
+            .insert_observation(NewObservation::new("chat", 7, "I like tea", 10))
+            .unwrap();
+        let lease = store
+            .claim_next_observation("worker", 10, 30)
+            .unwrap()
+            .unwrap();
+        assert_eq!(store.next_observation_due_at(10).unwrap(), Some(40));
+
+        store
+            .retry_or_defer_observation(&lease, "temporary failure", 10, 3, 5)
+            .unwrap();
+        assert_eq!(store.next_observation_due_at(10).unwrap(), Some(15));
+        assert!(
+            store
+                .claim_next_observation("worker", 14, 30)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .claim_next_observation("worker", 15, 30)
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
@@ -2251,8 +2295,7 @@ mod tests {
         let first_run_id = pw_application::memory::ObservationStore::begin_classification_run(
             &mut store, &first, &first_run, 10,
         )
-        .unwrap()
-        .id();
+        .unwrap();
         store.database.connection().execute(
             "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,source_start,source_end,created_at,updated_at) VALUES(?1,?2,0,'I like tea','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,10,10,10)",
             [first.observation_id, first_run_id],

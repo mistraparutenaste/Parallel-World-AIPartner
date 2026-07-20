@@ -203,8 +203,9 @@ mod tests {
 
     use super::{
         DETACHED_TURN_SEQUENCE_MIGRATION, Database, INITIAL_MIGRATION, MEMORY_FTS_MIGRATION,
-        MEMORY_LIFECYCLE_MIGRATION, MEMORY_UNIQUE_MIGRATION, TURN_IDENTITY_MIGRATION,
-        TURN_SEQUENCE_MIGRATION,
+        MEMORY_LIFECYCLE_MIGRATION, MEMORY_OBSERVATION_LEDGER_MIGRATION, MEMORY_TYPED_MIGRATION,
+        MEMORY_UNIQUE_MIGRATION, OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION,
+        TURN_IDENTITY_MIGRATION, TURN_SEQUENCE_MIGRATION,
     };
 
     #[test]
@@ -562,6 +563,139 @@ mod tests {
                 "unknown".into()
             )
         );
+        drop(database);
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            12
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn populated_v10_fixture_upgrades_through_v11_and_v12_and_reopens() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-v10-observation-ledger-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+                MEMORY_LIFECYCLE_MIGRATION,
+                super::MESSAGES_ID_CURSOR_MIGRATION,
+                MEMORY_TYPED_MIGRATION,
+                MEMORY_OBSERVATION_LEDGER_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.execute_batch(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES('chat',1,1);
+                 INSERT INTO memories(content,created_at,updated_at) VALUES('legacy source',1,1);
+                 INSERT INTO memory_observations(id,conversation_id,turn_id,user_text,input_hash,observed_at,response_outcome,processing_state,attempt_count,created_at,updated_at) VALUES(7,'chat',3,'source text','hash',2,'completed','completed',1,2,2);
+                 INSERT INTO memory_classification_runs(id,observation_id,classifier_version,schema_version,input_hash,lease_attempt_token,transport_outcome,candidate_count,created_at,completed_at) VALUES(8,7,'fixture',1,'hash','lease','completed',1,2,2);
+                 INSERT INTO memory_candidates(id,observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,source_start,source_end,candidate_state,created_at,updated_at) VALUES(9,7,8,0,'source text','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,11,'promoted',2,2);
+                 INSERT INTO memory_promotions(request_key,observation_id,classifier_version,schema_version,input_hash,status,result_memory_ids,created_at,committed_at) VALUES('legacy-request',7,'fixture',1,'hash','committed','[1]',2,2);
+                 INSERT INTO memory_provenance(memory_id,observation_id,candidate_id,relation,created_at) VALUES(1,7,9,'originated',2);
+                 PRAGMA user_version=10;",
+            )
+            .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let candidate_normalization: String = database
+            .connection()
+            .query_row(
+                "SELECT normalization_json FROM memory_candidates WHERE id=9",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let promotion_defaults: (i64, String) = database
+            .connection()
+            .query_row(
+                "SELECT classification_run_id,change_set_fingerprint FROM memory_promotions WHERE request_key='legacy-request'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(candidate_normalization, "[]");
+        assert_eq!(promotion_defaults, (0, String::new()));
+        assert!(database.connection().query_row("SELECT 1 FROM sqlite_master WHERE type='index' AND name='memory_promotions_run_idx'", [], |_| Ok(())).is_ok());
+        let foreign_key_errors: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(foreign_key_errors, 0);
+        drop(database);
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            12
+        );
+        drop(reopened);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn populated_v11_fixture_upgrades_to_v12_and_reopens() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-v11-observation-recovery-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+                MEMORY_LIFECYCLE_MIGRATION,
+                super::MESSAGES_ID_CURSOR_MIGRATION,
+                MEMORY_TYPED_MIGRATION,
+                MEMORY_OBSERVATION_LEDGER_MIGRATION,
+                OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.execute_batch(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES('chat',1,1);
+                 INSERT INTO memory_observations(id,conversation_id,turn_id,user_text,input_hash,observed_at,response_outcome,processing_state,attempt_count,retry_after_at,deleted_at,created_at,updated_at) VALUES(17,'chat',4,'[deleted]','tombstone:17',2,'completed','deferred',3,NULL,3,2,3);
+                 INSERT INTO memory_promotions(request_key,observation_id,classifier_version,schema_version,input_hash,status,result_memory_ids,created_at,committed_at) VALUES('v11-request',17,'fixture',1,'tombstone:17','committed','[]',3,3);
+                 PRAGMA user_version=11;",
+            )
+            .unwrap();
+        }
+
+        let database = Database::open(&path).unwrap();
+        let row: (i64, String, i64) = database
+            .connection()
+            .query_row(
+                "SELECT classification_run_id,change_set_fingerprint,deleted_at FROM memory_promotions JOIN memory_observations ON memory_observations.id=memory_promotions.observation_id WHERE request_key='v11-request'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (0, String::new(), 3));
+        assert!(database.connection().query_row("SELECT 1 FROM sqlite_master WHERE type='index' AND name='memory_observations_retry_idx'", [], |_| Ok(())).is_ok());
         drop(database);
         let reopened = Database::open(&path).unwrap();
         assert_eq!(
