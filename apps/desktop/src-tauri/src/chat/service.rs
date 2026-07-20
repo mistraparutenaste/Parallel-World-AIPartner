@@ -393,6 +393,8 @@ fn process_next_durable_observation<C: MemoryClassifier>(
             expected_target_revision: expected_revision,
             operation,
             relation,
+            domain: pw_application::memory::MemoryDomain::SemanticUser,
+            write_class: pw_application::memory::MemoryWriteClass::NormalExplicit,
             normalization_edits: Vec::new(),
         },
         now,

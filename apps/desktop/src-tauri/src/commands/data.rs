@@ -5,11 +5,20 @@ use pw_contracts::{
     ConversationMessageDto, DataDeletionResultDto, DataUsageDto, SCHEMA_VERSION,
 };
 use pw_platform::paths::AppDataLayout;
-use pw_storage::{Database, SqliteConversationHistory};
+use pw_storage::{
+    Database, SqliteConversationHistory, delete_all_memories_in_transaction,
+    tombstone_memories_for_deleted_observations,
+};
 use pw_tts::{DEFAULT_MAX_ENTRIES, WavCache};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 const CONVERSATION: &str = "default";
+fn epoch_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
 fn path(layout: &AppDataLayout) -> PathBuf {
     layout.data.join("parallel-world.sqlite3")
 }
@@ -282,10 +291,8 @@ fn delete_history_core(
         "UPDATE memory_provenance SET tombstoned_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE deleted_at IS NOT NULL)",
         [],
     ).map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM memories WHERE pinned=0 AND id IN (SELECT memory_id FROM memory_provenance WHERE observation_id IN (SELECT id FROM memory_observations WHERE deleted_at IS NOT NULL)) AND NOT EXISTS (SELECT 1 FROM memory_provenance p JOIN memory_observations o ON o.id=p.observation_id WHERE p.memory_id=memories.id AND o.deleted_at IS NULL)",
-        [],
-    ).map_err(|e| e.to_string())?;
+    tombstone_memories_for_deleted_observations(&tx, None, epoch_seconds())
+        .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM conversations", [])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
@@ -361,8 +368,7 @@ fn delete_memories_core(database_path: &std::path::Path) -> Result<DataDeletionR
     let summaries = transaction
         .execute("DELETE FROM conversation_summaries", [])
         .map_err(|error| error.to_string())?;
-    let memories = transaction
-        .execute("DELETE FROM memories", [])
+    let memories = delete_all_memories_in_transaction(&transaction, epoch_seconds())
         .map_err(|error| error.to_string())?;
     transaction.commit().map_err(|error| error.to_string())?;
     Ok(DataDeletionResultDto {

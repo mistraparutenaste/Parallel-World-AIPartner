@@ -1,4 +1,4 @@
-use super::{MemoryAtom, NormalizationEdit};
+use super::{MemoryAtom, MemoryDomain, MemoryWriteClass, NormalizationEdit};
 use crate::PortError;
 use sha2::{Digest, Sha256};
 
@@ -113,6 +113,12 @@ pub struct PersistedCandidate {
     pub expected_target_revision: Option<i64>,
     pub operation: CandidateOperation,
     pub relation: CandidateProvenanceRelation,
+    /// The product domain selected by the classifier. The storage layer
+    /// evaluates its consent atomically with promotion.
+    pub domain: MemoryDomain,
+    /// Explicit write sensitivity. This is persisted so retries cannot change
+    /// a previously reviewed policy decision.
+    pub write_class: MemoryWriteClass,
     /// A deterministic normalization trace is persisted and replayed before a
     /// candidate can change durable memory.
     pub normalization_edits: Vec<NormalizationEdit>,

@@ -8,9 +8,16 @@ use pw_application::{
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
-use crate::Database;
+use crate::{Database, tombstone_memories_for_deleted_observations};
 
 const MAX_PROACTIVE_ASSISTANT_CONTENT_BYTES: usize = 65_536;
+
+fn epoch_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
+}
 
 pub struct SqliteConversationHistory {
     database: Database,
@@ -366,10 +373,11 @@ impl ConversationHistory for SqliteConversationHistory {
             "UPDATE memory_provenance SET tombstoned_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE conversation_id=?1)",
             [conversation_id],
         ).map_err(adapter_error)?;
-        transaction.execute(
-            "DELETE FROM memories WHERE pinned=0 AND id IN (SELECT memory_id FROM memory_provenance WHERE observation_id IN (SELECT id FROM memory_observations WHERE conversation_id=?1)) AND NOT EXISTS (SELECT 1 FROM memory_provenance p JOIN memory_observations o ON o.id=p.observation_id WHERE p.memory_id=memories.id AND o.deleted_at IS NULL)",
-            [conversation_id],
-        ).map_err(adapter_error)?;
+        tombstone_memories_for_deleted_observations(
+            &transaction,
+            Some(conversation_id),
+            epoch_seconds(),
+        )?;
         transaction
             .execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])
             .map_err(adapter_error)?;
