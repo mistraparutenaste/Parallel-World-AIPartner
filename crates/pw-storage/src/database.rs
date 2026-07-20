@@ -256,6 +256,8 @@ fn is_busy_error(error: &StorageError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
@@ -391,6 +393,40 @@ mod tests {
         );
 
         drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
+    }
+
+    #[test]
+    fn concurrent_fresh_database_opens_are_race_safe() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("parallel-world-concurrent-open-{nonce}.sqlite3"));
+        let _ = std::fs::remove_file(&path);
+        let barrier = Arc::new(Barrier::new(2));
+        let handles = (0..2)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let path = path.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    Database::open(path)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for handle in handles {
+            let result = handle
+                .join()
+                .expect("database opener thread must not panic");
+            if let Err(error) = result {
+                panic!("concurrent fresh database open failed: {error:?}");
+            }
+        }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite3-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite3-shm"));
