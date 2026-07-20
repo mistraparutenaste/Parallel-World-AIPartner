@@ -4,7 +4,8 @@
 //! produces a bounded, deterministic prompt surface; it never emits user
 //! visible output and failure deliberately falls back to the ordinary prompt.
 
-use std::sync::mpsc::{RecvTimeoutError, sync_channel};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, sync_channel};
 use std::thread;
 use std::time::Duration;
 
@@ -259,6 +260,7 @@ pub struct ResponsePipeline<P, R, S> {
     planner: Option<P>,
     retriever: Option<R>,
     realizer: Option<S>,
+    pending: Option<Receiver<(P, R, S, Option<PreparedResponse>)>>,
     budget: PlanningBudget,
 }
 
@@ -269,6 +271,7 @@ impl<P, R, S> ResponsePipeline<P, R, S> {
             planner: Some(planner),
             retriever: Some(retriever),
             realizer: Some(realizer),
+            pending: None,
             budget,
         }
     }
@@ -292,6 +295,10 @@ where
         if !kind.requires_planning() {
             return None;
         }
+        self.reclaim_pending();
+        if self.pending.is_some() {
+            return None;
+        }
         let planner = self.planner.take()?;
         let retriever = self.retriever.take()?;
         let realizer = self.realizer.take()?;
@@ -302,14 +309,19 @@ where
             let mut planner = planner;
             let mut retriever = retriever;
             let mut realizer = realizer;
-            let prepared = (|| {
+            let prepared = catch_unwind(AssertUnwindSafe(|| {
                 let plan = planner.plan(kind, &utterance, &context).ok()?;
+                if plan.kind != kind {
+                    return None;
+                }
                 plan.validate().ok()?;
                 let context = retriever.retrieve(&plan, &context).ok()?.bounded();
                 let surface = realizer.realize(&plan).ok()?;
                 surface.validate().ok()?;
                 Some(PreparedResponse { context, surface })
-            })();
+            }))
+            .ok()
+            .flatten();
             let _ = sender.send((planner, retriever, realizer, prepared));
         });
 
@@ -320,7 +332,26 @@ where
                 self.realizer = Some(realizer);
                 prepared
             }
-            Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => None,
+            Err(RecvTimeoutError::Timeout) => {
+                self.pending = Some(receiver);
+                None
+            }
+            Err(RecvTimeoutError::Disconnected) => None,
+        }
+    }
+
+    fn reclaim_pending(&mut self) {
+        let Some(receiver) = self.pending.take() else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok((planner, retriever, realizer, _prepared)) => {
+                self.planner = Some(planner);
+                self.retriever = Some(retriever);
+                self.realizer = Some(realizer);
+            }
+            Err(TryRecvError::Empty) => self.pending = Some(receiver),
+            Err(TryRecvError::Disconnected) => {}
         }
     }
 }
@@ -577,6 +608,111 @@ mod tests {
         );
     }
 
+    struct FirstTurnBlockingPlanner {
+        calls: usize,
+        started: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    }
+    impl ResponsePlanner for FirstTurnBlockingPlanner {
+        fn plan(
+            &mut self,
+            kind: TurnKind,
+            _utterance: &str,
+            _context: &MemoryContext,
+        ) -> Result<ResponsePlan, PortError> {
+            self.calls += 1;
+            if self.calls == 1 {
+                self.started
+                    .send(())
+                    .map_err(|_| PortError("test did not await planner start".into()))?;
+                self.release
+                    .recv()
+                    .map_err(|_| PortError("test did not release planner".into()))?;
+            }
+            Ok(ResponsePlan {
+                kind,
+                goal: "goal".into(),
+                retrieval_query: None,
+                directives: Vec::new(),
+            })
+        }
+    }
+
+    struct CountingRetriever(usize);
+    impl ResponseContextRetriever for CountingRetriever {
+        fn retrieve(
+            &mut self,
+            _plan: &ResponsePlan,
+            context: &MemoryContext,
+        ) -> Result<MemoryContext, PortError> {
+            self.0 += 1;
+            Ok(context.clone())
+        }
+    }
+
+    struct CountingRealizer(usize);
+    impl SurfaceRealizer for CountingRealizer {
+        fn realize(&mut self, _plan: &ResponsePlan) -> Result<SurfaceContext, PortError> {
+            self.0 += 1;
+            Ok(SurfaceContext {
+                response_mode: "recovered-planned".into(),
+                tone_hint: None,
+                relevant_facts: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn timeout_reclaims_ports_for_a_later_planned_turn() {
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let mut pipeline = ResponsePipeline::new(
+            FirstTurnBlockingPlanner {
+                calls: 0,
+                started: started_sender,
+                release: release_receiver,
+            },
+            CountingRetriever(0),
+            CountingRealizer(0),
+            PlanningBudget {
+                max_elapsed: Duration::from_millis(5),
+            },
+        );
+
+        assert!(
+            pipeline
+                .try_prepare(TurnKind::Memory, "first", &MemoryContext::default())
+                .is_none()
+        );
+        started_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .expect("first planner must still be pending");
+        assert!(
+            pipeline
+                .try_prepare(TurnKind::Memory, "while-pending", &MemoryContext::default())
+                .is_none(),
+            "a still-running worker must not drop its returned ports"
+        );
+        release_sender
+            .send(())
+            .expect("pending planner must be releasable");
+        thread::sleep(Duration::from_millis(10));
+
+        let prepared = pipeline
+            .try_prepare(TurnKind::Memory, "recovered", &MemoryContext::default())
+            .expect("the returned ports must prepare the next planned turn");
+        assert_eq!(prepared.surface.response_mode, "recovered-planned");
+        assert_eq!(
+            pipeline.planner.as_ref().expect("planner restored").calls,
+            2
+        );
+        assert_eq!(
+            pipeline.retriever.as_ref().expect("retriever restored").0,
+            2
+        );
+        assert_eq!(pipeline.realizer.as_ref().expect("realizer restored").0, 2);
+    }
+
     struct MalformedPlanner;
     impl ResponsePlanner for MalformedPlanner {
         fn plan(
@@ -607,5 +743,47 @@ mod tests {
                 .try_prepare(TurnKind::Memory, "remember", &MemoryContext::default())
                 .is_none()
         );
+    }
+
+    struct MismatchedKindPlanner(TurnKind);
+    impl ResponsePlanner for MismatchedKindPlanner {
+        fn plan(
+            &mut self,
+            _kind: TurnKind,
+            _utterance: &str,
+            _context: &MemoryContext,
+        ) -> Result<ResponsePlan, PortError> {
+            Ok(ResponsePlan {
+                kind: self.0,
+                goal: "wrong route".into(),
+                retrieval_query: None,
+                directives: Vec::new(),
+            })
+        }
+    }
+
+    #[test]
+    fn every_mismatched_planned_kind_falls_back_before_retrieval() {
+        for (requested, returned) in [
+            (TurnKind::Memory, TurnKind::Commitment),
+            (TurnKind::Commitment, TurnKind::Correction),
+            (TurnKind::Correction, TurnKind::DecisionSupport),
+            (TurnKind::DecisionSupport, TurnKind::Tool),
+            (TurnKind::Tool, TurnKind::Proactive),
+            (TurnKind::Proactive, TurnKind::Memory),
+        ] {
+            let mut pipeline = ResponsePipeline::new(
+                MismatchedKindPlanner(returned),
+                PassThrough,
+                PassThrough,
+                PlanningBudget::default(),
+            );
+            assert!(
+                pipeline
+                    .try_prepare(requested, "planned", &MemoryContext::default())
+                    .is_none(),
+                "{requested:?} must reject a {returned:?} plan"
+            );
+        }
     }
 }
