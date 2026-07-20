@@ -20,7 +20,7 @@ Base: `ed18ec2`
 | 4. Conditional planner/realizer routing | completed | `f08e913` + `ceb70f5` + `0647e1b` | PASS: `.superpowers/sdd/task-4-fix-review.md` | Simple turns bypass planning; bounded planned surface, timeout port recovery, kind mismatch/fail-open. |
 | 5. Memory Center and controls | completed | `5c39f0c` + `32e2917` | PASS: `.superpowers/sdd/task-5-fix-review-final.md` | Typed DTOs, blocking/CAS commands, bounded redacted center, individual/all deletion fences, temporary mode and settings UI. |
 | 6. Relationship/mood/reflection/proactive integration | completed | `f302c69` + `b76d6db` + `adc8d50` + `33bb3b1` + `9de683b` + `d9faaff` | PASS: `.superpowers/sdd/task-6-review-final.md` | Bounded signal/commitment worker, planned-only consented context, completion enqueue, atomic proactive claim/lease and fail-closed gates. |
-| 7. Optional embeddings, acceptance tests, docs, final verification | completed | `e6d410d` + `cfcf1ce` + `a3218c5` | PASS: `.superpowers/sdd/task-7-review-final.md`, capability fix PASS | Optional bounded local embedder with lexical fallback, acceptance scenarios, architecture/privacy/latency docs, capability contract test synchronization, focused verification. |
+| 7. Optional embeddings, acceptance tests, docs, final verification | completed | `e6d410d` + `cfcf1ce` + `a3218c5` + `b28ec08` + `971db5b` | PASS: `.superpowers/sdd/task-7-review-final.md`, capability/storage fix PASS | Optional bounded local embedder with lexical fallback, acceptance scenarios, architecture/privacy/latency docs, capability contract synchronization, serialized SQLite migrations, full verification. |
 
 ## Operating rules
 
