@@ -1,7 +1,7 @@
 //! Deterministic, bounded companion signals.
 //!
 //! Completed turns are reduced to small state deltas before they leave the
-//! conversation worker.  No transcript is retained in this module.
+//! conversation worker. No transcript is retained in this module.
 
 use sha2::{Digest, Sha256};
 
@@ -14,8 +14,6 @@ pub const MAX_SIGNAL_CHARS: usize = 96;
 pub const MAX_COMMITMENT_CHARS: usize = 160;
 const SIGNAL_TTL_SECONDS: i64 = 86_400;
 
-/// Derives bounded signals from a completed user turn.  The assistant text is
-/// used only to infer a coarse reaction and is never copied into the result.
 #[must_use]
 pub fn derive_dialogue_signals(
     conversation_id: &str,
@@ -51,15 +49,11 @@ pub fn derive_dialogue_signals(
     } else {
         None
     };
-    let relationship_delta = if mood.as_deref() == Some("positive") {
-        1
-    } else if mood.as_deref() == Some("strained") {
-        -1
-    } else {
-        0
+    let relationship_delta = match mood.as_deref() {
+        Some("positive") => 1,
+        Some("strained") => -1,
+        _ => 0,
     };
-    let reflection_cursor = Some(stable_cursor(normalized));
-    let commitment = detect_explicit_commitment(conversation_id, normalized, now);
     let signals = DialogueSignals {
         conversation_id: conversation_id
             .trim()
@@ -69,16 +63,16 @@ pub fn derive_dialogue_signals(
         mood,
         reaction,
         relationship_delta,
-        reflection_cursor,
+        reflection_cursor: Some(stable_cursor(normalized)),
         reflection_state: Some("eligible".to_owned()),
-        commitment,
+        commitment: detect_explicit_commitment(conversation_id, normalized, now),
         observed_at: now,
         expires_at: now.saturating_add(SIGNAL_TTL_SECONDS),
     };
     signals.validate().ok().map(|_| signals)
 }
 
-/// Conservative commitment detector.  Only explicit promise/remember intent
+/// Conservative commitment detector. Only explicit promise/remember intent
 /// creates a candidate; ordinary statements never become commitments.
 #[must_use]
 pub fn detect_explicit_commitment(
@@ -90,29 +84,12 @@ pub fn detect_explicit_commitment(
         return None;
     }
     let trimmed = user_text.trim();
-    if trimmed.is_empty()
-        || !contains_any(
-            &trimmed.to_ascii_lowercase(),
-            &[
-                "約束",
-                "覚えておいて",
-                "忘れないで",
-                "次は",
-                "します",
-                "やります",
-                "promise",
-                "i will",
-                "i'll",
-                "remember that",
-                "next time",
-                "will ",
-            ],
-        )
-    {
+    if trimmed.is_empty() {
         return None;
     }
+    let lower = trimmed.to_ascii_lowercase();
     let english_explicit = contains_any(
-        &trimmed.to_ascii_lowercase(),
+        &lower,
         &[
             "promise",
             "i will",
@@ -121,17 +98,23 @@ pub fn detect_explicit_commitment(
             "don't let me forget",
         ],
     );
-    let japanese_explicit = trimmed.chars().any(|character| {
-        matches!(
-            character,
-            '\u{7d04}' | '\u{899a}' | '\u{5fd8}' | '\u{5fc5}' | '\u{3084}'
-        )
-    });
-    let legacy_explicit = contains_any(
-        &trimmed.to_ascii_lowercase(),
-        &["縺励∪縺・", "繧・ｊ縺ｾ縺・"],
+    // Phrase-based Japanese matching prevents ordinary words such as
+    // "やすみ" from becoming durable commitments.
+    let japanese_explicit = contains_any(
+        trimmed,
+        &[
+            "\u{7d04}\u{675f}\u{3057}\u{307e}\u{3059}", // 約束します
+            "\u{7d04}\u{675f}\u{3059}\u{308b}",         // 約束する
+            "\u{899a}\u{3048}\u{3066}\u{304a}\u{3044}\u{3066}", // 覚えておいて
+            "\u{5fd8}\u{308c}\u{306a}\u{3044}\u{3067}", // 忘れないで
+            "\u{5fc5}\u{305a}",                         // 必ず...
+            "\u{6b21}\u{306f}",                         // 次は...
+            "\u{3084}\u{308a}\u{307e}\u{3059}",         // やります
+            "\u{3057}\u{3066}\u{304a}\u{304d}\u{307e}\u{3059}", // しておきます
+            "\u{3057}\u{307e}\u{3059}\u{306d}",         // しますね
+        ],
     );
-    if !english_explicit && !japanese_explicit && !legacy_explicit {
+    if !english_explicit && !japanese_explicit {
         return None;
     }
     let mut content: String = trimmed.chars().take(MAX_COMMITMENT_CHARS).collect();
@@ -187,11 +170,12 @@ mod tests {
     }
 
     #[test]
-    fn only_explicit_commitment_language_creates_open_candidate() {
-        assert!(detect_explicit_commitment("chat", "今日は晴れです", 10).is_none());
-        let commitment =
-            detect_explicit_commitment("chat", "\u{7d04}\u{675f}\u{3057}\u{307e}\u{3059}", 10)
-                .unwrap();
+    fn commitment_matching_is_phrase_based_and_bounded() {
+        for ordinary in ["今日はやすみです", "やめます"] {
+            assert!(detect_explicit_commitment("chat", ordinary, 10).is_none());
+        }
+        assert!(detect_explicit_commitment("chat", "必ず資料を確認します", 10).is_some());
+        let commitment = detect_explicit_commitment("chat", "約束します", 10).unwrap();
         assert_eq!(commitment.status, CommitmentStatus::Open);
         assert!(commitment.content.chars().count() <= MAX_COMMITMENT_CHARS);
     }

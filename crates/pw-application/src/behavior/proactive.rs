@@ -460,13 +460,14 @@ pub fn grant_proactive_turn<H: FrequencyHistory>(
     ) {
         return false;
     }
-    gate.commit_if_idle(epoch, || true).unwrap_or(false)
+    gate.claim_if_idle(epoch, || true).unwrap_or(false)
 }
 
 #[derive(Debug, Default)]
 struct GateState {
     epoch: u64,
     outstanding_user_turns: u64,
+    proactive_claimed: bool,
 }
 
 #[derive(Debug, Default)]
@@ -484,6 +485,7 @@ impl InteractionGate {
         if let Ok(mut state) = self.state.lock() {
             state.epoch = state.epoch.wrapping_add(1);
             state.outstanding_user_turns = state.outstanding_user_turns.saturating_add(1);
+            state.proactive_claimed = false;
         }
     }
 
@@ -515,6 +517,21 @@ impl InteractionGate {
         if state.epoch != captured_epoch || state.outstanding_user_turns != 0 {
             return None;
         }
+        Some(grant())
+    }
+
+    /// Atomically reserves the current idle epoch for one proactive action.
+    /// A second candidate cannot claim the same idle epoch; the next user turn
+    /// clears the reservation while also advancing the cancellation epoch.
+    pub fn claim_if_idle<T>(&self, captured_epoch: u64, grant: impl FnOnce() -> T) -> Option<T> {
+        let mut state = self.state.lock().ok()?;
+        if state.epoch != captured_epoch
+            || state.outstanding_user_turns != 0
+            || state.proactive_claimed
+        {
+            return None;
+        }
+        state.proactive_claimed = true;
         Some(grant())
     }
 }
@@ -576,6 +593,7 @@ mod tests {
         let candidate = candidate();
         let history = History(FrequencySnapshot::default());
         assert!(grant_proactive_turn(&gate, &history, &candidate, policy()));
+        assert!(!grant_proactive_turn(&gate, &history, &candidate, policy()));
 
         for mutate in [
             |value: &mut ProactiveGatePolicy| value.master_enabled = false,

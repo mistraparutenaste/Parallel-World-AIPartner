@@ -4,7 +4,7 @@ use pw_application::memory::{
     DomainControl, MemoryDomain, MemoryLink, MemoryTombstone, MemoryVersion,
     TemporaryConversationSettings, is_safe_persistent_content,
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Database;
 
@@ -13,6 +13,15 @@ use crate::Database;
 /// `AsyncStateWriter` and may drop a write without affecting a reply.
 pub struct SqliteCompanionStateStore {
     database: Database,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct PlannedStateSnapshot {
+    pub mood: Option<String>,
+    pub reaction: Option<String>,
+    pub relationship_score: Option<i64>,
+    pub reflection_cursor: Option<String>,
+    pub open_commitments: Vec<String>,
 }
 
 impl SqliteCompanionStateStore {
@@ -31,6 +40,96 @@ impl SqliteCompanionStateStore {
             )
             .map_err(state_error)
     }
+
+    /// Reads temporary status, controls, dialogue state, and commitments from
+    /// one SQLite snapshot. `IMMEDIATE` linearizes this read against the
+    /// temporary/privacy writers; callers can fail open on a busy timeout.
+    pub(crate) fn planned_state_snapshot(
+        &mut self,
+        conversation_id: &str,
+        now: i64,
+    ) -> Result<PlannedStateSnapshot, PortError> {
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(state_error)?;
+        let temporary: bool = transaction
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?1 AND temporary=1)",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .map_err(state_error)?;
+        if temporary {
+            transaction.commit().map_err(state_error)?;
+            return Ok(PlannedStateSnapshot::default());
+        }
+        let relationship_allowed = domain_allowed(&transaction, MemoryDomain::Relationship)?;
+        let reflection_allowed = domain_allowed(&transaction, MemoryDomain::Reflection)?;
+        let commitment_allowed = domain_allowed(&transaction, MemoryDomain::Commitment)?;
+        let mut snapshot = PlannedStateSnapshot::default();
+        if relationship_allowed || reflection_allowed {
+            let state = transaction
+                .query_row(
+                    "SELECT mood,reaction,relationship_score,reflection_cursor FROM dialogue_states WHERE conversation_id=?1 AND expires_at>?2",
+                    params![conversation_id, now],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(state_error)?;
+            if let Some((mood, reaction, relationship_score, reflection_cursor)) = state {
+                if relationship_allowed {
+                    snapshot.mood = mood;
+                    snapshot.reaction = reaction;
+                    snapshot.relationship_score = relationship_score;
+                }
+                if reflection_allowed {
+                    snapshot.reflection_cursor = reflection_cursor;
+                }
+            }
+        }
+        if commitment_allowed {
+            let mut statement = transaction
+                .prepare(
+                    "SELECT content FROM commitments WHERE conversation_id=?1 AND status='open' AND (expires_at IS NULL OR expires_at>?2) ORDER BY id LIMIT 4",
+                )
+                .map_err(state_error)?;
+            let rows = statement
+                .query_map(params![conversation_id, now], |row| row.get::<_, String>(0))
+                .map_err(state_error)?;
+            snapshot.open_commitments = rows
+                .filter_map(Result::ok)
+                .map(|content| content.chars().take(160).collect())
+                .collect();
+        }
+        transaction.commit().map_err(state_error)?;
+        Ok(snapshot)
+    }
+}
+
+fn domain_allowed(
+    transaction: &rusqlite::Transaction<'_>,
+    domain: MemoryDomain,
+) -> Result<bool, PortError> {
+    let consent: String = transaction
+        .query_row(
+            "SELECT consent FROM memory_domain_controls WHERE domain=?1",
+            [domain.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(state_error)?;
+    Ok(matches!(
+        DomainConsent::parse(&consent)?,
+        DomainConsent::Allowed
+    ))
 }
 
 impl CompanionStateStore for SqliteCompanionStateStore {
@@ -429,6 +528,67 @@ mod tests {
                 )
                 .unwrap(),
             CasOutcome::Conflict
+        );
+    }
+
+    #[test]
+    fn planned_snapshot_uses_one_privacy_transaction_and_omits_pending_domains() {
+        let mut store = state();
+        assert!(
+            store
+                .planned_state_snapshot("chat", 2)
+                .unwrap()
+                .open_commitments
+                .is_empty()
+        );
+        for domain in [
+            MemoryDomain::Relationship,
+            MemoryDomain::Reflection,
+            MemoryDomain::Commitment,
+        ] {
+            let current = store.get_domain_control(domain).unwrap();
+            assert_eq!(
+                store
+                    .compare_and_set_domain_control(
+                        DomainControl {
+                            consent: DomainConsent::Allowed,
+                            ..current
+                        },
+                        0,
+                        1,
+                    )
+                    .unwrap(),
+                CasOutcome::Applied(1)
+            );
+        }
+        assert_eq!(
+            store
+                .compare_and_set_dialogue_state(dialogue(100), 0, 2)
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        let snapshot = store.planned_state_snapshot("chat", 2).unwrap();
+        assert_eq!(snapshot.mood.as_deref(), Some("calm"));
+        assert_eq!(snapshot.relationship_score, Some(3));
+        assert!(snapshot.open_commitments.is_empty());
+
+        assert_eq!(
+            store
+                .set_temporary_conversation(
+                    TemporaryConversationSettings {
+                        conversation_id: "chat".into(),
+                        temporary: true,
+                        revision: 0
+                    },
+                    0,
+                    3,
+                )
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        assert_eq!(
+            store.planned_state_snapshot("chat", 3).unwrap(),
+            PlannedStateSnapshot::default()
         );
     }
 

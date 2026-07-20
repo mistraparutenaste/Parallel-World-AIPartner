@@ -13,6 +13,11 @@
 - Added proactive grant helper that composes `InteractionGate`, frequency
   history, master/profile/snooze, temporary, policy-error, and active-turn
   cancellation checks.
+- Hardened explicit commitment matching to phrase allow-lists and added an
+  atomic idle-epoch claim to prevent duplicate proactive grants.
+- Planned retrieval now uses one `IMMEDIATE` SQLite snapshot for temporary
+  status, consent controls, dialogue state, and commitments.
+- Async control writes preserve payload revisions for CAS.
 
 ## Verification
 
@@ -21,6 +26,7 @@
 - `cargo test -p pw-application companion --no-default-features` (all pass)
 - `cargo test -p pw-application routing --no-default-features` (all pass on rerun; one 1ms budget test was scheduler-flaky once)
 - `cargo test -p pw-storage state_worker --no-default-features` (all pass)
+- `cargo test -p pw-storage planned_snapshot --no-default-features` (pass)
 - `cargo test -p parallel-world-desktop --lib chat::service --no-default-features` with cached Sherpa assets (64 pass)
 - `cargo check -p parallel-world-desktop --lib` (pass)
 

@@ -41,66 +41,16 @@ impl SqlitePlannedStateContext {
 impl PlannedStateContextProvider for SqlitePlannedStateContext {
     fn retrieve_state(&mut self, _plan: &ResponsePlan) -> Result<BoundedStateContext, PortError> {
         let now = unix_timestamp();
-        if self
+        let snapshot = self
             .store
-            .is_temporary_conversation(&self.conversation_id)?
-        {
-            return Ok(BoundedStateContext::default());
-        }
-        let relationship_allowed = matches!(
-            self.store
-                .get_domain_control(MemoryDomain::Relationship)?
-                .consent,
-            DomainConsent::Allowed
-        );
-        let reflection_allowed = matches!(
-            self.store
-                .get_domain_control(MemoryDomain::Reflection)?
-                .consent,
-            DomainConsent::Allowed
-        );
-        let commitment_allowed = matches!(
-            self.store
-                .get_domain_control(MemoryDomain::Commitment)?
-                .consent,
-            DomainConsent::Allowed
-        );
-        let dialogue = if relationship_allowed || reflection_allowed {
-            self.store.read_dialogue_state(&self.conversation_id, now)?
-        } else {
-            None
-        };
-        let commitments = if commitment_allowed {
-            self.store
-                .list_open_commitments(&self.conversation_id, now, 4)?
-                .into_iter()
-                .map(|commitment| commitment.content)
-                .collect()
-        } else {
-            Vec::new()
-        };
+            .planned_state_snapshot(&self.conversation_id, now)?;
         let context = BoundedStateContext {
-            mood: relationship_allowed
-                .then(|| dialogue.as_ref().and_then(|state| state.mood.clone()))
-                .flatten(),
-            reaction: relationship_allowed
-                .then(|| dialogue.as_ref().and_then(|state| state.reaction.clone()))
-                .flatten(),
-            relationship_score: relationship_allowed
-                .then(|| dialogue.as_ref().and_then(|state| state.relationship_score))
-                .flatten(),
-            reflection_cursor: dialogue
-                .as_ref()
-                .filter(|_| reflection_allowed)
-                .and_then(|state| state.reflection_cursor.clone()),
-            open_commitments: commitments,
+            mood: snapshot.mood,
+            reaction: snapshot.reaction,
+            relationship_score: snapshot.relationship_score,
+            reflection_cursor: snapshot.reflection_cursor,
+            open_commitments: snapshot.open_commitments,
         };
-        if self
-            .store
-            .is_temporary_conversation(&self.conversation_id)?
-        {
-            return Ok(BoundedStateContext::default());
-        }
         context.validate()?;
         Ok(context)
     }
@@ -180,12 +130,14 @@ pub fn apply_async_state_write(
         AsyncStateWrite::DialogueSignals(signals) => apply_signals(store, signals, now),
         AsyncStateWrite::DomainControl(control) => {
             control.validate()?;
-            match store.compare_and_set_domain_control(control, 0, now)? {
+            let expected_revision = control.revision;
+            match store.compare_and_set_domain_control(control, expected_revision, now)? {
                 CasOutcome::Applied(_) | CasOutcome::Conflict | CasOutcome::Rejected => Ok(()),
             }
         }
         AsyncStateWrite::TemporaryConversation(settings) => {
-            match store.set_temporary_conversation(settings, 0, now)? {
+            let expected_revision = settings.revision;
+            match store.set_temporary_conversation(settings, expected_revision, now)? {
                 CasOutcome::Applied(_) | CasOutcome::Conflict | CasOutcome::Rejected => Ok(()),
             }
         }
@@ -413,6 +365,39 @@ mod tests {
                 .list_open_commitments("chat", 10, 4)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn async_control_writes_use_payload_revision_for_cas() {
+        let mut store = store();
+        let current = store
+            .get_domain_control(MemoryDomain::Relationship)
+            .unwrap();
+        apply_async_state_write(
+            &mut store,
+            AsyncStateWrite::DomainControl(DomainControl {
+                consent: DomainConsent::Allowed,
+                ..current.clone()
+            }),
+            1,
+        )
+        .unwrap();
+        apply_async_state_write(
+            &mut store,
+            AsyncStateWrite::DomainControl(DomainControl {
+                consent: DomainConsent::NeverStore,
+                ..current
+            }),
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            store
+                .get_domain_control(MemoryDomain::Relationship)
+                .unwrap()
+                .consent,
+            DomainConsent::Allowed
         );
     }
 }
