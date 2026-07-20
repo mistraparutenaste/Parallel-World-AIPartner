@@ -16,7 +16,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use crate::character::{
     CharacterCapabilities, CharacterCatalog, ResolvedCharacter, ResolvedRenderer, discover_setup,
     import_character_source, load_character_settings, save_character_settings,
-    select_active_renderer, with_expression_idle_timeout,
+    select_active_renderer, with_character_size, with_expression_idle_timeout,
 };
 
 /// Event delivered to the character window when an expression is set.
@@ -465,6 +465,34 @@ pub fn set_expression_idle_timeout<R: Runtime>(
     Ok(settings)
 }
 
+/// Updates the character window scale and persists it for the next launch.
+///
+/// # Errors
+///
+/// Returns a validation, native window, persistence, or event-delivery error.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
+pub fn set_character_size<R: Runtime>(
+    app: AppHandle<R>,
+    layout: State<'_, AppDataLayout>,
+    size_percent: u16,
+) -> Result<CharacterSettingsDto, String> {
+    let current = load_character_settings(&layout);
+    let settings = with_character_size(current, size_percent)?;
+    crate::windows::apply_character_window_size(&app, size_percent)?;
+    save_character_settings(&layout, &settings)?;
+    app.emit_to(
+        EventTarget::webview_window("character"),
+        CHARACTER_SETTINGS_CHANGED_EVENT,
+        CharacterSettingsChangedEventDto {
+            schema_version: CHARACTER_SETTINGS_SCHEMA_VERSION,
+            settings: settings.clone(),
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -731,6 +759,7 @@ mod tests {
             live2d_character_id: Some("alpha".into()),
             static_image_character_id: None,
             expression_idle_timeout_seconds: Some(20),
+            character_size_percent: 100,
         };
         crate::character::save_character_settings(&layout, &original).unwrap();
 

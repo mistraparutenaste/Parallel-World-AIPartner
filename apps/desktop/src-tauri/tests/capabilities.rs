@@ -134,6 +134,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-set-active-character-renderer",
             "dialog:allow-open",
             "allow-set-expression-idle-timeout",
+            "allow-set-character-size",
             "allow-set-expression",
             "allow-start-motion",
             "allow-list-microphones",

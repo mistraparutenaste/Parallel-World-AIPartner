@@ -12,7 +12,7 @@ pub use catalog::{
 };
 pub use manifest::{CharacterManifest, ManifestError, find_first_model3, parse_model3_json};
 pub use settings::{
-    load_character_settings, save_character_settings, validate_idle_timeout,
-    with_expression_idle_timeout,
+    load_character_settings, save_character_settings, validate_character_size,
+    validate_idle_timeout, with_character_size, with_expression_idle_timeout,
 };
 pub(crate) use setup::{discover_setup, import_character_source, select_active_renderer};

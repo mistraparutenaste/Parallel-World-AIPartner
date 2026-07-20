@@ -724,6 +724,23 @@ button.danger-button--confirm {
   margin-block: 14px 20px;
 }
 
+.character-size-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  max-width: 420px;
+  margin-block: 14px 20px;
+}
+
+.character-size-control label {
+  font-weight: 700;
+}
+
+.character-size-control select {
+  min-width: 112px;
+}
+
 .character-renderer-selector {
   display: flex;
   flex-wrap: wrap;

@@ -27,6 +27,17 @@ pub fn validate_idle_timeout(timeout_seconds: Option<u32>) -> Result<(), String>
     }
 }
 
+/// Validates the character window scale percentage.
+pub fn validate_character_size(size_percent: u16) -> Result<(), String> {
+    if (50..=200).contains(&size_percent) {
+        Ok(())
+    } else {
+        Err(format!(
+            "character size must be between 50 and 200 percent: {size_percent}"
+        ))
+    }
+}
+
 fn validate_settings(settings: &CharacterSettingsDto) -> Result<(), String> {
     if settings.schema_version != CHARACTER_SETTINGS_SCHEMA_VERSION {
         return Err(format!(
@@ -35,6 +46,7 @@ fn validate_settings(settings: &CharacterSettingsDto) -> Result<(), String> {
         ));
     }
     validate_idle_timeout(settings.expression_idle_timeout_seconds)
+        .and_then(|()| validate_character_size(settings.character_size_percent))
 }
 
 fn migrate_settings(mut settings: CharacterSettingsDto) -> Result<CharacterSettingsDto, String> {
@@ -44,6 +56,9 @@ fn migrate_settings(mut settings: CharacterSettingsDto) -> Result<CharacterSetti
             settings.live2d_character_id = None;
             settings.static_image_character_id = None;
         }
+        2 => {
+            settings.schema_version = CHARACTER_SETTINGS_SCHEMA_VERSION;
+        }
         CHARACTER_SETTINGS_SCHEMA_VERSION => {}
         version => {
             return Err(format!(
@@ -52,6 +67,7 @@ fn migrate_settings(mut settings: CharacterSettingsDto) -> Result<CharacterSetti
         }
     }
     validate_idle_timeout(settings.expression_idle_timeout_seconds)?;
+    validate_character_size(settings.character_size_percent)?;
     Ok(settings)
 }
 
@@ -144,6 +160,17 @@ pub fn with_expression_idle_timeout(
     Ok(settings)
 }
 
+/// Replaces only the character window scale while preserving all other settings.
+pub fn with_character_size(
+    mut settings: CharacterSettingsDto,
+    size_percent: u16,
+) -> Result<CharacterSettingsDto, String> {
+    validate_character_size(size_percent)?;
+    settings.schema_version = CHARACTER_SETTINGS_SCHEMA_VERSION;
+    settings.character_size_percent = size_percent;
+    Ok(settings)
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -153,8 +180,8 @@ mod tests {
     use pw_platform::paths::AppDataLayout;
 
     use super::{
-        load_character_settings, save_character_settings, validate_idle_timeout,
-        with_expression_idle_timeout,
+        load_character_settings, save_character_settings, validate_character_size,
+        validate_idle_timeout, with_character_size, with_expression_idle_timeout,
     };
 
     static NEXT_TEST_DIRECTORY: AtomicU64 = AtomicU64::new(0);
@@ -232,15 +259,16 @@ mod tests {
     fn all_character_selections_round_trip() {
         let test = TestLayout::new("all-selections-round-trip");
         let expected = serde_json::json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "active_character_id": "active-static",
             "live2d_character_id": "remembered-live2d",
             "static_image_character_id": "remembered-static",
             "expression_idle_timeout_seconds": 30,
+            "character_size_percent": 100,
         });
-        let settings = serde_json::from_value(expected.clone()).expect("deserialize v2 settings");
+        let settings = serde_json::from_value(expected.clone()).expect("deserialize v3 settings");
 
-        save_character_settings(&test.layout, &settings).expect("save v2 settings");
+        save_character_settings(&test.layout, &settings).expect("save v3 settings");
 
         assert_eq!(
             serde_json::to_value(load_character_settings(&test.layout)).unwrap(),
@@ -249,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_v1_migrates_to_v2_without_remembered_sources() {
+    fn schema_v1_migrates_to_v3_without_remembered_sources() {
         let test = TestLayout::new("schema-v1-migration");
         std::fs::write(
             test.settings_path(),
@@ -260,11 +288,12 @@ mod tests {
         assert_eq!(
             serde_json::to_value(load_character_settings(&test.layout)).unwrap(),
             serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "active_character_id": "epsilon",
                 "live2d_character_id": null,
                 "static_image_character_id": null,
                 "expression_idle_timeout_seconds": 30,
+                "character_size_percent": 100,
             })
         );
     }
@@ -277,6 +306,30 @@ mod tests {
         assert!(validate_idle_timeout(None).is_ok());
         assert!(validate_idle_timeout(Some(10)).is_ok());
         assert!(validate_idle_timeout(Some(600)).is_ok());
+    }
+
+    #[test]
+    fn character_size_bounds_are_validated() {
+        for size in [49, 201] {
+            assert!(validate_character_size(size).is_err(), "{size}");
+        }
+        for size in [50, 100, 200] {
+            assert!(validate_character_size(size).is_ok(), "{size}");
+        }
+    }
+
+    #[test]
+    fn changing_character_size_preserves_character_selection_and_timeout() {
+        let original = settings(Some("epsilon"), Some(30));
+        let updated = with_character_size(original.clone(), 150).expect("set character size");
+
+        assert_eq!(updated.active_character_id, original.active_character_id);
+        assert_eq!(
+            updated.expression_idle_timeout_seconds,
+            original.expression_idle_timeout_seconds
+        );
+        assert_eq!(updated.character_size_percent, 150);
+        assert_eq!(updated.schema_version, CHARACTER_SETTINGS_SCHEMA_VERSION);
     }
 
     #[test]
@@ -295,7 +348,7 @@ mod tests {
         for (name, raw) in [
             (
                 "schema",
-                r#"{"schema_version":3,"active_character_id":"epsilon","expression_idle_timeout_seconds":20}"#,
+                r#"{"schema_version":4,"active_character_id":"epsilon","expression_idle_timeout_seconds":20}"#,
             ),
             (
                 "timeout",
@@ -329,11 +382,12 @@ mod tests {
         assert_eq!(
             serde_json::to_value(updated).unwrap(),
             serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "active_character_id": "epsilon-static",
                 "live2d_character_id": "epsilon-live2d",
                 "static_image_character_id": "epsilon-static",
                 "expression_idle_timeout_seconds": null,
+                "character_size_percent": 100,
             })
         );
     }

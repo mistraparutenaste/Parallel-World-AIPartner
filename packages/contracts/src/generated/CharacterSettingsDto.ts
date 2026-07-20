@@ -3,4 +3,4 @@
 /**
  * Persisted global character selection and behavior settings.
  */
-export type CharacterSettingsDto = { schema_version: number, active_character_id: string | null, live2d_character_id: string | null, static_image_character_id: string | null, expression_idle_timeout_seconds: number | null, };
+export type CharacterSettingsDto = { schema_version: number, active_character_id: string | null, live2d_character_id: string | null, static_image_character_id: string | null, expression_idle_timeout_seconds: number | null, character_size_percent: number, };

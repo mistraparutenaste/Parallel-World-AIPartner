@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub const CHARACTER_MANIFEST_SCHEMA_VERSION: u16 = 2;
-pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 2;
+pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 3;
 pub const CHARACTER_SETUP_SCHEMA_VERSION: u16 = 1;
 pub const CHARACTER_SETTINGS_CHANGED_EVENT: &str = "character-settings-changed";
 
@@ -95,6 +95,12 @@ pub struct CharacterSettingsDto {
     #[serde(default)]
     pub static_image_character_id: Option<String>,
     pub expression_idle_timeout_seconds: Option<u32>,
+    #[serde(default = "default_character_size_percent")]
+    pub character_size_percent: u16,
+}
+
+fn default_character_size_percent() -> u16 {
+    100
 }
 
 impl Default for CharacterSettingsDto {
@@ -105,6 +111,7 @@ impl Default for CharacterSettingsDto {
             live2d_character_id: None,
             static_image_character_id: None,
             expression_idle_timeout_seconds: Some(20),
+            character_size_percent: default_character_size_percent(),
         }
     }
 }
@@ -167,15 +174,16 @@ mod tests {
     fn character_settings_default_to_twenty_second_idle_timeout() {
         let settings = CharacterSettingsDto::default();
 
-        assert_eq!(CHARACTER_SETTINGS_SCHEMA_VERSION, 2);
+        assert_eq!(CHARACTER_SETTINGS_SCHEMA_VERSION, 3);
         assert_eq!(
             serde_json::to_value(settings).unwrap(),
             serde_json::json!({
-                "schema_version": 2,
+                "schema_version": 3,
                 "active_character_id": null,
                 "live2d_character_id": null,
                 "static_image_character_id": null,
                 "expression_idle_timeout_seconds": 20,
+                "character_size_percent": 100,
             })
         );
     }

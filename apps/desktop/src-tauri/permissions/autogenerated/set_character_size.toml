@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-character-size"
+description = "Enables the set_character_size command without any pre-configured scope."
+commands.allow = ["set_character_size"]
+
+[[permission]]
+identifier = "deny-set-character-size"
+description = "Denies the set_character_size command without any pre-configured scope."
+commands.deny = ["set_character_size"]

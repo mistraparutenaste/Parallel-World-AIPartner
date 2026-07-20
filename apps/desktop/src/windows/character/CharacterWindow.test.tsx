@@ -38,11 +38,12 @@ const LIVE2D_MANIFEST: CharacterManifestDto = {
 };
 
 const SETTINGS: CharacterSettingsDto = {
-  schema_version: 2,
+  schema_version: 3,
   active_character_id: 'epsilon-static',
   live2d_character_id: 'epsilon-live2d',
   static_image_character_id: 'epsilon-static',
   expression_idle_timeout_seconds: 20,
+  character_size_percent: 100,
 };
 
 function deferred<T = void>() {

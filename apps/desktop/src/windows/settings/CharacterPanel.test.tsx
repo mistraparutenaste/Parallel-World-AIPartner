@@ -52,11 +52,12 @@ const STATIC_MANIFEST: CharacterManifestDto = {
 };
 
 const SETTINGS: CharacterSettingsDto = {
-  schema_version: 2,
+  schema_version: 3,
   active_character_id: 'epsilon',
   live2d_character_id: 'epsilon',
   static_image_character_id: 'epsilon-static',
   expression_idle_timeout_seconds: 20,
+  character_size_percent: 100,
 };
 
 const UPDATED_LIVE2D_MANIFEST: CharacterManifestDto = {
@@ -460,6 +461,28 @@ describe('CharacterPanel', () => {
     for (const [label, value] of TIMEOUT_OPTIONS) {
       expect(screen.getByRole('option', { name: label })).toHaveValue(value);
     }
+  });
+
+  it('loads and saves the character size setting', async () => {
+    const saved = { ...SETTINGS, character_size_percent: 150 };
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_character_setup') return Promise.resolve(SETUP);
+      if (command === 'get_character_manifest') return Promise.resolve(MANIFEST);
+      if (command === 'get_character_settings') return Promise.resolve(SETTINGS);
+      if (command === 'set_character_size') return Promise.resolve(saved);
+      return Promise.resolve(undefined);
+    });
+    render(<CharacterPanel />);
+    const select = await screen.findByLabelText('キャラクターサイズ');
+
+    expect(select).toHaveValue('100');
+    expect(screen.getByRole('option', { name: '50%' })).toHaveValue('50');
+    expect(screen.getByRole('option', { name: '200%' })).toHaveValue('200');
+
+    fireEvent.change(select, { target: { value: '150' } });
+
+    await waitFor(() => expect(select).toHaveValue('150'));
+    expect(invokeMock).toHaveBeenCalledWith('set_character_size', { sizePercent: 150 });
   });
 
   it('saves never as null and uses the returned settings', async () => {

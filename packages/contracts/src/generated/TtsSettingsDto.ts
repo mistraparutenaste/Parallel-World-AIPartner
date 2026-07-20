@@ -23,7 +23,7 @@ engine: TtsEngineKind,
  */
 voice_id: string,
 /**
- * Irodori server-side dynamic PEFT LoRA adapter directory. Empty uses
+ * Irodori server-side dynamic PEFT `LoRA` adapter directory. Empty uses
  * the base model and remains backward-compatible with existing settings.
  */
 irodori_lora_adapter: string,

@@ -47,6 +47,7 @@ pub fn run() {
             commands::character::import_character_asset,
             commands::character::set_active_character_renderer,
             commands::character::set_expression_idle_timeout,
+            commands::character::set_character_size,
             commands::character::set_expression,
             commands::character::start_motion,
             commands::character::set_click_through,
@@ -156,6 +157,15 @@ pub fn run() {
             }
             windows::create_missing_windows(app.handle())?;
             restore_window_states(app.handle());
+            let character_settings = character::load_character_settings(
+                &app.state::<pw_platform::paths::AppDataLayout>(),
+            );
+            if let Err(error) = windows::apply_character_window_size(
+                app.handle(),
+                character_settings.character_size_percent,
+            ) {
+                tracing::warn!(%error, "failed to apply persisted character window size");
+            }
             if let Err(error) = commands::ui::restore_chat_placement(
                 app.handle(),
                 &app.state::<pw_platform::paths::AppDataLayout>(),

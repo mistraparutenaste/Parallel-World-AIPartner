@@ -1,6 +1,9 @@
 //! Static definitions of the three application windows.
 
-use tauri::{AppHandle, Manager, Runtime, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalSize, Manager, Runtime, Size, WebviewUrl, WebviewWindowBuilder};
+
+pub const CHARACTER_WINDOW_WIDTH: f64 = 480.0;
+pub const CHARACTER_WINDOW_HEIGHT: f64 = 720.0;
 
 /// Declarative description of one application window.
 #[allow(clippy::struct_excessive_bools)] // Mirrors Tauri's independent window flags.
@@ -27,8 +30,8 @@ pub const WINDOWS: [WindowDefinition; 3] = [
         decorations: false,
         shadow: false,
         visible: true,
-        width: 480.0,
-        height: 720.0,
+        width: CHARACTER_WINDOW_WIDTH,
+        height: CHARACTER_WINDOW_HEIGHT,
     },
     WindowDefinition {
         label: "chat",
@@ -77,6 +80,28 @@ pub fn create_missing_windows<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<(
         }
     }
     Ok(())
+}
+
+/// Applies a persisted scale to the transparent character window.
+///
+/// # Errors
+///
+/// Returns an error when the character window is unavailable or the native
+/// window manager rejects the requested size.
+pub fn apply_character_window_size<R: Runtime>(
+    app: &AppHandle<R>,
+    size_percent: u16,
+) -> Result<(), String> {
+    let window = app
+        .get_webview_window("character")
+        .ok_or_else(|| "character window is not available".to_owned())?;
+    let scale = f64::from(size_percent) / 100.0;
+    window
+        .set_size(Size::Logical(LogicalSize::new(
+            CHARACTER_WINDOW_WIDTH * scale,
+            CHARACTER_WINDOW_HEIGHT * scale,
+        )))
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

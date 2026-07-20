@@ -20,6 +20,11 @@ const IDLE_TIMEOUT_OPTIONS = [
   { value: '600', label: '10分' },
 ] as const;
 
+const CHARACTER_SIZE_OPTIONS = Array.from(
+  { length: 16 },
+  (_, index) => 50 + index * 10,
+);
+
 const SOURCE_LABELS: Record<CharacterRendererKindDto, string> = {
   live2d: 'Live2D',
   static_image: '静止画',
@@ -100,6 +105,7 @@ export function CharacterPanel() {
   const loadGate = useRef(createCharacterPanelRequestGate());
   const setupActionGate = useRef(createCharacterPanelRequestGate());
   const timeoutGate = useRef(createCharacterPanelRequestGate());
+  const sizeGate = useRef(createCharacterPanelRequestGate());
   const [setup, setSetup] = useState<CharacterSetupDto | null>(null);
   const [manifest, setManifest] = useState<CharacterManifestDto | null>(null);
   const [settings, setSettings] = useState<CharacterSettingsDto | null>(null);
@@ -108,9 +114,10 @@ export function CharacterPanel() {
   const [loading, setLoading] = useState(true);
   const [setupBusy, setSetupBusy] = useState(false);
   const [savingTimeout, setSavingTimeout] = useState(false);
+  const [savingSize, setSavingSize] = useState(false);
 
   useEffect(() => {
-    const gates = [loadGate.current, setupActionGate.current, timeoutGate.current];
+    const gates = [loadGate.current, setupActionGate.current, timeoutGate.current, sizeGate.current];
     for (const gate of gates) gate.mount();
     return () => {
       for (const gate of gates) gate.unmount();
@@ -120,10 +127,12 @@ export function CharacterPanel() {
   useEffect(() => {
     setupActionGate.current.begin();
     timeoutGate.current.begin();
+    sizeGate.current.begin();
     const requestGeneration = loadGate.current.begin();
     setLoading(true);
     setSetupBusy(false);
     setSavingTimeout(false);
+    setSavingSize(false);
     void Promise.allSettled([
       invoke<CharacterSetupDto>('get_character_setup'),
       invoke<CharacterSettingsDto>('get_character_settings'),
@@ -282,6 +291,28 @@ export function CharacterPanel() {
       });
   };
 
+  const saveCharacterSize = (selected: string) => {
+    if (settings === null) return;
+    const sizePercent = Number(selected);
+    loadGate.current.begin();
+    setupActionGate.current.begin();
+    const requestGeneration = sizeGate.current.begin();
+    setSavingSize(true);
+    invoke<CharacterSettingsDto>('set_character_size', { sizePercent })
+      .then((saved) => {
+        if (!sizeGate.current.isCurrent(requestGeneration)) return;
+        setSettings(saved);
+        setMessage(null);
+      })
+      .catch((error: unknown) => {
+        if (!sizeGate.current.isCurrent(requestGeneration)) return;
+        setMessage({ kind: 'error', text: `キャラクターサイズを保存できません: ${String(error)}` });
+      })
+      .finally(() => {
+        if (sizeGate.current.isCurrent(requestGeneration)) setSavingSize(false);
+      });
+  };
+
   const expressions = manifest?.renderer.kind === 'static_image'
     ? manifest.renderer.expressions.map((expression) => expression.name)
     : (manifest?.renderer.expressions ?? []);
@@ -291,7 +322,8 @@ export function CharacterPanel() {
   const timeoutValue = settings?.expression_idle_timeout_seconds === null
     ? 'never'
     : String(settings?.expression_idle_timeout_seconds ?? 20);
-  const controlsBusy = loading || setupBusy || savingTimeout;
+  const sizeValue = String(settings?.character_size_percent ?? 100);
+  const controlsBusy = loading || setupBusy || savingTimeout || savingSize;
 
   return (
     <section className="character-panel" aria-label="キャラクター設定" aria-busy={controlsBusy}>
@@ -338,6 +370,22 @@ export function CharacterPanel() {
         >
           再読み込み
         </button>
+      ) : null}
+
+      {settings !== null ? (
+        <div className="character-size-control">
+          <label htmlFor="character-size">キャラクターサイズ</label>
+          <select
+            id="character-size"
+            value={sizeValue}
+            disabled={controlsBusy}
+            onChange={(event) => saveCharacterSize(event.target.value)}
+          >
+            {CHARACTER_SIZE_OPTIONS.map((size) => (
+              <option key={size} value={size}>{size}%</option>
+            ))}
+          </select>
+        </div>
       ) : null}
 
       {manifest !== null && settings !== null ? (

@@ -28,6 +28,7 @@
     "allow-set-active-character-renderer",
     "dialog:allow-open",
     "allow-set-expression-idle-timeout",
+    "allow-set-character-size",
     "allow-set-expression",
     "allow-start-motion",
     "allow-list-microphones",
