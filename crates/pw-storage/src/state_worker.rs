@@ -13,8 +13,8 @@ use pw_application::conversation::{
     BoundedStateContext, PlannedStateContextProvider, ResponsePlan,
 };
 use pw_application::memory::{
-    AsyncStateWrite, CasOutcome, CompanionStateStore, DialogueSignals, DialogueState,
-    DomainConsent, MemoryDomain,
+    AsyncStateWrite, AsyncStateWriter, CasOutcome, CompanionStateStore, DialogueSignals,
+    DialogueState, DomainConsent, MemoryDomain,
 };
 
 use crate::{Database, SqliteCompanionStateStore};
@@ -148,6 +148,12 @@ impl CompanionStateWorker {
             .expect("worker thread exists")
             .join()
             .map_err(|_| "companion state worker panicked".to_owned())
+    }
+}
+
+impl AsyncStateWriter for CompanionStateWorker {
+    fn try_enqueue(&self, write: AsyncStateWrite) -> bool {
+        CompanionStateWorker::try_enqueue(self, write)
     }
 }
 
