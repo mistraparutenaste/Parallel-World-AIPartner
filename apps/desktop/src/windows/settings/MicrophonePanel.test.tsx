@@ -83,6 +83,33 @@ describe('MicrophonePanel', () => {
     });
   });
 
+  it('switches the active capture device without stopping listening', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_microphones') return Promise.resolve(DEVICES);
+      if (command === 'get_stt_state') {
+        return Promise.resolve({
+          schema_version: 1,
+          phase: 'listening',
+          message: null,
+        } satisfies SttStateEventDto);
+      }
+      return Promise.resolve(null);
+    });
+
+    render(<MicrophonePanel />);
+    await screen.findByText('聞き取り中');
+
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'wasapi:mic-a' },
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith('set_input_device', {
+      deviceId: 'wasapi:mic-a',
+    });
+    expect(invokeMock).not.toHaveBeenCalledWith('stop_listening');
+    expect(invokeMock).not.toHaveBeenCalledWith('start_listening', expect.anything());
+  });
+
   it('reflects unavailable state from stt-state events', async () => {
     render(<MicrophonePanel />);
     await screen.findByRole('option', { name: 'Mic A' });

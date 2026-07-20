@@ -35,6 +35,7 @@ fn main() {
             "set_click_through",
             "list_microphones",
             "start_listening",
+            "set_input_device",
             "stop_listening",
             "set_capture_enabled",
             "get_audio_diagnostics",

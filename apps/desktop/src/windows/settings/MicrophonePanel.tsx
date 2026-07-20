@@ -146,9 +146,17 @@ export function MicrophonePanel() {
           id="microphone-select"
           value={selectedDevice}
           onChange={(event) => {
-            preferredDeviceRef.current = event.target.value;
-            setSelectedDevice(event.target.value);
+            const nextDevice = event.target.value;
+            preferredDeviceRef.current = nextDevice;
+            setSelectedDevice(nextDevice);
             setFallbackMessage(null);
+            if (phaseRef.current !== 'stopped') {
+              void invoke('set_input_device', {
+                deviceId: nextDevice === '' ? null : nextDevice,
+              }).catch((error: unknown) => {
+                setMessage(`入力デバイスを切り替えられません: ${String(error)}`);
+              });
+            }
           }}
         >
           {selectedDevice !== '' && !devices.some((device) => device.id === selectedDevice) && (

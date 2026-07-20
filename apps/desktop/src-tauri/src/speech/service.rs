@@ -257,6 +257,7 @@ impl SttModelPaths {
 
 struct RunningPipeline {
     active_device_id: Arc<Mutex<String>>,
+    requested_device: Arc<Mutex<Option<Option<String>>>>,
     cancel: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
     diagnostics: Arc<PipelineDiagnostics>,
@@ -465,6 +466,10 @@ impl<D: DeviceSelector, C: CaptureFactory> RecoveryCycle<D, C> {
         }
     }
 
+    fn set_preferred_device(&mut self, device_id: Option<String>) {
+        self.preferred_device_id = device_id;
+    }
+
     fn recover_once(
         &mut self,
         failures: Option<FailureSender>,
@@ -644,6 +649,7 @@ impl SpeechService {
         let startup_timed_out = Arc::new(AtomicBool::new(false));
         *self.lock_active_cancel() = Some(Arc::clone(&cancel));
         let capture_enabled = Arc::new(AtomicBool::new(true));
+        let requested_device = Arc::new(Mutex::new(None));
         let diagnostics = Arc::new(PipelineDiagnostics::default());
         let dropped_samples = Arc::new(AtomicU64::new(0));
         let failure_metrics = Arc::new(Mutex::new(Arc::new(FailureQueueMetrics::default())));
@@ -664,6 +670,7 @@ impl SpeechService {
             app: app.clone(),
             paths,
             device_id,
+            requested_device: Arc::clone(&requested_device),
             cancel: Arc::clone(&cancel),
             startup_timed_out: Arc::clone(&startup_timed_out),
             capture_enabled: Arc::clone(&capture_enabled),
@@ -699,6 +706,7 @@ impl SpeechService {
         let watchdog_cancel = Arc::clone(&cancel);
         *guard = Some(RunningPipeline {
             active_device_id,
+            requested_device,
             cancel,
             capture_enabled,
             diagnostics,
@@ -817,6 +825,27 @@ impl SpeechService {
         }
     }
 
+    /// Requests an input-device switch without stopping the speech pipeline.
+    /// The worker replaces only the capture session and keeps the loaded STT
+    /// models and conversation pipeline alive.
+    pub fn set_input_device(&self, device_id: Option<String>) {
+        let _lifecycle = self.lock_lifecycle();
+        let running = self.lock();
+        if let Some(running) = running.as_ref() {
+            if !running.cancel.load(Ordering::Acquire) {
+                *running
+                    .requested_device
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(device_id);
+                return;
+            }
+        }
+        drop(running);
+        if let Some(pending) = self.lock_pending_start().as_mut() {
+            pending.device_id = device_id;
+        }
+    }
+
     #[must_use]
     pub fn diagnostics(&self) -> AudioDiagnosticsDto {
         let guard = self.lock();
@@ -919,6 +948,7 @@ impl SpeechService {
         *self.lock_active_cancel() = Some(Arc::clone(&cancel));
         *self.lock() = Some(RunningPipeline {
             active_device_id: Arc::new(Mutex::new("test-device".to_owned())),
+            requested_device: Arc::new(Mutex::new(None)),
             cancel,
             capture_enabled: Arc::new(AtomicBool::new(true)),
             diagnostics: Arc::new(PipelineDiagnostics::default()),
@@ -982,6 +1012,7 @@ struct PipelineWorker<R: Runtime> {
     app: AppHandle<R>,
     paths: SttModelPaths,
     device_id: Option<String>,
+    requested_device: Arc<Mutex<Option<Option<String>>>>,
     cancel: Arc<AtomicBool>,
     startup_timed_out: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
@@ -1002,6 +1033,12 @@ enum WorkerInterruption {
     Stopped,
     Stale,
     TimedOut,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum BuildRunOutcome {
+    Completed,
+    DeviceChanged(Option<String>),
 }
 
 const fn worker_interruption(
@@ -1052,6 +1089,13 @@ impl<R: Runtime> PipelineWorker<R> {
                 }
                 WorkerInterruption::Stale | WorkerInterruption::TimedOut => break,
             }
+            if let Some(device_id) = self.take_device_request() {
+                recovery.set_preferred_device(device_id);
+                self.emit_state(
+                    SttPhaseDto::Starting,
+                    Some("入力デバイスを切り替えています".into()),
+                );
+            }
             let result = match self.ensure_models(&mut models) {
                 Ok(loaded) => self.build_and_run(loaded, &mut recovery, &mut health, || {
                     policy.record_healthy();
@@ -1062,8 +1106,19 @@ impl<R: Runtime> PipelineWorker<R> {
                 break;
             }
             let failure = match result {
-                Ok(()) if self.cancel.load(Ordering::Acquire) => SpeechFailure::Stopped,
-                Ok(()) => SpeechFailure::Audio,
+                Ok(BuildRunOutcome::DeviceChanged(device_id)) => {
+                    recovery.set_preferred_device(device_id);
+                    policy.record_healthy();
+                    self.emit_state(
+                        SttPhaseDto::Starting,
+                        Some("入力デバイスを切り替えています".into()),
+                    );
+                    continue;
+                }
+                Ok(BuildRunOutcome::Completed) if self.cancel.load(Ordering::Acquire) => {
+                    SpeechFailure::Stopped
+                }
+                Ok(BuildRunOutcome::Completed) => SpeechFailure::Audio,
                 Err((failure, message)) => {
                     tracing::warn!(%message, ?failure, "speech pipeline unavailable");
                     failure
@@ -1174,6 +1229,13 @@ impl<R: Runtime> PipelineWorker<R> {
         self.current_generation.load(Ordering::Acquire) != self.generation
     }
 
+    fn take_device_request(&self) -> Option<Option<String>> {
+        self.requested_device
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     fn emit_state(&self, phase: SttPhaseDto, message: Option<String>) {
         if let Some(payload) = self
             .state
@@ -1211,7 +1273,7 @@ impl<R: Runtime> PipelineWorker<R> {
         recovery: &mut RecoveryCycle<ProductionDeviceSelector, ProductionCaptureFactory>,
         health: &mut HealthRegistry,
         mut on_healthy: F,
-    ) -> Result<(), (SpeechFailure, String)>
+    ) -> Result<BuildRunOutcome, (SpeechFailure, String)>
     where
         F: FnMut(),
     {
@@ -1260,7 +1322,7 @@ impl<R: Runtime> PipelineWorker<R> {
         if self.is_stale() {
             session_cancel.store(true, Ordering::Release);
             let _ = mirror.join();
-            return Ok(());
+            return Ok(BuildRunOutcome::Completed);
         }
         self.emit_state(SttPhaseDto::Listening, None);
         tracing::info!("speech pipeline listening");
@@ -1297,7 +1359,7 @@ impl<R: Runtime> PipelineWorker<R> {
             session_cancel.store(true, Ordering::Release);
             let _ = handle.join();
             if self.cancel.load(Ordering::Acquire) {
-                Ok(())
+                Ok(BuildRunOutcome::Completed)
             } else if stream_failure.is_some() {
                 Err((
                     SpeechFailure::Audio,
@@ -1312,6 +1374,12 @@ impl<R: Runtime> PipelineWorker<R> {
         });
         session_cancel.store(true, Ordering::Release);
         let _ = mirror.join();
+        if self.cancel.load(Ordering::Acquire) {
+            return Ok(BuildRunOutcome::Completed);
+        }
+        if let Some(device_id) = self.take_device_request() {
+            return Ok(BuildRunOutcome::DeviceChanged(device_id));
+        }
         result
     }
 
@@ -1692,6 +1760,31 @@ mod tests {
     }
 
     #[test]
+    fn input_device_change_is_queued_for_the_running_pipeline() {
+        let service = SpeechService::default();
+        let release = service.testing_install_blocked_stopping_worker();
+        service
+            .lock()
+            .as_ref()
+            .expect("test pipeline should exist")
+            .cancel
+            .store(false, Ordering::Release);
+
+        service.set_input_device(Some("usb-mic".into()));
+
+        let requested = service.lock().as_ref().and_then(|running| {
+            running
+                .requested_device
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        });
+        assert_eq!(requested, Some(Some("usb-mic".into())));
+
+        release.send(()).unwrap();
+    }
+
+    #[test]
     fn stop_does_not_wait_for_an_unresponsive_worker() {
         let service = SpeechService::default();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1702,6 +1795,7 @@ mod tests {
         *service.lock_active_cancel() = Some(Arc::clone(&cancel));
         *service.lock() = Some(RunningPipeline {
             active_device_id: Arc::new(Mutex::new("test-device".to_owned())),
+            requested_device: Arc::new(Mutex::new(None)),
             cancel: Arc::clone(&cancel),
             capture_enabled: Arc::new(AtomicBool::new(true)),
             diagnostics: Arc::new(PipelineDiagnostics::default()),

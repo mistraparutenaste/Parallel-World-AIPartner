@@ -465,6 +465,12 @@
           "markdownDescription": "Enables the set_expression_idle_timeout command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_input_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-input-device",
+          "markdownDescription": "Enables the set_input_device command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_llm_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-llm-settings",
@@ -805,6 +811,12 @@
           "type": "string",
           "const": "deny-set-expression-idle-timeout",
           "markdownDescription": "Denies the set_expression_idle_timeout command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_input_device command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-input-device",
+          "markdownDescription": "Denies the set_input_device command without any pre-configured scope."
         },
         {
           "description": "Denies the set_llm_settings command without any pre-configured scope.",

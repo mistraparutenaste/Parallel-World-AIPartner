@@ -52,6 +52,7 @@ pub fn run() {
             commands::character::set_click_through,
             commands::audio::list_microphones,
             commands::audio::start_listening,
+            commands::audio::set_input_device,
             commands::audio::stop_listening,
             commands::audio::set_capture_enabled,
             commands::audio::set_speech_playback,

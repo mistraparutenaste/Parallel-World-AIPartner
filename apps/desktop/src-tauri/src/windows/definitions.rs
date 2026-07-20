@@ -50,7 +50,7 @@ pub const WINDOWS: [WindowDefinition; 3] = [
         shadow: true,
         visible: true,
         width: 720.0,
-        height: 560.0,
+        height: 1080.0,
     },
 ];
 

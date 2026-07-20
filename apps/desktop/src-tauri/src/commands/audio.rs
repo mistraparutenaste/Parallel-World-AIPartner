@@ -46,6 +46,20 @@ pub fn start_listening<R: Runtime>(
     service.start(app.clone(), paths, device_id)
 }
 
+/// Requests a microphone switch while keeping the speech pipeline running.
+/// The worker replaces the capture session and retains the loaded STT models.
+#[tauri::command]
+pub async fn set_input_device<R: Runtime>(
+    app: AppHandle<R>,
+    device_id: Option<String>,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<SpeechService>().set_input_device(device_id);
+    })
+    .await
+    .map_err(|error| format!("audio command worker failed: {error}"))
+}
+
 /// Stops the running speech pipeline.
 ///
 /// # Errors
