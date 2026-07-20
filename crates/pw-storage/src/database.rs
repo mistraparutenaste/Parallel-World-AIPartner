@@ -484,12 +484,23 @@ mod tests {
             .unwrap();
         assert!(index_exists);
         assert_eq!(version, 9);
-        let typed: (i64, String, String, String, String) = database
+        let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
-                "SELECT revision,subject_scope,epistemic_form,attribution,source_mode FROM memories WHERE content='legacy typed projection'",
+                "SELECT revision,subject_scope,epistemic_form,attribution,source_mode,speech_act,polarity,conditionality FROM memories WHERE content='legacy typed projection'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                        row.get(7)?,
+                    ))
+                },
             )
             .unwrap();
         assert_eq!(
@@ -499,7 +510,10 @@ mod tests {
                 "legacy_unknown".into(),
                 "legacy_untyped".into(),
                 "unknown".into(),
-                "reported".into()
+                "reported".into(),
+                "unknown".into(),
+                "unknown".into(),
+                "unknown".into()
             )
         );
         drop(database);

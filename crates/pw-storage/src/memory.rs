@@ -250,6 +250,7 @@ fn parse_speech_act(value: &str) -> Result<SpeechAct, PortError> {
     match value {
         "asserted" => Ok(SpeechAct::Asserted),
         "questioned" => Ok(SpeechAct::Questioned),
+        "unknown" => Ok(SpeechAct::Unknown),
         _ => Err(PortError(format!("unknown speech act: {value}"))),
     }
 }
@@ -265,6 +266,7 @@ fn parse_polarity(value: &str) -> Result<Polarity, PortError> {
     match value {
         "affirmed" => Ok(Polarity::Affirmed),
         "negated" => Ok(Polarity::Negated),
+        "unknown" => Ok(Polarity::Unknown),
         _ => Err(PortError(format!("unknown polarity: {value}"))),
     }
 }
@@ -272,6 +274,7 @@ fn parse_conditionality(value: &str) -> Result<Conditionality, PortError> {
     match value {
         "actual" => Ok(Conditionality::Actual),
         "hypothetical" => Ok(Conditionality::Hypothetical),
+        "unknown" => Ok(Conditionality::Unknown),
         _ => Err(PortError(format!("unknown conditionality: {value}"))),
     }
 }
@@ -339,6 +342,7 @@ fn encode_speech_act(value: SpeechAct) -> &'static str {
     match value {
         SpeechAct::Asserted => "asserted",
         SpeechAct::Questioned => "questioned",
+        SpeechAct::Unknown => "unknown",
     }
 }
 fn encode_source_mode(value: SourceMode) -> &'static str {
@@ -352,12 +356,14 @@ fn encode_polarity(value: Polarity) -> &'static str {
     match value {
         Polarity::Affirmed => "affirmed",
         Polarity::Negated => "negated",
+        Polarity::Unknown => "unknown",
     }
 }
 fn encode_conditionality(value: Conditionality) -> &'static str {
     match value {
         Conditionality::Actual => "actual",
         Conditionality::Hypothetical => "hypothetical",
+        Conditionality::Unknown => "unknown",
     }
 }
 fn encode_fictionality(value: Fictionality) -> &'static str {
@@ -718,14 +724,26 @@ impl MemoryStore for SqliteMemoryStore {
                 "assistant-attributed memory cannot enter the long-term projection".into(),
             ));
         }
-        let state = match atom.lifecycle_state {
-            MemoryState::Active => "active",
-            MemoryState::Dormant => "dormant",
-            MemoryState::Superseded => "superseded",
-        };
+        if matches!(
+            atom.verification_status,
+            VerificationStatus::ExternallyCorroborated | VerificationStatus::ExternallyContradicted
+        ) {
+            return Err(PortError(
+                "external verification states require a trusted verifier".into(),
+            ));
+        }
+        let current = self
+            .load_memory_atom(atom.id)?
+            .ok_or_else(|| PortError(format!("memory {} does not exist", atom.id)))?;
+        if current.lifecycle_state != atom.lifecycle_state {
+            return Err(PortError(
+                "typed semantic CAS cannot change lifecycle state; use a versioned lifecycle action"
+                    .into(),
+            ));
+        }
         let changed = self.database.connection().execute(
-            "UPDATE memories SET revision=revision+1,content=?1,updated_at=?2,subject_scope=?3,epistemic_form=?4,attribution=?5,speech_act=?6,source_mode=?7,polarity=?8,conditionality=?9,fictionality=?10,verification_status=?11,temporal_scope=?12,state=?13 WHERE id=?14 AND revision=?15",
-            params![atom.content, updated_at, encode_subject_scope(atom.subject_scope), encode_epistemic_form(atom.epistemic_form), encode_attribution(atom.attribution), encode_speech_act(atom.discourse.speech_act), encode_source_mode(atom.discourse.source_mode), encode_polarity(atom.discourse.polarity), encode_conditionality(atom.discourse.conditionality), encode_fictionality(atom.discourse.fictionality), encode_verification_status(atom.verification_status), encode_temporal_scope(atom.temporal_scope), state, atom.id, expected_revision],
+            "UPDATE memories SET revision=revision+1,content=?1,updated_at=?2,subject_scope=?3,epistemic_form=?4,attribution=?5,speech_act=?6,source_mode=?7,polarity=?8,conditionality=?9,fictionality=?10,verification_status=?11,temporal_scope=?12 WHERE id=?13 AND revision=?14",
+            params![atom.content, updated_at, encode_subject_scope(atom.subject_scope), encode_epistemic_form(atom.epistemic_form), encode_attribution(atom.attribution), encode_speech_act(atom.discourse.speech_act), encode_source_mode(atom.discourse.source_mode), encode_polarity(atom.discourse.polarity), encode_conditionality(atom.discourse.conditionality), encode_fictionality(atom.discourse.fictionality), encode_verification_status(atom.verification_status), encode_temporal_scope(atom.temporal_scope), atom.id, expected_revision],
         ).map_err(|error| PortError(error.to_string()))?;
         if changed != 1 {
             return Err(PortError(format!(
@@ -969,11 +987,12 @@ impl MemoryStore for SqliteMemoryStore {
 
 #[cfg(test)]
 mod tests {
-    use super::SqliteMemoryStore;
+    use super::{SqliteMemoryStore, load_evidence};
     use crate::Database;
     use pw_application::memory::{
         Attribution, DORMANT_DELETE_AFTER_SECONDS, EpistemicForm, EvidenceSource, MemoryAction,
-        MemoryState, MemoryStore, SubjectScope, VerificationStatus, prompt_rank,
+        MemoryState, MemoryStore, SubjectScope, VerificationStatus, memory_strength, prompt_rank,
+        should_become_dormant,
     };
 
     #[test]
@@ -1023,10 +1042,77 @@ mod tests {
         assert_eq!(updated.revision, 2);
         assert_eq!(updated.subject_scope, SubjectScope::UserSelf);
         assert_eq!(updated.epistemic_form, EpistemicForm::Belief);
+        store
+            .database
+            .connection()
+            .execute(
+                "UPDATE memories SET pinned=1,state_changed_at=7 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        let semantic = store.update_memory_atom_cas(&updated, 2, 3).unwrap();
+        let lifecycle_columns: (i64, i64, Option<i64>) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT pinned,state_changed_at,superseded_by FROM memories WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(lifecycle_columns, (1, 7, None));
+        let mut invalid_transition = semantic.clone();
+        invalid_transition.lifecycle_state = MemoryState::Dormant;
+        assert!(
+            store
+                .update_memory_atom_cas(&invalid_transition, semantic.revision, 4)
+                .is_err()
+        );
+        for verification_status in [
+            VerificationStatus::ExternallyCorroborated,
+            VerificationStatus::ExternallyContradicted,
+        ] {
+            let mut external = semantic.clone();
+            external.verification_status = verification_status;
+            assert!(
+                store
+                    .update_memory_atom_cas(&external, external.revision, 4)
+                    .is_err()
+            );
+        }
         assert!(store.update_memory_atom_cas(&atom, 1, 3).is_err());
         assert_eq!(
             store.search("updated", 10).unwrap()[0].content,
             "typed projection updated"
+        );
+    }
+
+    #[test]
+    fn prompt_recall_evidence_never_changes_strength_or_dormancy() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "recall does not retain this memory".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                0,
+            )
+            .unwrap()
+            .unwrap();
+        let now = 31 * 86_400;
+        let before = load_evidence(store.database.connection(), id).unwrap();
+        for turn_id in 2..102 {
+            store
+                .record_recalled(&[id], &EvidenceSource::new("default", turn_id), now)
+                .unwrap();
+        }
+        let after = load_evidence(store.database.connection(), id).unwrap();
+        assert_eq!(memory_strength(&before, now), memory_strength(&after, now));
+        assert_eq!(
+            should_become_dormant(&before, now),
+            should_become_dormant(&after, now)
         );
     }
 

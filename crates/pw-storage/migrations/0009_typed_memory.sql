@@ -5,14 +5,14 @@ ALTER TABLE memories ADD COLUMN epistemic_form TEXT NOT NULL DEFAULT 'legacy_unt
   CHECK(epistemic_form IN ('fact_claim','belief','impression','prediction_or_hunch','metaphor','emotion','legacy_untyped'));
 ALTER TABLE memories ADD COLUMN attribution TEXT NOT NULL DEFAULT 'unknown'
   CHECK(attribution IN ('user','assistant','named_third_party','external_source','unknown'));
-ALTER TABLE memories ADD COLUMN speech_act TEXT NOT NULL DEFAULT 'asserted'
-  CHECK(speech_act IN ('asserted','questioned'));
+ALTER TABLE memories ADD COLUMN speech_act TEXT NOT NULL DEFAULT 'unknown'
+  CHECK(speech_act IN ('asserted','questioned','unknown'));
 ALTER TABLE memories ADD COLUMN source_mode TEXT NOT NULL DEFAULT 'reported'
   CHECK(source_mode IN ('direct','reported','quoted'));
-ALTER TABLE memories ADD COLUMN polarity TEXT NOT NULL DEFAULT 'affirmed'
-  CHECK(polarity IN ('affirmed','negated'));
-ALTER TABLE memories ADD COLUMN conditionality TEXT NOT NULL DEFAULT 'actual'
-  CHECK(conditionality IN ('actual','hypothetical'));
+ALTER TABLE memories ADD COLUMN polarity TEXT NOT NULL DEFAULT 'unknown'
+  CHECK(polarity IN ('affirmed','negated','unknown'));
+ALTER TABLE memories ADD COLUMN conditionality TEXT NOT NULL DEFAULT 'unknown'
+  CHECK(conditionality IN ('actual','hypothetical','unknown'));
 ALTER TABLE memories ADD COLUMN fictionality TEXT NOT NULL DEFAULT 'unknown'
   CHECK(fictionality IN ('real_world','fictional','unknown'));
 ALTER TABLE memories ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'unknown'

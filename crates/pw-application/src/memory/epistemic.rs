@@ -49,10 +49,10 @@ pub struct DiscourseFeatures {
 impl Default for DiscourseFeatures {
     fn default() -> Self {
         Self {
-            speech_act: SpeechAct::Asserted,
+            speech_act: SpeechAct::Unknown,
             source_mode: SourceMode::Direct,
-            polarity: Polarity::Affirmed,
-            conditionality: Conditionality::Actual,
+            polarity: Polarity::Unknown,
+            conditionality: Conditionality::Unknown,
             fictionality: Fictionality::Unknown,
         }
     }
@@ -114,6 +114,7 @@ pub enum TemporalScope {
 pub enum SpeechAct {
     Asserted,
     Questioned,
+    Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceMode {
@@ -125,11 +126,13 @@ pub enum SourceMode {
 pub enum Polarity {
     Affirmed,
     Negated,
+    Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conditionality {
     Actual,
     Hypothetical,
+    Unknown,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Fictionality {
@@ -149,5 +152,8 @@ mod tests {
         assert_eq!(memory.epistemic_form, EpistemicForm::LegacyUntyped);
         assert_eq!(memory.attribution, Attribution::Unknown);
         assert_eq!(memory.discourse.source_mode, SourceMode::Reported);
+        assert_eq!(memory.discourse.speech_act, SpeechAct::Unknown);
+        assert_eq!(memory.discourse.polarity, Polarity::Unknown);
+        assert_eq!(memory.discourse.conditionality, Conditionality::Unknown);
     }
 }

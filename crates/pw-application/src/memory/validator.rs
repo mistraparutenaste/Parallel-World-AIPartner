@@ -1,7 +1,7 @@
 use super::consolidation::ProposedAction;
 use super::{
-    Attribution, Conditionality, MemoryAtom, MemoryCandidate, Polarity, SourceMode, SourceSpan,
-    SpeechAct, SubjectScope, VerificationStatus, is_safe_persistent_content,
+    Attribution, Conditionality, MemoryAtom, MemoryCandidate, MemoryState, Polarity, SourceMode,
+    SourceSpan, SpeechAct, VerificationStatus, is_safe_persistent_content,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,12 @@ pub struct TypedCandidate {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidationError {
     MissingSourceSpan,
+    EmptySourceSpan,
+    SourceSpanSourceMismatch {
+        expected_source_id: String,
+        actual_source_id: String,
+    },
+    SourceSpansNotStrictlyOrdered,
     SourceSpanOutOfBounds,
     SourceSpanNotCharBoundary,
     NormalizationTraceDoesNotCoverChangedBytes,
@@ -51,8 +57,23 @@ pub enum ValidationError {
         expected_revision: i64,
         actual_revision: i64,
     },
+    UnexpectedTarget {
+        target_memory_id: Option<i64>,
+    },
+    ActionTargetMismatch {
+        action_target_memory_id: i64,
+        candidate_target_memory_id: Option<i64>,
+    },
+    TargetLifecycleForbidden {
+        target_memory_id: i64,
+        state: MemoryState,
+    },
+    LifecycleTransitionForbidden {
+        from: MemoryState,
+        to: MemoryState,
+    },
     AssistantAttributionForbidden,
-    ExternalCorroborationWithoutEvidence,
+    ExternalVerificationReserved,
     MarkerPreservationUnproven,
     ModalMarkerRemoved,
     ControlCharacterForbidden,
@@ -61,10 +82,23 @@ pub enum ValidationError {
 
 pub fn validate_candidate(
     candidate: &TypedCandidate,
+    expected_source_id: &str,
     source: &str,
     targets: &[MemoryCandidate],
 ) -> Result<(), ValidationError> {
-    validate_spans(&candidate.atom.source_spans, source)?;
+    validate_candidate_for_source(candidate, expected_source_id, source, targets)
+}
+
+/// Validates a typed candidate against one accepted source identity. Callers that
+/// construct observations must use this entry point so source spans cannot cross
+/// turn boundaries.
+pub fn validate_candidate_for_source(
+    candidate: &TypedCandidate,
+    expected_source_id: &str,
+    source: &str,
+    targets: &[MemoryCandidate],
+) -> Result<(), ValidationError> {
+    validate_spans(&candidate.atom.source_spans, expected_source_id, source)?;
     validate_normalization(candidate, source)?;
     validate_markers(
         candidate,
@@ -85,17 +119,35 @@ pub fn validate_candidate(
     Ok(())
 }
 
-fn validate_spans(spans: &[SourceSpan], source: &str) -> Result<(), ValidationError> {
+fn validate_spans(
+    spans: &[SourceSpan],
+    expected_source_id: &str,
+    source: &str,
+) -> Result<(), ValidationError> {
     if spans.is_empty() {
         return Err(ValidationError::MissingSourceSpan);
     }
+    let mut previous_end = None;
     for span in spans {
-        if span.start > span.end || span.end > source.len() {
+        if span.source_id != expected_source_id {
+            return Err(ValidationError::SourceSpanSourceMismatch {
+                expected_source_id: expected_source_id.into(),
+                actual_source_id: span.source_id.clone(),
+            });
+        }
+        if span.start >= span.end {
+            return Err(ValidationError::EmptySourceSpan);
+        }
+        if span.end > source.len() {
             return Err(ValidationError::SourceSpanOutOfBounds);
         }
         if !source.is_char_boundary(span.start) || !source.is_char_boundary(span.end) {
             return Err(ValidationError::SourceSpanNotCharBoundary);
         }
+        if previous_end.is_some_and(|end| span.start <= end) {
+            return Err(ValidationError::SourceSpansNotStrictlyOrdered);
+        }
+        previous_end = Some(span.end);
     }
     Ok(())
 }
@@ -119,11 +171,14 @@ fn validate_normalization(candidate: &TypedCandidate, source: &str) -> Result<()
         }
         while edit_index < edits.len() && edits[edit_index].start < span.end {
             let edit = edits[edit_index];
-            if edit.start < cursor || edit.end > span.end || edit.start > edit.end {
+            if edit.start < cursor || edit.end > span.end || edit.start >= edit.end {
                 return Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes);
             }
             if !source.is_char_boundary(edit.start) || !source.is_char_boundary(edit.end) {
                 return Err(ValidationError::SourceSpanNotCharBoundary);
+            }
+            if edit.replacement != source[edit.start..edit.end] {
+                return Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes);
             }
             output.push_str(&source[cursor..edit.start]);
             output.push_str(&edit.replacement);
@@ -142,10 +197,11 @@ fn validate_markers(candidate: &TypedCandidate, source: &str) -> Result<(), Vali
     if candidate.atom.attribution == Attribution::Assistant {
         return Err(ValidationError::AssistantAttributionForbidden);
     }
-    if candidate.atom.subject_scope == SubjectScope::ExternalWorld
-        && candidate.atom.verification_status == VerificationStatus::ExternallyCorroborated
-    {
-        return Err(ValidationError::ExternalCorroborationWithoutEvidence);
+    if matches!(
+        candidate.atom.verification_status,
+        VerificationStatus::ExternallyCorroborated | VerificationStatus::ExternallyContradicted
+    ) {
+        return Err(ValidationError::ExternalVerificationReserved);
     }
     if contains_modal_marker(source) && !contains_modal_marker(&candidate.atom.content) {
         return Err(ValidationError::ModalMarkerRemoved);
@@ -168,9 +224,45 @@ fn validate_target(
     candidate: &TypedCandidate,
     targets: &[MemoryCandidate],
 ) -> Result<(), ValidationError> {
-    let Some(target_memory_id) = candidate.target_memory_id else {
+    let action_target = match candidate.proposed_action {
+        ProposedAction::Reinforce { memory_id } => Some(memory_id),
+        ProposedAction::Supersede { old_memory_id, .. } => Some(old_memory_id),
+        ProposedAction::Pin {
+            memory_id: Some(memory_id),
+            ..
+        } => Some(memory_id),
+        ProposedAction::Add { .. }
+        | ProposedAction::Ignore
+        | ProposedAction::Pin {
+            memory_id: None, ..
+        } => None,
+    };
+    if candidate.relation == CandidateRelation::Unrelated {
+        if action_target.is_some()
+            || candidate.target_memory_id.is_some()
+            || candidate.expected_target_revision.is_some()
+        {
+            return Err(ValidationError::UnexpectedTarget {
+                target_memory_id: candidate.target_memory_id,
+            });
+        }
+        return Ok(());
+    }
+    let Some(action_target_memory_id) = action_target else {
+        if candidate.target_memory_id.is_some() || candidate.expected_target_revision.is_some() {
+            return Err(ValidationError::UnexpectedTarget {
+                target_memory_id: candidate.target_memory_id,
+            });
+        }
         return Ok(());
     };
+    if candidate.target_memory_id != Some(action_target_memory_id) {
+        return Err(ValidationError::ActionTargetMismatch {
+            action_target_memory_id,
+            candidate_target_memory_id: candidate.target_memory_id,
+        });
+    };
+    let target_memory_id = action_target_memory_id;
     let target = targets
         .iter()
         .find(|target| target.id == target_memory_id)
@@ -190,6 +282,39 @@ fn validate_target(
             expected_revision,
             actual_revision,
         });
+    }
+    match candidate.proposed_action {
+        ProposedAction::Reinforce { .. } | ProposedAction::Pin { .. } => {
+            if target.state == MemoryState::Superseded {
+                return Err(ValidationError::TargetLifecycleForbidden {
+                    target_memory_id,
+                    state: target.state,
+                });
+            }
+            if candidate.atom.lifecycle_state != MemoryState::Active {
+                return Err(ValidationError::LifecycleTransitionForbidden {
+                    from: target.state,
+                    to: candidate.atom.lifecycle_state,
+                });
+            }
+        }
+        ProposedAction::Supersede { .. } => {
+            if target.state == MemoryState::Superseded {
+                return Err(ValidationError::TargetLifecycleForbidden {
+                    target_memory_id,
+                    state: target.state,
+                });
+            }
+            if candidate.atom.lifecycle_state != MemoryState::Superseded {
+                return Err(ValidationError::LifecycleTransitionForbidden {
+                    from: target.state,
+                    to: candidate.atom.lifecycle_state,
+                });
+            }
+        }
+        ProposedAction::Add { .. } | ProposedAction::Ignore => {
+            unreachable!("target-less actions returned early")
+        }
     }
     Ok(())
 }
@@ -247,7 +372,7 @@ fn contains_modal_marker(source: &str) -> bool {
 mod tests {
     use super::*;
     use crate::memory::{
-        DiscourseFeatures, EpistemicForm, Fictionality, MemoryState, TemporalScope,
+        DiscourseFeatures, EpistemicForm, Fictionality, MemoryState, SubjectScope, TemporalScope,
     };
 
     fn candidate(source: &str) -> TypedCandidate {
@@ -285,8 +410,10 @@ mod tests {
     #[test]
     fn rejects_stale_target_revision() {
         let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
         value.target_memory_id = Some(3);
         value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Reinforce { memory_id: 3 };
         let target = MemoryCandidate {
             id: 3,
             revision: Some(2),
@@ -299,7 +426,7 @@ mod tests {
             strength: 1.0,
         };
         assert!(matches!(
-            validate_candidate(&value, "I like cats", &[target]),
+            validate_candidate(&value, "turn:1", "I like cats", &[target]),
             Err(ValidationError::StaleTargetRevision { .. })
         ));
     }
@@ -310,8 +437,160 @@ mod tests {
         value.atom.discourse.polarity = Polarity::Affirmed;
         value.atom.discourse.speech_act = SpeechAct::Asserted;
         assert_eq!(
-            validate_candidate(&value, "猫は好きではない？", &[]),
+            validate_candidate(&value, "turn:1", "猫は好きではない？", &[]),
             Err(ValidationError::MarkerPreservationUnproven)
         );
+    }
+
+    #[test]
+    fn rejects_a_source_span_from_another_turn() {
+        let mut value = candidate("I like cats");
+        value.atom.source_spans[0].source_id = "turn:other".into();
+
+        assert!(matches!(
+            validate_candidate_for_source(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::SourceSpanSourceMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_whole_span_replacement_that_invents_a_fact() {
+        let mut value = candidate("I like cats");
+        value.atom.content = "I own a yacht".into();
+        value.normalization_edits = vec![NormalizationEdit {
+            start: 0,
+            end: "I like cats".len(),
+            replacement: "I own a yacht".into(),
+        }];
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes)
+        );
+    }
+
+    #[test]
+    fn rejects_zero_width_normalization_insertions() {
+        let mut value = candidate("I like cats");
+        value.atom.content = "Actually, I like cats".into();
+        value.normalization_edits = vec![NormalizationEdit {
+            start: 0,
+            end: 0,
+            replacement: "Actually, ".into(),
+        }];
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes)
+        );
+    }
+
+    #[test]
+    fn rejects_target_fields_for_unrelated_additions() {
+        let mut value = candidate("I like cats");
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::UnexpectedTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_targeted_action_when_the_relation_is_unrelated() {
+        let mut value = candidate("I like cats");
+        value.proposed_action = ProposedAction::Reinforce { memory_id: 3 };
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::UnexpectedTarget {
+                target_memory_id: None,
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_target_fields_for_add_actions() {
+        let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::UnexpectedTarget {
+                target_memory_id: Some(3),
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_an_external_verification_state_without_a_trusted_writer() {
+        let mut value = candidate("I like cats");
+        value.atom.verification_status = VerificationStatus::ExternallyContradicted;
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::ExternalVerificationReserved)
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_target_named_by_the_action() {
+        let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
+        value.target_memory_id = Some(99);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Reinforce { memory_id: 99 };
+
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::UnknownTargetId {
+                target_memory_id: 99
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_target_id_that_disagrees_with_the_action() {
+        let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Reinforce { memory_id: 4 };
+
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::ActionTargetMismatch {
+                action_target_memory_id: 4,
+                candidate_target_memory_id: Some(3),
+            })
+        ));
+    }
+
+    #[test]
+    fn rejects_illegal_lifecycle_transitions_for_target_actions() {
+        let target = MemoryCandidate {
+            id: 3,
+            revision: Some(1),
+            content: "I like cats".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 0,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Reinforce { memory_id: 3 };
+        value.atom.lifecycle_state = MemoryState::Superseded;
+
+        assert!(matches!(
+            validate_candidate(&value, "turn:1", "I like cats", &[target]),
+            Err(ValidationError::LifecycleTransitionForbidden {
+                from: MemoryState::Active,
+                to: MemoryState::Superseded,
+            })
+        ));
     }
 }

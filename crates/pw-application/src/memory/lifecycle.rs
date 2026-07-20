@@ -74,12 +74,8 @@ pub fn memory_strength(evidence: &[MemoryEvidence], now: i64) -> f64 {
         })
         .map(contribution)
         .sum::<f64>();
-    let recalled = evidence
-        .iter()
-        .filter(|item| item.kind == EvidenceKind::Recalled)
-        .map(contribution)
-        .sum::<f64>();
-    user + recalled.min(user * 0.25)
+    // Prompt recall is audit-only: it must never extend retention or prevent dormancy.
+    user
 }
 
 #[must_use]
@@ -121,7 +117,7 @@ mod tests {
     }
 
     #[test]
-    fn recall_contribution_is_capped_at_twenty_percent_of_total() {
+    fn recalled_evidence_never_changes_strength_or_dormancy() {
         let mut evidence = vec![MemoryEvidence {
             id: 1,
             kind: EvidenceKind::UserMention,
@@ -136,7 +132,11 @@ mod tests {
         }));
         let user_only = memory_strength(&evidence[..1], days(30));
         let total = memory_strength(&evidence, days(30));
-        assert!((total - user_only * 1.25).abs() < 1e-9);
+        assert!((total - user_only).abs() < 1e-9);
+        assert_eq!(
+            should_become_dormant(&evidence[..1], days(31)),
+            should_become_dormant(&evidence, days(31))
+        );
     }
 
     #[test]

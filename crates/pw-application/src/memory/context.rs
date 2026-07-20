@@ -125,7 +125,11 @@ pub trait MemoryStore {
     fn load_memory_atom(&self, _id: i64) -> Result<Option<MemoryAtom>, PortError> {
         Ok(None)
     }
-    /// Applies a typed projection only if its observed revision is still current.
+    /// Applies semantic typed fields only if its observed revision is still current.
+    ///
+    /// This CAS deliberately cannot change lifecycle state or its companion
+    /// columns (`pinned`, `state_changed_at`, `superseded_by`). Versioned
+    /// lifecycle mutations must use the dedicated action/transition boundary.
     fn update_memory_atom_cas(
         &mut self,
         _atom: &MemoryAtom,

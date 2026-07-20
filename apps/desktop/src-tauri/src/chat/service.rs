@@ -74,7 +74,7 @@ impl MemoryClassifier for UnavailableMemoryClassifier {
 fn load_memory_context<M: MemoryStore>(
     memory: &mut M,
     query: &str,
-    turn_id: u64,
+    _turn_id: u64,
     now: i64,
 ) -> MemoryContext {
     let candidates = memory
@@ -106,22 +106,6 @@ fn load_memory_context<M: MemoryStore>(
         summary,
     }
     .bounded();
-    let recalled_ids = candidates
-        .iter()
-        .take(DEFAULT_MEMORY_LIMIT)
-        .filter(|item| !item.content.trim().is_empty())
-        .take(context.memories.len())
-        .map(|item| item.id)
-        .collect::<Vec<_>>();
-    if !recalled_ids.is_empty()
-        && let Err(error) = memory.record_recalled(
-            &recalled_ids,
-            &EvidenceSource::new(DEFAULT_CONVERSATION_ID, turn_id),
-            now,
-        )
-    {
-        tracing::warn!(%error, "memory recall persistence failed; continuing with loaded context");
-    }
     context
 }
 
@@ -3137,7 +3121,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_context_prompt_context_excludes_dormant_and_records_only_included_active_memory() {
+    fn memory_context_prompt_context_excludes_dormant_without_recording_active_memory() {
         let path = std::env::temp_dir().join(format!(
             "pw-context-lifecycle-{}.sqlite3",
             std::process::id()
@@ -3187,7 +3171,7 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        assert_eq!(recalled, [21]);
+        assert!(recalled.is_empty());
         drop(database);
         let _ = std::fs::remove_file(path);
     }
@@ -3215,7 +3199,7 @@ mod tests {
     }
 
     #[test]
-    fn memory_context_records_only_ids_retained_by_count_empty_and_character_bounds() {
+    fn memory_context_never_persists_prompt_recalls() {
         let recalled_ids = Arc::new(Mutex::new(Vec::new()));
         let mut memory = FailingMemory::recording_recall(
             vec![
@@ -3235,11 +3219,11 @@ mod tests {
         assert_eq!(context.memories.len(), 2);
         assert_eq!(context.memories[0].chars().count(), 1_999);
         assert_eq!(context.memories[1], "b");
-        assert_eq!(*recalled_ids.lock().unwrap(), [2, 3]);
+        assert!(recalled_ids.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn memory_context_survives_recall_persistence_failure() {
+    fn memory_context_does_not_depend_on_recall_persistence() {
         let recalled_ids = Arc::new(Mutex::new(Vec::new()));
         let mut memory = FailingMemory::recording_recall(
             vec![candidate(9, "kept memory")],
@@ -3250,7 +3234,7 @@ mod tests {
         let context = load_memory_context(&mut memory, "query", 8, 200);
 
         assert_eq!(context.memories, ["kept memory"]);
-        assert_eq!(*recalled_ids.lock().unwrap(), [9]);
+        assert!(recalled_ids.lock().unwrap().is_empty());
     }
 
     #[test]
