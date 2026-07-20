@@ -28,8 +28,8 @@ pub use lifecycle::{
 };
 pub use observation::{
     CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome, ClassificationRun,
-    NewObservation, ObservationLease, ObservationOutcome, ObservationStore, PersistedCandidate,
-    ProcessingState, input_hash, request_key,
+    NewObservation, ObservationLease, ObservationOutcome, ObservationStore,
+    PersistCandidateOutcome, PersistedCandidate, ProcessingState, input_hash, request_key,
 };
 pub use promotion::{
     MemoryPromoter, PromotionResult, ProvenanceLink, ProvisionalMemoryChangeSet,

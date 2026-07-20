@@ -6,11 +6,11 @@ use pw_application::memory::{
     DiscourseFeatures, EpistemicForm, EvidenceKind, EvidenceSource, Fictionality,
     MaintenanceReport, MemoryAction, MemoryAtom, MemoryCandidate, MemoryEvidence, MemoryPromoter,
     MemoryRecord, MemoryState, MemoryStore, NewObservation, ObservationLease, ObservationOutcome,
-    ObservationStore, PersistedCandidate, Polarity, PromotionResult, ProvisionalMemoryChangeSet,
-    SourceMode, SourceSpan, SpeechAct, StoredSummary, SubjectScope, TemporalScope, TypedCandidate,
-    VerificationStatus, VersionedMemoryAction, input_hash, is_safe_persistent_content,
-    memory_strength, prompt_rank, redact_persistent_content, should_become_dormant,
-    validate_candidate_for_source,
+    ObservationStore, PersistCandidateOutcome, PersistedCandidate, Polarity, PromotionResult,
+    ProvisionalMemoryChangeSet, SourceMode, SourceSpan, SpeechAct, StoredSummary, SubjectScope,
+    TemporalScope, TypedCandidate, VerificationStatus, VersionedMemoryAction, input_hash,
+    is_safe_persistent_content, memory_strength, prompt_rank, redact_persistent_content,
+    should_become_dormant, validate_candidate_for_source,
 };
 use std::collections::HashSet;
 
@@ -352,7 +352,7 @@ impl ObservationStore for SqliteMemoryStore {
         &mut self,
         candidate: PersistedCandidate,
         now: i64,
-    ) -> Result<i64, PortError> {
+    ) -> Result<PersistCandidateOutcome, PortError> {
         let (source_hash, source_text, _observation_id, token): (String, String, i64, String) = self.database.connection().query_row(
             "SELECT o.input_hash,o.user_text,o.id,r.lease_attempt_token FROM memory_classification_runs r JOIN memory_observations o ON o.id=r.observation_id WHERE r.id=?1 AND o.processing_state='processing' AND o.attempt_token=r.lease_attempt_token AND o.lease_expires_at>?2 AND o.deleted_at IS NULL",
             params![candidate.classification_run_id, now], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -381,27 +381,36 @@ impl ObservationStore for SqliteMemoryStore {
             "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,target_memory_id,expected_target_revision,proposed_operation,proposed_relation,source_start,source_end,normalization_json,candidate_state,rejection_reason,created_at,updated_at) SELECT r.observation_id,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,CASE WHEN ?21 IS NULL THEN 'pending' ELSE 'rejected' END,?21,?22,?22 FROM memory_classification_runs r WHERE r.id=?1 AND r.lease_attempt_token=?23 ON CONFLICT(observation_id,classification_run_id,candidate_ordinal) DO NOTHING",
             params![candidate.classification_run_id, candidate.ordinal, candidate.atom.content, encode_subject_scope(candidate.atom.subject_scope), encode_epistemic_form(candidate.atom.epistemic_form), encode_attribution(candidate.atom.attribution), encode_speech_act(candidate.atom.discourse.speech_act), encode_source_mode(candidate.atom.discourse.source_mode), encode_polarity(candidate.atom.discourse.polarity), encode_conditionality(candidate.atom.discourse.conditionality), encode_fictionality(candidate.atom.discourse.fictionality), encode_verification_status(candidate.atom.verification_status), encode_temporal_scope(candidate.atom.temporal_scope), candidate.target_memory_id, candidate.expected_target_revision, encode_candidate_operation(candidate.operation), encode_candidate_relation(candidate.relation), i64::try_from(span.start).map_err(|error| PortError(error.to_string()))?, i64::try_from(span.end).map_err(|error| PortError(error.to_string()))?, normalization_json, rejection_reason, now, token],
         ).map_err(memory_error)?;
-        let stored: (i64, String, String, Option<i64>, Option<i64>, i64, i64, String, String) = self.database.connection().query_row(
-            "SELECT id,content,proposed_operation,target_memory_id,expected_target_revision,source_start,source_end,normalization_json,candidate_state FROM memory_candidates WHERE classification_run_id=?1 AND candidate_ordinal=?2",
-            params![candidate.classification_run_id, candidate.ordinal], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+        let stored: (i64, String, String, String, String, String, String, String, String, String, String, String, String, String, Option<i64>, Option<i64>, i64, i64, String, String) = self.database.connection().query_row(
+            "SELECT id,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,target_memory_id,expected_target_revision,source_start,source_end,normalization_json,candidate_state FROM memory_candidates WHERE classification_run_id=?1 AND candidate_ordinal=?2",
+            params![candidate.classification_run_id, candidate.ordinal], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?, row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?)),
         ).map_err(memory_error)?;
         if stored.1 != candidate.atom.content
-            || stored.2 != encode_candidate_operation(candidate.operation)
-            || stored.3 != candidate.target_memory_id
-            || stored.4 != candidate.expected_target_revision
-            || stored.5 != i64::try_from(span.start).map_err(memory_error)?
-            || stored.6 != i64::try_from(span.end).map_err(memory_error)?
-            || stored.7
+            || stored.2 != encode_subject_scope(candidate.atom.subject_scope)
+            || stored.3 != encode_epistemic_form(candidate.atom.epistemic_form)
+            || stored.4 != encode_attribution(candidate.atom.attribution)
+            || stored.5 != encode_speech_act(candidate.atom.discourse.speech_act)
+            || stored.6 != encode_source_mode(candidate.atom.discourse.source_mode)
+            || stored.7 != encode_polarity(candidate.atom.discourse.polarity)
+            || stored.8 != encode_conditionality(candidate.atom.discourse.conditionality)
+            || stored.9 != encode_fictionality(candidate.atom.discourse.fictionality)
+            || stored.10 != encode_verification_status(candidate.atom.verification_status)
+            || stored.11 != encode_temporal_scope(candidate.atom.temporal_scope)
+            || stored.12 != encode_candidate_operation(candidate.operation)
+            || stored.13 != encode_candidate_relation(candidate.relation)
+            || stored.14 != candidate.target_memory_id
+            || stored.15 != candidate.expected_target_revision
+            || stored.16 != i64::try_from(span.start).map_err(memory_error)?
+            || stored.17 != i64::try_from(span.end).map_err(memory_error)?
+            || stored.18
                 != serde_json::to_string(&candidate.normalization_edits).map_err(memory_error)?
         {
             return Err(PortError("candidate ordinal metadata collision".into()));
         }
-        if validation.is_err() || stored.8 == "rejected" {
-            return Err(PortError(
-                "candidate rejected by typed safety validator".into(),
-            ));
+        if validation.is_err() || stored.19 == "rejected" {
+            return Ok(PersistCandidateOutcome::DeterministicallyRejected(stored.0));
         }
-        Ok(stored.0)
+        Ok(PersistCandidateOutcome::Persisted(stored.0))
     }
 
     fn finish_classification_run(
@@ -2189,7 +2198,8 @@ mod tests {
             },
             11,
         )
-        .unwrap();
+        .unwrap()
+        .id();
         let change_set = ProvisionalMemoryChangeSet {
             request_key: run.request_key.clone(),
             lease,
@@ -2241,14 +2251,21 @@ mod tests {
         let first_run_id = pw_application::memory::ObservationStore::begin_classification_run(
             &mut store, &first, &first_run, 10,
         )
-        .unwrap();
+        .unwrap()
+        .id();
         store.database.connection().execute(
             "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,source_start,source_end,created_at,updated_at) VALUES(?1,?2,0,'I like tea','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,10,10,10)",
             [first.observation_id, first_run_id],
         ).unwrap();
-        let stale_candidate: i64 = store.database.connection().query_row(
-            "SELECT id FROM memory_candidates WHERE classification_run_id=?1", [first_run_id], |row| row.get(0),
-        ).unwrap();
+        let stale_candidate: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT id FROM memory_candidates WHERE classification_run_id=?1",
+                [first_run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
         let second = store
             .claim_next_observation("worker", 12, 30)
             .unwrap()
@@ -2260,7 +2277,10 @@ mod tests {
             &second.canonical_input_hash,
         );
         let second_run_id = pw_application::memory::ObservationStore::begin_classification_run(
-            &mut store, &second, &second_run, 12,
+            &mut store,
+            &second,
+            &second_run,
+            12,
         )
         .unwrap();
         let result = store.promote(
@@ -2349,7 +2369,8 @@ mod tests {
             },
             11,
         )
-        .unwrap();
+        .unwrap()
+        .id();
         store.database.connection().execute("UPDATE memory_observations SET deletion_generation=deletion_generation+1 WHERE id=?1", [lease.observation_id]).unwrap();
         let result = store.promote(
             &ProvisionalMemoryChangeSet {

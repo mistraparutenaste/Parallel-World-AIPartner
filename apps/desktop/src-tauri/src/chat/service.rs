@@ -19,11 +19,11 @@ use pw_application::memory::{
     CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome, ClassificationRun,
     DEFAULT_MEMORY_LIMIT, DiscourseFeatures, EpistemicForm, Fictionality, HybridConsolidator,
     LlmMemoryClassifier, MemoryAtom, MemoryClassifier, MemoryContext, MemoryStore, NewObservation,
-    ObservationOutcome, ObservationStore, PersistedCandidate, Polarity, ProposedAction,
-    ProvenanceLink, ProvisionalMemoryChangeSet, RollingSummaryGenerator, SourceMode, SourceSpan,
-    SpeechAct, SubjectScope, SummaryGenerator, TemporalScope, VerificationStatus,
-    VersionedMemoryAction, is_role_preserving_summary, is_safe_persistent_content,
-    merge_rolling_summaries, redact_persistent_content,
+    ObservationOutcome, ObservationStore, PersistCandidateOutcome, PersistedCandidate, Polarity,
+    ProposedAction, ProvenanceLink, ProvisionalMemoryChangeSet, RollingSummaryGenerator,
+    SourceMode, SourceSpan, SpeechAct, SubjectScope, SummaryGenerator, TemporalScope,
+    VerificationStatus, VersionedMemoryAction, is_role_preserving_summary,
+    is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
 };
 #[cfg(test)]
 use pw_application::memory::{EvidenceSource, has_explicit_pin_intent};
@@ -122,9 +122,126 @@ const SUMMARY_DRAIN_TIME_BUDGET: std::time::Duration = std::time::Duration::from
 const ENRICHMENT_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 const ENRICHMENT_FOLLOWUP_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 const ENRICHMENT_JOBS_PER_SLICE: usize = 4;
+const OBSERVATION_WRITE_QUEUE_CAPACITY: usize = 64;
 /// Ordinary chat must fail open quickly when a maintenance/promotion writer
 /// owns SQLite.  The durable worker will retry its own work later.
 const OBSERVATION_EVENT_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(25);
+
+enum ObservationWrite {
+    Insert {
+        conversation_id: String,
+        turn_id: u64,
+        text: String,
+    },
+    Finalize {
+        conversation_id: String,
+        turn_id: u64,
+        outcome: ObservationOutcome,
+    },
+}
+
+/// Bounded, long-lived writer for the observation ledger.  Chat event
+/// delivery only enqueues a command, so opening/configuring SQLite and WAL
+/// contention can never sit in front of the ordinary user echo or LLM start.
+#[derive(Clone)]
+struct ObservationWriter {
+    tx: SyncSender<ObservationWrite>,
+}
+
+impl ObservationWriter {
+    fn insert(&self, conversation_id: String, turn_id: u64, text: String) -> Result<(), ()> {
+        self.tx
+            .try_send(ObservationWrite::Insert {
+                conversation_id,
+                turn_id,
+                text,
+            })
+            .map_err(|_| ())
+    }
+
+    fn finalize(
+        &self,
+        conversation_id: String,
+        turn_id: u64,
+        outcome: ObservationOutcome,
+    ) -> Result<(), ()> {
+        self.tx
+            .try_send(ObservationWrite::Finalize {
+                conversation_id,
+                turn_id,
+                outcome,
+            })
+            .map_err(|_| ())
+    }
+}
+
+fn run_observation_writer(
+    database_path: PathBuf,
+    rx: Receiver<ObservationWrite>,
+    enrichment: Option<EnrichmentSender>,
+) {
+    // Opening and migration are intentionally owned by this worker.  The
+    // connection stays alive for the worker lifetime instead of being opened
+    // once per user event.
+    let mut memory =
+        Database::open_with_busy_timeout(&database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
+            .map(SqliteMemoryStore::new)
+            .map_err(|error| error.to_string());
+    while let Ok(command) = rx.recv() {
+        if memory.is_err() {
+            memory =
+                Database::open_with_busy_timeout(&database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
+                    .map(SqliteMemoryStore::new)
+                    .map_err(|error| error.to_string());
+        }
+        let Ok(store) = memory.as_mut() else {
+            tracing::warn!("memory observation writer unavailable; conversation remains available");
+            continue;
+        };
+        match command {
+            ObservationWrite::Insert {
+                conversation_id,
+                turn_id,
+                text,
+            } => {
+                match store.insert_observation(NewObservation::new(
+                    conversation_id,
+                    turn_id,
+                    text,
+                    unix_timestamp(),
+                )) {
+                    Ok(_) => {
+                        // The wake follows the committed INSERT and carries no user content.
+                        if enrichment.as_ref().is_some_and(|sender| {
+                            sender.replace_latest(EnrichmentJob::wake(turn_id)).is_err()
+                        }) {
+                            tracing::warn!(
+                                "memory enrichment worker unavailable; observation remains durable"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "memory observation persistence failed; conversation remains available")
+                    }
+                }
+            }
+            ObservationWrite::Finalize {
+                conversation_id,
+                turn_id,
+                outcome,
+            } => {
+                if let Err(error) = store.finalize_observation_by_turn(
+                    &conversation_id,
+                    turn_id,
+                    outcome,
+                    unix_timestamp(),
+                ) {
+                    tracing::warn!(%error, "memory observation outcome finalization failed; conversation remains available");
+                }
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 fn process_enrichment_actions<C: MemoryClassifier>(
@@ -280,18 +397,36 @@ fn process_next_durable_observation<C: MemoryClassifier>(
         },
         now,
     ) {
-        Ok(id) => id,
-        Err(error) => {
+        Ok(PersistCandidateOutcome::Persisted(id)) => id,
+        Ok(PersistCandidateOutcome::DeterministicallyRejected(_)) => {
+            let count = memory
+                .reject_pending_candidates(
+                    &lease,
+                    run_id,
+                    "candidate rejected by safety policy",
+                    now,
+                )
+                .map_err(|error| error.to_string())?;
             memory
                 .finish_classification_run(
                     &lease,
                     run_id,
                     ClassificationOutcome::Rejected,
-                    1,
+                    count,
                     Some("candidate rejected by safety policy"),
                     now,
                 )
-                .map_err(|finish| finish.to_string())?;
+                .map_err(|error| error.to_string())?;
+            return Ok(true);
+        }
+        Err(error) => {
+            finish_failed_run_and_retry(
+                memory,
+                &lease,
+                run_id,
+                "candidate persistence unavailable",
+                now,
+            )?;
             return Err(error.to_string());
         }
     };
@@ -665,6 +800,15 @@ fn run_enrichment_until_cancelled(
                     }
                     continue;
                 }
+                // A retry lives only in SQLite.  Reinsert a content-free
+                // marker at its deadline so a transient failure cannot leave
+                // the row pending forever when no later user turn arrives.
+                let mut pending = pending
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if pending.is_none() {
+                    *pending = Some(vec![EnrichmentJob::wake(0)]);
+                }
             }
             Err(RecvTimeoutError::Disconnected) => break,
         }
@@ -683,17 +827,18 @@ fn run_enrichment_until_cancelled(
             (jobs, jobs_remaining)
         };
         let mut durable_processed = false;
-        for job in jobs {
+        let mut retry_scheduled = false;
+        for _job in jobs {
             metrics.dequeued();
             #[cfg(test)]
-            if !job.user_text.is_empty() {
+            if !_job.user_text.is_empty() {
                 // Test-only compatibility shim: production wake markers never
                 // carry text; fixtures can still model a committed ledger.
                 if let Ok(mut store) = Database::open(database_path).map(SqliteMemoryStore::new) {
                     let _ = store.insert_observation(NewObservation::new(
                         DEFAULT_CONVERSATION_ID,
-                        job.turn_id,
-                        &job.user_text,
+                        _job.turn_id,
+                        &_job.user_text,
                         unix_timestamp(),
                     ));
                 }
@@ -706,6 +851,7 @@ fn run_enrichment_until_cancelled(
                 }) {
                 Ok(processed) => durable_processed |= processed,
                 Err(error) => {
+                    retry_scheduled = true;
                     tracing::warn!(%error, "memory enrichment job failed; worker remains available");
                 }
             }
@@ -732,7 +878,7 @@ fn run_enrichment_until_cancelled(
                 *pending = Some(vec![EnrichmentJob::wake(0)]);
             }
         }
-        if (jobs_remaining || summary_remaining || durable_processed)
+        if (jobs_remaining || summary_remaining || durable_processed || retry_scheduled)
             && !cancel.load(Ordering::Acquire)
         {
             follow_up_due = Some(std::time::Instant::now() + ENRICHMENT_FOLLOWUP_DELAY);
@@ -907,7 +1053,7 @@ struct PersistentConversationEvents<E, H> {
     conversation_id: String,
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
     enrichment: Option<EnrichmentSender>,
-    observation_database_path: Option<PathBuf>,
+    observation_writer: Option<ObservationWriter>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
@@ -920,7 +1066,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
         history: H,
         conversation_id: impl Into<String>,
         enrichment: Option<EnrichmentSender>,
-        observation_database_path: Option<PathBuf>,
+        observation_writer: Option<ObservationWriter>,
     ) -> Self {
         Self {
             inner,
@@ -928,7 +1074,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
             conversation_id: conversation_id.into(),
             pending_users: Mutex::new(HashMap::new()),
             enrichment,
-            observation_database_path,
+            observation_writer,
         }
     }
 
@@ -936,24 +1082,16 @@ impl<E, H> PersistentConversationEvents<E, H> {
     /// may then send a lossy wake; it must never wake a worker for data that
     /// failed to reach SQLite.
     fn record_observation(&self, turn: TurnId, text: &str) -> bool {
-        let Some(path) = &self.observation_database_path else {
+        let Some(writer) = &self.observation_writer else {
             return false;
         };
-        let result = Database::open_with_busy_timeout(path, OBSERVATION_EVENT_BUSY_TIMEOUT)
-            .map(SqliteMemoryStore::new)
-            .map_err(|error| PortError(error.to_string()))
-            .and_then(|mut store| {
-                store
-                    .insert_observation(NewObservation::new(
-                        &self.conversation_id,
-                        turn.value(),
-                        text,
-                        unix_timestamp(),
-                    ))
-                    .map(|_| ())
-            });
-        if let Err(error) = result {
-            tracing::warn!(%error, "memory observation persistence failed; conversation remains available");
+        if writer
+            .insert(self.conversation_id.clone(), turn.value(), text.to_owned())
+            .is_err()
+        {
+            tracing::warn!(
+                "memory observation writer queue unavailable; conversation remains available"
+            );
             false
         } else {
             true
@@ -961,22 +1099,16 @@ impl<E, H> PersistentConversationEvents<E, H> {
     }
 
     fn finalize_observation(&self, turn: TurnId, outcome: ObservationOutcome) {
-        let Some(path) = &self.observation_database_path else {
+        let Some(writer) = &self.observation_writer else {
             return;
         };
-        let result = Database::open_with_busy_timeout(path, OBSERVATION_EVENT_BUSY_TIMEOUT)
-            .map(SqliteMemoryStore::new)
-            .map_err(|error| PortError(error.to_string()))
-            .and_then(|mut store| {
-                store.finalize_observation_by_turn(
-                    &self.conversation_id,
-                    turn.value(),
-                    outcome,
-                    unix_timestamp(),
-                )
-            });
-        if let Err(error) = result {
-            tracing::warn!(%error, "memory observation outcome finalization failed; conversation remains available");
+        if writer
+            .finalize(self.conversation_id.clone(), turn.value(), outcome)
+            .is_err()
+        {
+            tracing::warn!(
+                "memory observation writer queue unavailable; conversation remains available"
+            );
         }
     }
 
@@ -1029,19 +1161,7 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             }
         }
         pending.insert(turn, (text.to_owned(), None));
-        let observation_committed = self.record_observation(turn, text);
-        if observation_committed
-            && let Some(enrichment) = &self.enrichment
-            && enrichment
-                .replace_latest(EnrichmentJob {
-                    turn_id: turn.value(),
-                    #[cfg(test)]
-                    user_text: text.to_owned(),
-                })
-                .is_err()
-        {
-            tracing::warn!("memory enrichment worker unavailable; conversation remains available");
-        }
+        let _observation_queued = self.record_observation(turn, text);
         self.inner.on_user_message(turn, text);
     }
     fn on_control(&self, turn: TurnId, control: &ReplyControl) {
@@ -1159,6 +1279,7 @@ struct Worker {
     thread: Option<std::thread::JoinHandle<()>>,
     context_thread: Option<std::thread::JoinHandle<()>>,
     enrichment_thread: Option<std::thread::JoinHandle<()>>,
+    observation_writer_thread: Option<std::thread::JoinHandle<()>>,
     enrichment_cancel: Arc<AtomicBool>,
 }
 
@@ -1170,8 +1291,13 @@ impl Worker {
         drop(self.tx);
         let result = join_worker(self.context_thread.take(), "context");
         let conversation = join_worker(self.thread.take(), "conversation");
+        let observation_writer =
+            join_worker(self.observation_writer_thread.take(), "observation writer");
         let enrichment = join_worker(self.enrichment_thread.take(), "enrichment");
-        result.and(conversation).and(enrichment)
+        result
+            .and(conversation)
+            .and(observation_writer)
+            .and(enrichment)
     }
 }
 
@@ -1505,6 +1631,8 @@ impl ChatService {
             pending: Arc::clone(&enrichment_pending),
             metrics: Arc::clone(&self.enrichment_metrics),
         };
+        let (observation_tx, observation_rx) = sync_channel(OBSERVATION_WRITE_QUEUE_CAPACITY);
+        let observation_writer = ObservationWriter { tx: observation_tx };
         let database_path = app
             .state::<AppDataLayout>()
             .data
@@ -1527,6 +1655,20 @@ impl ChatService {
             tracing::warn!(%error, "failed to restore turn sequence; starting from temporary sequence");
             None
         }).unwrap_or(0);
+        let observation_writer_path = database_path.clone();
+        let observation_writer_thread = std::thread::Builder::new()
+            .name("pw-observation-writer".into())
+            .spawn({
+                let writer_enrichment = enrichment_tx.clone();
+                move || {
+                    run_observation_writer(
+                        observation_writer_path,
+                        observation_rx,
+                        Some(writer_enrichment),
+                    )
+                }
+            })
+            .map_err(|error| format!("failed to spawn observation writer: {error}"))?;
         let events = PersistentConversationEvents::new_with_enrichment(
             TauriConversationEvents {
                 runtime: AppConversationEventRuntime {
@@ -1538,7 +1680,7 @@ impl ChatService {
             history,
             DEFAULT_CONVERSATION_ID,
             Some(enrichment_tx),
-            Some(database_path.clone()),
+            Some(observation_writer),
         );
 
         let context_thread = std::thread::Builder::new()
@@ -1622,6 +1764,7 @@ impl ChatService {
             thread: Some(thread),
             context_thread: Some(context_thread),
             enrichment_thread: Some(enrichment_thread),
+            observation_writer_thread: Some(observation_writer_thread),
             enrichment_cancel,
         })
     }
@@ -2641,6 +2784,7 @@ mod tests {
             thread: Some(thread),
             context_thread: None,
             enrichment_thread: None,
+            observation_writer_thread: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert_eq!(gate.capture_idle_epoch(), None);
@@ -2661,6 +2805,7 @@ mod tests {
             thread: Some(std::thread::spawn(|| panic!("injected"))),
             context_thread: None,
             enrichment_thread: None,
+            observation_writer_thread: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         });
         assert!(service.reset().is_err());
@@ -3618,6 +3763,12 @@ mod tests {
             pending: Arc::clone(&pending),
             metrics: Arc::new(QueueMetrics::new("test_enrichment", 8)),
         };
+        let (observation_tx, observation_rx) = sync_channel(OBSERVATION_WRITE_QUEUE_CAPACITY);
+        let observation_path = path.clone();
+        let observation_thread = std::thread::spawn({
+            let writer_sender = sender.clone();
+            move || run_observation_writer(observation_path, observation_rx, Some(writer_sender))
+        });
         let worker_wake = wake;
         let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
         let events = PersistentConversationEvents::new_with_enrichment(
@@ -3625,7 +3776,7 @@ mod tests {
             history,
             DEFAULT_CONVERSATION_ID,
             Some(sender),
-            Some(path.clone()),
+            Some(ObservationWriter { tx: observation_tx }),
         );
         let mut tracker = TurnTracker::new();
         for assistant in ["覚えました", "もう一度覚えました"] {
@@ -3634,6 +3785,7 @@ mod tests {
             events.on_reply_complete(turn, assistant);
         }
         drop(events);
+        observation_thread.join().unwrap();
         let worker_path = path.clone();
         let worker = std::thread::spawn(move || {
             run_enrichment(
@@ -3677,12 +3829,17 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let (observation_tx, observation_rx) = sync_channel(OBSERVATION_WRITE_QUEUE_CAPACITY);
+        let observation_path = path.clone();
+        let observation_thread = std::thread::spawn(move || {
+            run_observation_writer(observation_path, observation_rx, None)
+        });
         let events = PersistentConversationEvents::new_with_enrichment(
             NoopEvents::default(),
             history,
             DEFAULT_CONVERSATION_ID,
             None,
-            Some(path.clone()),
+            Some(ObservationWriter { tx: observation_tx }),
         );
         let mut tracker = TurnTracker::new();
         let failed = tracker.begin_turn();
@@ -3692,6 +3849,7 @@ mod tests {
         events.on_user_message(cancelled, "second durable user observation");
         events.on_cancelled(cancelled);
         drop(events);
+        observation_thread.join().unwrap();
 
         let database = Database::open(&path).unwrap();
         let outcomes = database
@@ -4372,6 +4530,7 @@ mod tests {
             thread: Some(thread),
             context_thread: None,
             enrichment_thread: None,
+            observation_writer_thread: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         worker
@@ -4553,6 +4712,7 @@ mod tests {
             thread: None,
             context_thread: Some(context),
             enrichment_thread: None,
+            observation_writer_thread: None,
             enrichment_cancel: Arc::new(AtomicBool::new(false)),
         };
         let started = std::time::Instant::now();
@@ -4606,6 +4766,7 @@ mod tests {
             thread: None,
             context_thread: None,
             enrichment_thread: Some(enrichment_thread),
+            observation_writer_thread: None,
             enrichment_cancel: cancel,
         };
 

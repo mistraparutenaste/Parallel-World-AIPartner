@@ -118,6 +118,24 @@ pub struct PersistedCandidate {
     pub normalization_edits: Vec<NormalizationEdit>,
 }
 
+/// The durable outcome of validating and writing one candidate.  A typed
+/// safety rejection is terminal and is deliberately distinct from storage or
+/// lease failures, which callers must retry through the observation queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PersistCandidateOutcome {
+    Persisted(i64),
+    DeterministicallyRejected(i64),
+}
+
+impl PersistCandidateOutcome {
+    #[must_use]
+    pub const fn id(self) -> i64 {
+        match self {
+            Self::Persisted(id) | Self::DeterministicallyRejected(id) => id,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CandidateOperation {
     Add,
@@ -219,7 +237,7 @@ pub trait ObservationStore {
         &mut self,
         candidate: PersistedCandidate,
         now: i64,
-    ) -> Result<i64, PortError>;
+    ) -> Result<PersistCandidateOutcome, PortError>;
     /// Records the terminal result of a run. `candidate_count` is the number
     /// of durable candidate rows (including deterministic rejections).
     fn finish_classification_run(
