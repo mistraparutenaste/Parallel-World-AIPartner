@@ -7,7 +7,7 @@ use pw_application::memory::{
     MaintenanceReport, MemoryAction, MemoryAtom, MemoryCandidate, MemoryEvidence, MemoryPromoter,
     MemoryRecord, MemoryState, MemoryStore, NewObservation, ObservationLease, ObservationOutcome,
     ObservationStore, PersistedCandidate, Polarity, PromotionResult, ProvisionalMemoryChangeSet,
-    SourceMode, SpeechAct, StoredSummary, SubjectScope, TemporalScope, TypedCandidate,
+    SourceMode, SourceSpan, SpeechAct, StoredSummary, SubjectScope, TemporalScope, TypedCandidate,
     VerificationStatus, VersionedMemoryAction, input_hash, is_safe_persistent_content,
     memory_strength, prompt_rank, redact_persistent_content, should_become_dormant,
     validate_candidate_for_source,
@@ -363,22 +363,45 @@ impl ObservationStore for SqliteMemoryStore {
             relation: candidate_relation_for(candidate.relation),
             target_memory_id: candidate.target_memory_id,
             expected_target_revision: candidate.expected_target_revision,
-            normalization_edits: Vec::new(),
+            normalization_edits: candidate.normalization_edits.clone(),
             proposed_action: proposed_action_for_persisted_candidate(&candidate)?,
         };
-        validate_candidate_for_source(&typed, &source_hash, &source_text, &targets)
-            .map_err(|_| PortError("candidate rejected by typed safety validator".into()))?;
+        let validation =
+            validate_candidate_for_source(&typed, &source_hash, &source_text, &targets);
         let [span] = candidate.atom.source_spans.as_slice() else {
             return Err(PortError("candidate requires one source span".into()));
         };
+        let normalization_json =
+            serde_json::to_string(&candidate.normalization_edits).map_err(memory_error)?;
+        let rejection_reason = validation
+            .as_ref()
+            .err()
+            .map(|_| "typed safety validator rejected candidate");
         self.database.connection().execute(
-            "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,target_memory_id,expected_target_revision,proposed_operation,proposed_relation,source_start,source_end,normalization_json,created_at,updated_at) SELECT r.observation_id,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,'[]',?20,?20 FROM memory_classification_runs r WHERE r.id=?1 AND r.lease_attempt_token=?21 ON CONFLICT(observation_id,classification_run_id,candidate_ordinal) DO NOTHING",
-            params![candidate.classification_run_id, candidate.ordinal, candidate.atom.content, encode_subject_scope(candidate.atom.subject_scope), encode_epistemic_form(candidate.atom.epistemic_form), encode_attribution(candidate.atom.attribution), encode_speech_act(candidate.atom.discourse.speech_act), encode_source_mode(candidate.atom.discourse.source_mode), encode_polarity(candidate.atom.discourse.polarity), encode_conditionality(candidate.atom.discourse.conditionality), encode_fictionality(candidate.atom.discourse.fictionality), encode_verification_status(candidate.atom.verification_status), encode_temporal_scope(candidate.atom.temporal_scope), candidate.target_memory_id, candidate.expected_target_revision, encode_candidate_operation(candidate.operation), encode_candidate_relation(candidate.relation), i64::try_from(span.start).map_err(|error| PortError(error.to_string()))?, i64::try_from(span.end).map_err(|error| PortError(error.to_string()))?, now, token],
-        ).map_err(|error| PortError(error.to_string()))?;
-        self.database.connection().query_row(
-            "SELECT id FROM memory_candidates WHERE classification_run_id=?1 AND candidate_ordinal=?2",
-            params![candidate.classification_run_id, candidate.ordinal], |row| row.get(0),
-        ).map_err(|error| PortError(error.to_string()))
+            "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,target_memory_id,expected_target_revision,proposed_operation,proposed_relation,source_start,source_end,normalization_json,candidate_state,rejection_reason,created_at,updated_at) SELECT r.observation_id,?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,CASE WHEN ?21 IS NULL THEN 'pending' ELSE 'rejected' END,?21,?22,?22 FROM memory_classification_runs r WHERE r.id=?1 AND r.lease_attempt_token=?23 ON CONFLICT(observation_id,classification_run_id,candidate_ordinal) DO NOTHING",
+            params![candidate.classification_run_id, candidate.ordinal, candidate.atom.content, encode_subject_scope(candidate.atom.subject_scope), encode_epistemic_form(candidate.atom.epistemic_form), encode_attribution(candidate.atom.attribution), encode_speech_act(candidate.atom.discourse.speech_act), encode_source_mode(candidate.atom.discourse.source_mode), encode_polarity(candidate.atom.discourse.polarity), encode_conditionality(candidate.atom.discourse.conditionality), encode_fictionality(candidate.atom.discourse.fictionality), encode_verification_status(candidate.atom.verification_status), encode_temporal_scope(candidate.atom.temporal_scope), candidate.target_memory_id, candidate.expected_target_revision, encode_candidate_operation(candidate.operation), encode_candidate_relation(candidate.relation), i64::try_from(span.start).map_err(|error| PortError(error.to_string()))?, i64::try_from(span.end).map_err(|error| PortError(error.to_string()))?, normalization_json, rejection_reason, now, token],
+        ).map_err(memory_error)?;
+        let stored: (i64, String, String, Option<i64>, Option<i64>, i64, i64, String, String) = self.database.connection().query_row(
+            "SELECT id,content,proposed_operation,target_memory_id,expected_target_revision,source_start,source_end,normalization_json,candidate_state FROM memory_candidates WHERE classification_run_id=?1 AND candidate_ordinal=?2",
+            params![candidate.classification_run_id, candidate.ordinal], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?)),
+        ).map_err(memory_error)?;
+        if stored.1 != candidate.atom.content
+            || stored.2 != encode_candidate_operation(candidate.operation)
+            || stored.3 != candidate.target_memory_id
+            || stored.4 != candidate.expected_target_revision
+            || stored.5 != i64::try_from(span.start).map_err(memory_error)?
+            || stored.6 != i64::try_from(span.end).map_err(memory_error)?
+            || stored.7
+                != serde_json::to_string(&candidate.normalization_edits).map_err(memory_error)?
+        {
+            return Err(PortError("candidate ordinal metadata collision".into()));
+        }
+        if validation.is_err() || stored.8 == "rejected" {
+            return Err(PortError(
+                "candidate rejected by typed safety validator".into(),
+            ));
+        }
+        Ok(stored.0)
     }
 
     fn finish_classification_run(
@@ -407,15 +430,36 @@ impl ObservationStore for SqliteMemoryStore {
                 "classification completion lost its current lease".into(),
             ));
         }
-        let outcome = encode_classification_outcome(outcome);
-        transaction.execute(
-            "UPDATE memory_classification_runs SET transport_outcome=?1,candidate_count=?2,error_reason=?3,completed_at=?4 WHERE id=?5 AND transport_outcome='pending'",
-            params![outcome, candidate_count, reason.map(safe_diagnostic_reason), now, classification_run_id],
-        ).map_err(memory_error)?;
+        let actual_count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM memory_candidates WHERE classification_run_id=?1",
+                [classification_run_id],
+                |row| row.get(0),
+            )
+            .map_err(memory_error)?;
+        if actual_count != candidate_count {
+            return Err(PortError(
+                "classification candidate count does not match durable rows".into(),
+            ));
+        }
         let unresolved: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM memory_candidates WHERE classification_run_id=?1 AND candidate_state='pending')",
             [classification_run_id], |row| row.get(0),
         ).map_err(memory_error)?;
+        let outcome = encode_classification_outcome(outcome);
+        if outcome == "completed" && unresolved {
+            // A classifier completed, but its proposals have not reached a
+            // terminal promotion decision.  Keep the run retryable/fenced.
+            transaction.execute(
+                "UPDATE memory_classification_runs SET candidate_count=?1,error_reason=?2 WHERE id=?3 AND transport_outcome='pending'",
+                params![candidate_count, reason.map(safe_diagnostic_reason), classification_run_id],
+            ).map_err(memory_error)?;
+        } else {
+            transaction.execute(
+                "UPDATE memory_classification_runs SET transport_outcome=?1,candidate_count=?2,error_reason=?3,completed_at=?4 WHERE id=?5 AND transport_outcome='pending'",
+                params![outcome, candidate_count, reason.map(safe_diagnostic_reason), now, classification_run_id],
+            ).map_err(memory_error)?;
+        }
         if !unresolved && matches!(outcome, "completed" | "rejected") {
             transaction.execute(
                 "UPDATE memory_observations SET processing_state='completed',lease_owner=NULL,lease_expires_at=NULL,attempt_token=NULL,updated_at=?1 WHERE id=?2 AND attempt_token=?3 AND deletion_generation=?4 AND deleted_at IS NULL",
@@ -424,6 +468,43 @@ impl ObservationStore for SqliteMemoryStore {
         }
         transaction.commit().map_err(memory_error)?;
         Ok(())
+    }
+
+    fn reject_pending_candidates(
+        &mut self,
+        lease: &ObservationLease,
+        classification_run_id: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<i64, PortError> {
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(memory_error)?;
+        let valid: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memory_classification_runs r JOIN memory_observations o ON o.id=r.observation_id WHERE r.id=?1 AND o.id=?2 AND o.processing_state='processing' AND o.lease_owner=?3 AND o.attempt_token=?4 AND r.lease_attempt_token=?4 AND o.deletion_generation=?5 AND o.lease_expires_at>?6 AND o.deleted_at IS NULL)",
+            params![classification_run_id, lease.observation_id, lease.owner, lease.attempt_token, lease.deletion_generation, now],
+            |row| row.get(0),
+        ).map_err(memory_error)?;
+        if !valid {
+            return Err(PortError(
+                "classification rejection lost its current lease".into(),
+            ));
+        }
+        transaction.execute(
+            "UPDATE memory_candidates SET candidate_state='rejected',rejection_reason=?1,updated_at=?2 WHERE classification_run_id=?3 AND candidate_state='pending'",
+            params![safe_diagnostic_reason(reason), now, classification_run_id],
+        ).map_err(memory_error)?;
+        let count: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM memory_candidates WHERE classification_run_id=?1",
+                [classification_run_id],
+                |row| row.get(0),
+            )
+            .map_err(memory_error)?;
+        transaction.commit().map_err(memory_error)?;
+        Ok(count)
     }
 
     fn retry_or_defer_observation(
@@ -581,11 +662,12 @@ impl MemoryPromoter for SqliteMemoryStore {
             .connection_mut()
             .transaction()
             .map_err(|error| PortError(error.to_string()))?;
-        if let Some((ids, observation_id, classifier_version, schema_version, input_hash)) = transaction
+        let fingerprint = promotion_fingerprint(change_set);
+        if let Some((ids, observation_id, classifier_version, schema_version, input_hash, run_id, stored_fingerprint)) = transaction
             .query_row(
-                "SELECT result_memory_ids,observation_id,classifier_version,schema_version,input_hash FROM memory_promotions WHERE request_key=?1",
+                "SELECT result_memory_ids,observation_id,classifier_version,schema_version,input_hash,classification_run_id,change_set_fingerprint FROM memory_promotions WHERE request_key=?1",
                 [&change_set.request_key],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, i64>(3)?, row.get::<_, String>(4)?, row.get::<_, i64>(5)?, row.get::<_, String>(6)?)),
             )
             .optional()
             .map_err(|error| PortError(error.to_string()))?
@@ -594,6 +676,8 @@ impl MemoryPromoter for SqliteMemoryStore {
                 || classifier_version != change_set.classifier_version
                 || schema_version != change_set.schema_version
                 || input_hash != change_set.input_hash
+                || run_id != change_set.classification_run_id
+                || stored_fingerprint != fingerprint
             {
                 return Err(PortError("promotion request key metadata collision".into()));
             }
@@ -636,10 +720,10 @@ impl MemoryPromoter for SqliteMemoryStore {
                     "promotion action revision guard is incomplete".into(),
                 ));
             }
-            let candidate: Option<(String, String, String, Option<i64>, Option<i64>)> = transaction.query_row(
-                "SELECT c.content,c.proposed_operation,c.proposed_relation,c.target_memory_id,c.expected_target_revision FROM memory_candidates c JOIN memory_observations o ON o.id=c.observation_id WHERE c.id=?1 AND c.observation_id=?2 AND c.candidate_state='pending' AND c.attribution!='assistant' AND o.deletion_generation=?3",
-                params![provenance.candidate_id, lease.observation_id, lease.deletion_generation],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            let candidate: Option<(String, String, String, Option<i64>, Option<i64>, String, String, String, String, String, String, String, String, String, String, i64, i64, String, String, String)> = transaction.query_row(
+                "SELECT c.content,c.proposed_operation,c.proposed_relation,c.target_memory_id,c.expected_target_revision,c.subject_scope,c.epistemic_form,c.attribution,c.speech_act,c.source_mode,c.polarity,c.conditionality,c.fictionality,c.verification_status,c.temporal_scope,c.source_start,c.source_end,c.normalization_json,o.input_hash,o.user_text FROM memory_candidates c JOIN memory_observations o ON o.id=c.observation_id JOIN memory_classification_runs r ON r.id=c.classification_run_id WHERE c.id=?1 AND c.observation_id=?2 AND c.classification_run_id=?3 AND c.candidate_state='pending' AND c.attribution!='assistant' AND o.deletion_generation=?4 AND r.lease_attempt_token=?5 AND r.classifier_version=?6 AND r.schema_version=?7 AND r.input_hash=?8",
+                params![provenance.candidate_id, lease.observation_id, change_set.classification_run_id, lease.deletion_generation, lease.attempt_token, change_set.classifier_version, change_set.schema_version, change_set.input_hash],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?, row.get(14)?, row.get(15)?, row.get(16)?, row.get(17)?, row.get(18)?, row.get(19)?)),
             ).optional().map_err(|error| PortError(error.to_string()))?;
             let Some((
                 candidate_content,
@@ -647,6 +731,21 @@ impl MemoryPromoter for SqliteMemoryStore {
                 candidate_relation,
                 candidate_target,
                 candidate_revision,
+                subject_scope,
+                epistemic_form,
+                attribution,
+                speech_act,
+                source_mode,
+                polarity,
+                conditionality,
+                fictionality,
+                verification_status,
+                temporal_scope,
+                source_start,
+                source_end,
+                normalization_json,
+                source_hash,
+                source_text,
             )) = candidate
             else {
                 return Err(PortError(
@@ -663,6 +762,31 @@ impl MemoryPromoter for SqliteMemoryStore {
                     "promotion action does not match its validated candidate".into(),
                 ));
             }
+            let typed = typed_candidate_from_storage(
+                &candidate_content,
+                &subject_scope,
+                &epistemic_form,
+                &attribution,
+                &speech_act,
+                &source_mode,
+                &polarity,
+                &conditionality,
+                &fictionality,
+                &verification_status,
+                &temporal_scope,
+                source_start,
+                source_end,
+                &normalization_json,
+                &source_hash,
+                &candidate_operation,
+                &candidate_relation,
+                candidate_target,
+                candidate_revision,
+            )?;
+            let targets = validator_targets(&transaction, candidate_target)?;
+            validate_candidate_for_source(&typed, &source_hash, &source_text, &targets).map_err(
+                |_| PortError("promotion candidate no longer passes typed validation".into()),
+            )?;
             if let MemoryAction::Add { content, .. } | MemoryAction::Supersede { content, .. } =
                 action
                 && !is_safe_persistent_content(content)
@@ -707,11 +831,15 @@ impl MemoryPromoter for SqliteMemoryStore {
             ).map_err(|error| PortError(error.to_string()))?;
             transaction.execute("UPDATE memory_candidates SET candidate_state='promoted',updated_at=?1 WHERE id=?2", params![now, provenance.candidate_id]).map_err(|error| PortError(error.to_string()))?;
         }
+        transaction.execute(
+            "UPDATE memory_classification_runs SET transport_outcome='completed',candidate_count=(SELECT COUNT(*) FROM memory_candidates WHERE classification_run_id=?1),error_reason=NULL,completed_at=?2 WHERE id=?1 AND transport_outcome='pending'",
+            params![change_set.classification_run_id, now],
+        ).map_err(memory_error)?;
         let result_memory_ids =
             serde_json::to_string(&memory_ids).map_err(|error| PortError(error.to_string()))?;
         transaction.execute(
-            "INSERT INTO memory_promotions(request_key,observation_id,classifier_version,schema_version,input_hash,status,result_memory_ids,created_at,committed_at) VALUES(?1,?2,?3,?4,?5,'committed',?6,?7,?7)",
-            params![change_set.request_key, lease.observation_id, change_set.classifier_version, change_set.schema_version, change_set.input_hash, result_memory_ids, now],
+            "INSERT INTO memory_promotions(request_key,observation_id,classifier_version,schema_version,input_hash,classification_run_id,change_set_fingerprint,status,result_memory_ids,created_at,committed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,'committed',?8,?9,?9)",
+            params![change_set.request_key, lease.observation_id, change_set.classifier_version, change_set.schema_version, change_set.input_hash, change_set.classification_run_id, fingerprint, result_memory_ids, now],
         ).map_err(|error| PortError(error.to_string()))?;
         transaction.execute(
             "UPDATE memory_observations SET processing_state='completed',lease_owner=NULL,lease_expires_at=NULL,attempt_token=NULL,updated_at=?1 WHERE id=?2 AND lease_owner=?3 AND attempt_token=?4 AND deletion_generation=?5",
@@ -768,6 +896,116 @@ fn action_target(action: &MemoryAction) -> Option<i64> {
         MemoryAction::Reinforce { memory_id, .. } => Some(*memory_id),
         MemoryAction::Supersede { old_memory_id, .. } => Some(*old_memory_id),
         MemoryAction::Add { .. } | MemoryAction::Ignore => None,
+    }
+}
+
+fn promotion_fingerprint(change_set: &ProvisionalMemoryChangeSet) -> String {
+    let mut fields = format!(
+        "run:{}|observation:{}|classifier:{}|schema:{}|input:{}",
+        change_set.classification_run_id,
+        change_set.lease.observation_id,
+        change_set.classifier_version,
+        change_set.schema_version,
+        change_set.input_hash
+    );
+    for (action, provenance) in change_set.actions.iter().zip(&change_set.provenance) {
+        fields.push_str(&format!(
+            "|candidate:{}:{}:{:?}:{:?}",
+            provenance.candidate_id, provenance.relation, action.action, action.expected_revision
+        ));
+    }
+    input_hash(&fields)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn typed_candidate_from_storage(
+    content: &str,
+    subject_scope: &str,
+    epistemic_form: &str,
+    attribution: &str,
+    speech_act: &str,
+    source_mode: &str,
+    polarity: &str,
+    conditionality: &str,
+    fictionality: &str,
+    verification_status: &str,
+    temporal_scope: &str,
+    source_start: i64,
+    source_end: i64,
+    normalization_json: &str,
+    source_hash: &str,
+    operation: &str,
+    relation: &str,
+    target_memory_id: Option<i64>,
+    expected_target_revision: Option<i64>,
+) -> Result<TypedCandidate, PortError> {
+    let start = usize::try_from(source_start).map_err(memory_error)?;
+    let end = usize::try_from(source_end).map_err(memory_error)?;
+    let normalization_edits = serde_json::from_str(normalization_json)
+        .map_err(|_| PortError("stored candidate normalization trace is invalid".into()))?;
+    let operation = parse_candidate_operation(operation)?;
+    let relation = parse_candidate_relation(relation)?;
+    let atom = MemoryAtom {
+        id: 0,
+        revision: 1,
+        content: content.into(),
+        subject_scope: parse_subject_scope(subject_scope)?,
+        epistemic_form: parse_epistemic_form(epistemic_form)?,
+        attribution: parse_attribution(attribution)?,
+        discourse: DiscourseFeatures {
+            speech_act: parse_speech_act(speech_act)?,
+            source_mode: parse_source_mode(source_mode)?,
+            polarity: parse_polarity(polarity)?,
+            conditionality: parse_conditionality(conditionality)?,
+            fictionality: parse_fictionality(fictionality)?,
+        },
+        verification_status: parse_verification_status(verification_status)?,
+        temporal_scope: parse_temporal_scope(temporal_scope)?,
+        lifecycle_state: MemoryState::Active,
+        source_spans: vec![SourceSpan {
+            source_id: source_hash.into(),
+            start,
+            end,
+        }],
+    };
+    let persisted = PersistedCandidate {
+        classification_run_id: 0,
+        ordinal: 0,
+        atom,
+        target_memory_id,
+        expected_target_revision,
+        operation,
+        relation,
+        normalization_edits,
+    };
+    let proposed_action = proposed_action_for_persisted_candidate(&persisted)?;
+    Ok(TypedCandidate {
+        atom: persisted.atom.clone(),
+        relation: candidate_relation_for(persisted.relation),
+        target_memory_id: persisted.target_memory_id,
+        expected_target_revision: persisted.expected_target_revision,
+        normalization_edits: persisted.normalization_edits,
+        proposed_action,
+    })
+}
+
+fn parse_candidate_operation(value: &str) -> Result<CandidateOperation, PortError> {
+    match value {
+        "add" => Ok(CandidateOperation::Add),
+        "reinforce" => Ok(CandidateOperation::Reinforce),
+        "supersede" => Ok(CandidateOperation::Supersede),
+        _ => Err(PortError("unknown candidate operation".into())),
+    }
+}
+
+fn parse_candidate_relation(value: &str) -> Result<CandidateProvenanceRelation, PortError> {
+    match value {
+        "originated" => Ok(CandidateProvenanceRelation::Originated),
+        "reasserted" => Ok(CandidateProvenanceRelation::Reasserted),
+        "corrected" => Ok(CandidateProvenanceRelation::Corrected),
+        "changed_stance" => Ok(CandidateProvenanceRelation::ChangedStance),
+        "contradicted" => Ok(CandidateProvenanceRelation::Contradicted),
+        _ => Err(PortError("unknown candidate relation".into())),
     }
 }
 fn action_matches_candidate_content(action: &MemoryAction, candidate_content: &str) -> bool {
@@ -1947,6 +2185,7 @@ mod tests {
                 expected_target_revision: None,
                 operation: CandidateOperation::Add,
                 relation: CandidateProvenanceRelation::Originated,
+                normalization_edits: Vec::new(),
             },
             11,
         )
@@ -1981,6 +2220,78 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn promotion_rejects_a_candidate_from_an_expired_classification_run() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        store
+            .insert_observation(NewObservation::new("chat", 80, "I like tea", 10))
+            .unwrap();
+        let first = store
+            .claim_next_observation("worker", 10, 1)
+            .unwrap()
+            .unwrap();
+        let first_run = ClassificationRun::new(
+            first.observation_id,
+            "test",
+            10,
+            &first.canonical_input_hash,
+        );
+        let first_run_id = pw_application::memory::ObservationStore::begin_classification_run(
+            &mut store, &first, &first_run, 10,
+        )
+        .unwrap();
+        store.database.connection().execute(
+            "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,proposed_operation,proposed_relation,source_start,source_end,created_at,updated_at) VALUES(?1,?2,0,'I like tea','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable','add','originated',0,10,10,10)",
+            [first.observation_id, first_run_id],
+        ).unwrap();
+        let stale_candidate: i64 = store.database.connection().query_row(
+            "SELECT id FROM memory_candidates WHERE classification_run_id=?1", [first_run_id], |row| row.get(0),
+        ).unwrap();
+        let second = store
+            .claim_next_observation("worker", 12, 30)
+            .unwrap()
+            .unwrap();
+        let second_run = ClassificationRun::new(
+            second.observation_id,
+            "test",
+            10,
+            &second.canonical_input_hash,
+        );
+        let second_run_id = pw_application::memory::ObservationStore::begin_classification_run(
+            &mut store, &second, &second_run, 12,
+        )
+        .unwrap();
+        let result = store.promote(
+            &ProvisionalMemoryChangeSet {
+                request_key: second_run.request_key.clone(),
+                lease: second,
+                classification_run_id: second_run_id,
+                classifier_version: second_run.classifier_version,
+                schema_version: second_run.schema_version,
+                input_hash: second_run.input_hash,
+                actions: vec![VersionedMemoryAction {
+                    action: MemoryAction::Add {
+                        content: "I like tea".into(),
+                        pinned: false,
+                    },
+                    expected_revision: None,
+                }],
+                provenance: vec![ProvenanceLink {
+                    candidate_id: stale_candidate,
+                    relation: "originated".into(),
+                }],
+            },
+            13,
+        );
+        assert!(result.is_err());
+        let count: i64 = store
+            .database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]
@@ -2034,6 +2345,7 @@ mod tests {
                 expected_target_revision: None,
                 operation: CandidateOperation::Add,
                 relation: CandidateProvenanceRelation::Originated,
+                normalization_edits: Vec::new(),
             },
             11,
         )

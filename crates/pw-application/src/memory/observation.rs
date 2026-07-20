@@ -1,4 +1,4 @@
-use super::MemoryAtom;
+use super::{MemoryAtom, NormalizationEdit};
 use crate::PortError;
 use sha2::{Digest, Sha256};
 
@@ -113,6 +113,9 @@ pub struct PersistedCandidate {
     pub expected_target_revision: Option<i64>,
     pub operation: CandidateOperation,
     pub relation: CandidateProvenanceRelation,
+    /// A deterministic normalization trace is persisted and replayed before a
+    /// candidate can change durable memory.
+    pub normalization_edits: Vec<NormalizationEdit>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,6 +231,16 @@ pub trait ObservationStore {
         reason: Option<&str>,
         now: i64,
     ) -> Result<(), PortError>;
+    /// Marks every still-pending proposal in a run terminal before a retry or
+    /// deterministic rejection.  Reasons are bounded diagnostics, never user
+    /// source content.
+    fn reject_pending_candidates(
+        &mut self,
+        lease: &ObservationLease,
+        classification_run_id: i64,
+        reason: &str,
+        now: i64,
+    ) -> Result<i64, PortError>;
     /// Releases a current lease for a bounded retry, or defers it when the
     /// retry limit is reached. Errors are diagnostics, never source content.
     fn retry_or_defer_observation(

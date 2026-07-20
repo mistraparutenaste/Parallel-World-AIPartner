@@ -3,6 +3,7 @@ use super::{
     Attribution, Conditionality, MemoryAtom, MemoryCandidate, MemoryState, Polarity, SourceMode,
     SourceSpan, SpeechAct, VerificationStatus, is_safe_persistent_content,
 };
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CandidateRelation {
@@ -13,7 +14,7 @@ pub enum CandidateRelation {
     Unrelated,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NormalizationEdit {
     pub start: usize,
     pub end: usize,

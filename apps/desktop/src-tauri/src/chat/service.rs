@@ -145,7 +145,6 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     consolidator: &mut HybridConsolidator<C>,
 ) -> Result<bool, String> {
     const LEASE_SECONDS: i64 = 60;
-    const RETRY_LIMIT: i64 = 3;
     let now = unix_timestamp();
     let Some(lease) = memory
         .claim_next_observation("desktop-enrichment", now, LEASE_SECONDS)
@@ -161,21 +160,22 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     );
     let run_id = match memory.begin_classification_run(&lease, &run, now) {
         Ok(id) => id,
-        Err(error) => return Err(error.to_string()),
+        Err(error) => {
+            retry_observation(memory, &lease, "classification run unavailable", now)?;
+            return Err(error.to_string());
+        }
     };
     let candidates =
         match memory.find_consolidation_candidates(&lease.user_text, DEFAULT_MEMORY_LIMIT, now) {
             Ok(candidates) => candidates,
             Err(error) => {
-                memory
-                    .retry_or_defer_observation(
-                        &lease,
-                        "candidate search unavailable",
-                        now,
-                        RETRY_LIMIT,
-                        1,
-                    )
-                    .map_err(|error| error.to_string())?;
+                finish_failed_run_and_retry(
+                    memory,
+                    &lease,
+                    run_id,
+                    "candidate search unavailable",
+                    now,
+                )?;
                 return Err(error.to_string());
             }
         };
@@ -276,6 +276,7 @@ fn process_next_durable_observation<C: MemoryClassifier>(
             expected_target_revision: expected_revision,
             operation,
             relation,
+            normalization_edits: Vec::new(),
         },
         now,
     ) {
@@ -286,7 +287,7 @@ fn process_next_durable_observation<C: MemoryClassifier>(
                     &lease,
                     run_id,
                     ClassificationOutcome::Rejected,
-                    0,
+                    1,
                     Some("candidate rejected by safety policy"),
                     now,
                 )
@@ -307,7 +308,7 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     let result = memory.promote(
         &ProvisionalMemoryChangeSet {
             request_key: run.request_key.clone(),
-            lease,
+            lease: lease.clone(),
             classification_run_id: run_id,
             classifier_version: run.classifier_version.clone(),
             schema_version: run.schema_version,
@@ -332,9 +333,44 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     );
     if let Err(error) = result {
         tracing::warn!(%error, "durable observation promotion did not complete");
+        finish_failed_run_and_retry(memory, &lease, run_id, "promotion unavailable", now)?;
         return Err(error.to_string());
     }
     Ok(true)
+}
+
+fn retry_observation(
+    memory: &mut SqliteMemoryStore,
+    lease: &pw_application::memory::ObservationLease,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    memory
+        .retry_or_defer_observation(lease, reason, now, 3, 1)
+        .map_err(|error| error.to_string())
+}
+
+fn finish_failed_run_and_retry(
+    memory: &mut SqliteMemoryStore,
+    lease: &pw_application::memory::ObservationLease,
+    run_id: i64,
+    reason: &str,
+    now: i64,
+) -> Result<(), String> {
+    let count = memory
+        .reject_pending_candidates(lease, run_id, reason, now)
+        .map_err(|error| error.to_string())?;
+    memory
+        .finish_classification_run(
+            lease,
+            run_id,
+            ClassificationOutcome::Failed,
+            count,
+            Some(reason),
+            now,
+        )
+        .map_err(|error| error.to_string())?;
+    retry_observation(memory, lease, reason, now)
 }
 
 #[cfg(test)]
@@ -488,8 +524,21 @@ fn drain_rolling_summary_at_path(
 #[allow(clippy::needless_pass_by_value)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct EnrichmentJob {
-    user_text: String,
     turn_id: u64,
+    // Production wake markers are deliberately content-free.  The durable
+    // SQLite observation is the only source a worker may classify.
+    #[cfg(test)]
+    user_text: String,
+}
+
+impl EnrichmentJob {
+    fn wake(turn_id: u64) -> Self {
+        Self {
+            turn_id,
+            #[cfg(test)]
+            user_text: String::new(),
+        }
+    }
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -587,13 +636,14 @@ fn run_enrichment_until_cancelled(
     }
     // Bootstrap a drain after restart.  This marker contains no user data and
     // is only a coalescible request to read SQLite.
-    pending
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .replace(vec![EnrichmentJob {
-            user_text: String::new(),
-            turn_id: 0,
-        }]);
+    {
+        let mut pending = pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.is_none() {
+            *pending = Some(vec![EnrichmentJob::wake(0)]);
+        }
+    }
     let mut follow_up_due = Some(std::time::Instant::now());
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -633,8 +683,21 @@ fn run_enrichment_until_cancelled(
             (jobs, jobs_remaining)
         };
         let mut durable_processed = false;
-        for _job in jobs {
+        for job in jobs {
             metrics.dequeued();
+            #[cfg(test)]
+            if !job.user_text.is_empty() {
+                // Test-only compatibility shim: production wake markers never
+                // carry text; fixtures can still model a committed ledger.
+                if let Ok(mut store) = Database::open(database_path).map(SqliteMemoryStore::new) {
+                    let _ = store.insert_observation(NewObservation::new(
+                        DEFAULT_CONVERSATION_ID,
+                        job.turn_id,
+                        &job.user_text,
+                        unix_timestamp(),
+                    ));
+                }
+            }
             match Database::open(database_path)
                 .map(SqliteMemoryStore::new)
                 .map_err(|error| error.to_string())
@@ -666,10 +729,7 @@ fn run_enrichment_until_cancelled(
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if pending.is_none() {
-                *pending = Some(vec![EnrichmentJob {
-                    user_text: String::new(),
-                    turn_id: 0,
-                }]);
+                *pending = Some(vec![EnrichmentJob::wake(0)]);
             }
         }
         if (jobs_remaining || summary_remaining || durable_processed)
@@ -955,8 +1015,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
                 if let Some(enrichment) = &self.enrichment
                     && enrichment
                         .replace_latest(EnrichmentJob {
-                            user_text: user.clone(),
                             turn_id: retry_turn.value(),
+                            #[cfg(test)]
+                            user_text: user.clone(),
                         })
                         .is_err()
                 {
@@ -973,8 +1034,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             && let Some(enrichment) = &self.enrichment
             && enrichment
                 .replace_latest(EnrichmentJob {
-                    user_text: text.to_owned(),
                     turn_id: turn.value(),
+                    #[cfg(test)]
+                    user_text: text.to_owned(),
                 })
                 .is_err()
         {
@@ -1009,8 +1071,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             if let Some(enrichment) = &self.enrichment
                 && enrichment
                     .replace_latest(EnrichmentJob {
-                        user_text: user_text.clone(),
                         turn_id: turn.value(),
+                        #[cfg(test)]
+                        user_text: user_text.clone(),
                     })
                     .is_err()
             {
