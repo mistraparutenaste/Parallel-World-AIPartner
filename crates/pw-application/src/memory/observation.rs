@@ -72,6 +72,16 @@ pub enum ProcessingState {
     Deferred,
 }
 
+/// The terminal result of one classifier transport attempt.  These values are
+/// deliberately separate from the response outcome: an accepted user turn can
+/// be classified even when generating its reply was cancelled or failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClassificationOutcome {
+    Completed,
+    Failed,
+    Rejected,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObservationLease {
     pub observation_id: i64,
@@ -207,6 +217,29 @@ pub trait ObservationStore {
         candidate: PersistedCandidate,
         now: i64,
     ) -> Result<i64, PortError>;
+    /// Records the terminal result of a run. `candidate_count` is the number
+    /// of durable candidate rows (including deterministic rejections).
+    fn finish_classification_run(
+        &mut self,
+        lease: &ObservationLease,
+        classification_run_id: i64,
+        outcome: ClassificationOutcome,
+        candidate_count: i64,
+        reason: Option<&str>,
+        now: i64,
+    ) -> Result<(), PortError>;
+    /// Releases a current lease for a bounded retry, or defers it when the
+    /// retry limit is reached. Errors are diagnostics, never source content.
+    fn retry_or_defer_observation(
+        &mut self,
+        lease: &ObservationLease,
+        error: &str,
+        now: i64,
+        retry_limit: i64,
+        retry_after_seconds: i64,
+    ) -> Result<(), PortError>;
+    /// On worker startup pending reply outcomes are no longer live turns.
+    fn recover_interrupted_observations(&mut self, now: i64) -> Result<usize, PortError>;
 }
 
 #[cfg(test)]

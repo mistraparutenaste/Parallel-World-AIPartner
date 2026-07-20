@@ -270,6 +270,22 @@ fn delete_history_core(
         .connection_mut()
         .transaction()
         .map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE memory_observations SET deletion_generation=deletion_generation+1,user_text='[deleted]',input_hash='tombstone:' || id,processing_state='deferred',lease_owner=NULL,lease_expires_at=NULL,attempt_token=NULL,retry_after_at=NULL,last_error='history deleted',deleted_at=CAST(strftime('%s','now') AS INTEGER),updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE deleted_at IS NULL",
+        [],
+    ).map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE memory_candidates SET content='[deleted]',candidate_state='rejected',rejection_reason='history deleted',updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE deleted_at IS NOT NULL)",
+        [],
+    ).map_err(|e| e.to_string())?;
+    tx.execute(
+        "UPDATE memory_provenance SET tombstoned_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE deleted_at IS NOT NULL)",
+        [],
+    ).map_err(|e| e.to_string())?;
+    tx.execute(
+        "DELETE FROM memories WHERE pinned=0 AND id IN (SELECT memory_id FROM memory_provenance WHERE observation_id IN (SELECT id FROM memory_observations WHERE deleted_at IS NOT NULL)) AND NOT EXISTS (SELECT 1 FROM memory_provenance p JOIN memory_observations o ON o.id=p.observation_id WHERE p.memory_id=memories.id AND o.deleted_at IS NULL)",
+        [],
+    ).map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM conversations", [])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;

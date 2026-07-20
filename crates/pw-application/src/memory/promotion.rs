@@ -17,6 +17,12 @@ pub struct ProvenanceLink {
 pub struct ProvisionalMemoryChangeSet {
     pub request_key: String,
     pub lease: ObservationLease,
+    /// Immutable classifier identity is part of promotion idempotency.  A
+    /// request key alone is insufficient after a worker restart or model swap.
+    pub classification_run_id: i64,
+    pub classifier_version: String,
+    pub schema_version: i64,
+    pub input_hash: String,
     pub actions: Vec<VersionedMemoryAction>,
     pub provenance: Vec<ProvenanceLink>,
 }

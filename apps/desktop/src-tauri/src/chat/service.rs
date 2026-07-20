@@ -16,12 +16,17 @@ use pw_application::conversation::{
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
-    DEFAULT_MEMORY_LIMIT, EvidenceSource, HybridConsolidator, JapanesePersistentFactGenerator,
-    LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, NewObservation,
-    ObservationOutcome, PersistentFactGenerator, ProposedAction, RollingSummaryGenerator,
-    SummaryGenerator, has_explicit_pin_intent, is_role_preserving_summary,
-    is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
+    CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome, ClassificationRun,
+    DEFAULT_MEMORY_LIMIT, DiscourseFeatures, EpistemicForm, Fictionality, HybridConsolidator,
+    LlmMemoryClassifier, MemoryAtom, MemoryClassifier, MemoryContext, MemoryStore, NewObservation,
+    ObservationOutcome, ObservationStore, PersistedCandidate, Polarity, ProposedAction,
+    ProvenanceLink, ProvisionalMemoryChangeSet, RollingSummaryGenerator, SourceMode, SourceSpan,
+    SpeechAct, SubjectScope, SummaryGenerator, TemporalScope, VerificationStatus,
+    VersionedMemoryAction, is_role_preserving_summary, is_safe_persistent_content,
+    merge_rolling_summaries, redact_persistent_content,
 };
+#[cfg(test)]
+use pw_application::memory::{EvidenceSource, has_explicit_pin_intent};
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
 };
@@ -117,44 +122,219 @@ const SUMMARY_DRAIN_TIME_BUDGET: std::time::Duration = std::time::Duration::from
 const ENRICHMENT_IDLE_POLL: std::time::Duration = std::time::Duration::from_millis(20);
 const ENRICHMENT_FOLLOWUP_DELAY: std::time::Duration = std::time::Duration::from_millis(100);
 const ENRICHMENT_JOBS_PER_SLICE: usize = 4;
+/// Ordinary chat must fail open quickly when a maintenance/promotion writer
+/// owns SQLite.  The durable worker will retry its own work later.
+const OBSERVATION_EVENT_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(25);
 
+#[cfg(test)]
 fn process_enrichment_actions<C: MemoryClassifier>(
     database_path: &Path,
-    job: &EnrichmentJob,
+    _wake: &EnrichmentJob,
     consolidator: &mut HybridConsolidator<C>,
 ) -> Result<(), String> {
     let mut memory =
         SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
-    let mut facts = JapanesePersistentFactGenerator;
-    let mut statements = facts
-        .extract(&job.user_text)
-        .map_err(|error| error.to_string())?;
-    if has_explicit_pin_intent(&job.user_text)
-        && !statements
-            .iter()
-            .any(|statement| statement == &job.user_text)
-    {
-        statements.insert(0, job.user_text.clone());
-    }
-    let source = EvidenceSource::new(DEFAULT_CONVERSATION_ID, job.turn_id);
-    for statement in statements {
-        let candidates = match memory.find_consolidation_candidates(
-            &statement,
-            DEFAULT_MEMORY_LIMIT,
-            unix_timestamp(),
-        ) {
+    process_next_durable_observation(&mut memory, consolidator)?;
+    Ok(())
+}
+
+/// SQLite is the sole enrichment queue.  The in-process wake only asks this
+/// function to drain one eligible record; it never supplies memory content.
+fn process_next_durable_observation<C: MemoryClassifier>(
+    memory: &mut SqliteMemoryStore,
+    consolidator: &mut HybridConsolidator<C>,
+) -> Result<bool, String> {
+    const LEASE_SECONDS: i64 = 60;
+    const RETRY_LIMIT: i64 = 3;
+    let now = unix_timestamp();
+    let Some(lease) = memory
+        .claim_next_observation("desktop-enrichment", now, LEASE_SECONDS)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    let run = ClassificationRun::new(
+        lease.observation_id,
+        "local-consolidator-v1",
+        1,
+        &lease.canonical_input_hash,
+    );
+    let run_id = match memory.begin_classification_run(&lease, &run, now) {
+        Ok(id) => id,
+        Err(error) => return Err(error.to_string()),
+    };
+    let candidates =
+        match memory.find_consolidation_candidates(&lease.user_text, DEFAULT_MEMORY_LIMIT, now) {
             Ok(candidates) => candidates,
             Err(error) => {
-                tracing::warn!(%error, "memory candidate search failed; summary enrichment continues");
-                continue;
+                memory
+                    .retry_or_defer_observation(
+                        &lease,
+                        "candidate search unavailable",
+                        now,
+                        RETRY_LIMIT,
+                        1,
+                    )
+                    .map_err(|error| error.to_string())?;
+                return Err(error.to_string());
             }
         };
-        let action = consolidator.decide(&statement, &candidates);
-        if let Err(error) = memory.apply_action(&action, &source, unix_timestamp()) {
-            tracing::warn!(%error, "memory action rejected; summary enrichment continues");
+    // The classifier may normalize a statement, but promotion keeps the full
+    // accepted source clause.  This makes the persisted candidate replayable
+    // by the typed validator and prevents a model-only paraphrase from being
+    // stored as user evidence.
+    let action = match consolidator.decide(&lease.user_text, &candidates) {
+        pw_application::memory::MemoryAction::Add { pinned, .. } => {
+            pw_application::memory::MemoryAction::Add {
+                content: lease.user_text.clone(),
+                pinned,
+            }
         }
+        pw_application::memory::MemoryAction::Supersede {
+            old_memory_id,
+            pin_replacement,
+            ..
+        } => pw_application::memory::MemoryAction::Supersede {
+            old_memory_id,
+            content: lease.user_text.clone(),
+            pin_replacement,
+        },
+        action => action,
+    };
+    let (operation, relation, expected_revision) = match &action {
+        pw_application::memory::MemoryAction::Ignore => {
+            memory
+                .finish_classification_run(
+                    &lease,
+                    run_id,
+                    ClassificationOutcome::Completed,
+                    0,
+                    Some("no durable candidate"),
+                    now,
+                )
+                .map_err(|error| error.to_string())?;
+            return Ok(true);
+        }
+        pw_application::memory::MemoryAction::Add { .. } => (
+            CandidateOperation::Add,
+            CandidateProvenanceRelation::Originated,
+            None,
+        ),
+        pw_application::memory::MemoryAction::Reinforce { memory_id, .. } => (
+            CandidateOperation::Reinforce,
+            CandidateProvenanceRelation::Reasserted,
+            candidates
+                .iter()
+                .find(|candidate| candidate.id == *memory_id)
+                .and_then(|candidate| candidate.revision),
+        ),
+        pw_application::memory::MemoryAction::Supersede { old_memory_id, .. } => (
+            CandidateOperation::Supersede,
+            CandidateProvenanceRelation::Corrected,
+            candidates
+                .iter()
+                .find(|candidate| candidate.id == *old_memory_id)
+                .and_then(|candidate| candidate.revision),
+        ),
+    };
+    let target_memory_id = match &action {
+        pw_application::memory::MemoryAction::Reinforce { memory_id, .. } => Some(*memory_id),
+        pw_application::memory::MemoryAction::Supersede { old_memory_id, .. } => {
+            Some(*old_memory_id)
+        }
+        _ => None,
+    };
+    let atom = MemoryAtom {
+        id: 0,
+        revision: 1,
+        content: lease.user_text.clone(),
+        subject_scope: SubjectScope::UserSelf,
+        epistemic_form: EpistemicForm::FactClaim,
+        attribution: pw_application::memory::Attribution::User,
+        discourse: DiscourseFeatures {
+            speech_act: SpeechAct::Asserted,
+            source_mode: SourceMode::Direct,
+            polarity: Polarity::Affirmed,
+            conditionality: pw_application::memory::Conditionality::Actual,
+            fictionality: Fictionality::RealWorld,
+        },
+        verification_status: VerificationStatus::UserReported,
+        temporal_scope: TemporalScope::Stable,
+        lifecycle_state: pw_application::memory::MemoryState::Active,
+        source_spans: vec![SourceSpan {
+            source_id: lease.canonical_input_hash.clone(),
+            start: 0,
+            end: lease.user_text.len(),
+        }],
+    };
+    let candidate_id = match memory.persist_candidate(
+        PersistedCandidate {
+            classification_run_id: run_id,
+            ordinal: 0,
+            atom,
+            target_memory_id,
+            expected_target_revision: expected_revision,
+            operation,
+            relation,
+        },
+        now,
+    ) {
+        Ok(id) => id,
+        Err(error) => {
+            memory
+                .finish_classification_run(
+                    &lease,
+                    run_id,
+                    ClassificationOutcome::Rejected,
+                    0,
+                    Some("candidate rejected by safety policy"),
+                    now,
+                )
+                .map_err(|finish| finish.to_string())?;
+            return Err(error.to_string());
+        }
+    };
+    memory
+        .finish_classification_run(
+            &lease,
+            run_id,
+            ClassificationOutcome::Completed,
+            1,
+            None,
+            now,
+        )
+        .map_err(|error| error.to_string())?;
+    let result = memory.promote(
+        &ProvisionalMemoryChangeSet {
+            request_key: run.request_key.clone(),
+            lease,
+            classification_run_id: run_id,
+            classifier_version: run.classifier_version.clone(),
+            schema_version: run.schema_version,
+            input_hash: run.input_hash.clone(),
+            actions: vec![VersionedMemoryAction {
+                action,
+                expected_revision,
+            }],
+            provenance: vec![ProvenanceLink {
+                candidate_id,
+                relation: match relation {
+                    CandidateProvenanceRelation::Originated => "originated",
+                    CandidateProvenanceRelation::Reasserted => "reasserted",
+                    CandidateProvenanceRelation::Corrected => "corrected",
+                    CandidateProvenanceRelation::ChangedStance => "changed_stance",
+                    CandidateProvenanceRelation::Contradicted => "contradicted",
+                }
+                .into(),
+            }],
+        },
+        now,
+    );
+    if let Err(error) = result {
+        tracing::warn!(%error, "durable observation promotion did not complete");
+        return Err(error.to_string());
     }
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -168,6 +348,16 @@ fn process_enrichment_job_with_consolidator<C: MemoryClassifier>(
     );
     let mut memory =
         SqliteMemoryStore::new(Database::open(database_path).map_err(|error| error.to_string())?);
+    // The helper mirrors production: test payloads are first committed to the
+    // durable queue and are never consumed directly by promotion.
+    memory
+        .insert_observation(NewObservation::new(
+            DEFAULT_CONVERSATION_ID,
+            job.turn_id,
+            &job.user_text,
+            unix_timestamp(),
+        ))
+        .map_err(|error| error.to_string())?;
     process_enrichment_actions(database_path, job, consolidator)?;
     drain_rolling_summary_pass(&history, &mut memory)
 }
@@ -382,7 +572,29 @@ fn run_enrichment_until_cancelled(
     mut consolidator: HybridConsolidator<Box<dyn MemoryClassifier>>,
     cancel: Arc<AtomicBool>,
 ) {
-    let mut follow_up_due = None;
+    // A process restart must not leave a pending response outcome looking
+    // live.  Expired leases are reclaimed by the claim query; active leases
+    // remain fenced until they expire.
+    match Database::open(database_path).map(SqliteMemoryStore::new) {
+        Ok(mut store) => {
+            if let Err(error) = store.recover_interrupted_observations(unix_timestamp()) {
+                tracing::warn!(%error, "observation startup recovery failed; worker remains available");
+            }
+        }
+        Err(error) => {
+            tracing::warn!(%error, "observation startup database unavailable; worker remains available")
+        }
+    }
+    // Bootstrap a drain after restart.  This marker contains no user data and
+    // is only a coalescible request to read SQLite.
+    pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .replace(vec![EnrichmentJob {
+            user_text: String::new(),
+            turn_id: 0,
+        }]);
+    let mut follow_up_due = Some(std::time::Instant::now());
     loop {
         if cancel.load(Ordering::Acquire) {
             break;
@@ -420,10 +632,19 @@ fn run_enrichment_until_cancelled(
             *pending = remaining;
             (jobs, jobs_remaining)
         };
-        for job in jobs {
+        let mut durable_processed = false;
+        for _job in jobs {
             metrics.dequeued();
-            if let Err(error) = process_enrichment_actions(database_path, &job, &mut consolidator) {
-                tracing::warn!(%error, "memory enrichment job failed; worker remains available");
+            match Database::open(database_path)
+                .map(SqliteMemoryStore::new)
+                .map_err(|error| error.to_string())
+                .and_then(|mut store| {
+                    process_next_durable_observation(&mut store, &mut consolidator)
+                }) {
+                Ok(processed) => durable_processed |= processed,
+                Err(error) => {
+                    tracing::warn!(%error, "memory enrichment job failed; worker remains available");
+                }
             }
         }
         let summary_remaining = if cancel.load(Ordering::Acquire) {
@@ -437,7 +658,23 @@ fn run_enrichment_until_cancelled(
                 }
             }
         };
-        if (jobs_remaining || summary_remaining) && !cancel.load(Ordering::Acquire) {
+        if durable_processed {
+            // Keep draining the durable queue in bounded slices.  This is a
+            // marker only; the next iteration re-claims SQLite and cannot
+            // resurrect any in-memory user payload.
+            let mut pending = pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if pending.is_none() {
+                *pending = Some(vec![EnrichmentJob {
+                    user_text: String::new(),
+                    turn_id: 0,
+                }]);
+            }
+        }
+        if (jobs_remaining || summary_remaining || durable_processed)
+            && !cancel.load(Ordering::Acquire)
+        {
             follow_up_due = Some(std::time::Instant::now() + ENRICHMENT_FOLLOWUP_DELAY);
         } else if Arc::strong_count(&wake) == 1 {
             break;
@@ -635,11 +872,14 @@ impl<E, H> PersistentConversationEvents<E, H> {
         }
     }
 
-    fn record_observation(&self, turn: TurnId, text: &str) {
+    /// Returns true only after the durable queue record committed.  The caller
+    /// may then send a lossy wake; it must never wake a worker for data that
+    /// failed to reach SQLite.
+    fn record_observation(&self, turn: TurnId, text: &str) -> bool {
         let Some(path) = &self.observation_database_path else {
-            return;
+            return false;
         };
-        let result = Database::open(path)
+        let result = Database::open_with_busy_timeout(path, OBSERVATION_EVENT_BUSY_TIMEOUT)
             .map(SqliteMemoryStore::new)
             .map_err(|error| PortError(error.to_string()))
             .and_then(|mut store| {
@@ -654,6 +894,9 @@ impl<E, H> PersistentConversationEvents<E, H> {
             });
         if let Err(error) = result {
             tracing::warn!(%error, "memory observation persistence failed; conversation remains available");
+            false
+        } else {
+            true
         }
     }
 
@@ -661,7 +904,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
         let Some(path) = &self.observation_database_path else {
             return;
         };
-        let result = Database::open(path)
+        let result = Database::open_with_busy_timeout(path, OBSERVATION_EVENT_BUSY_TIMEOUT)
             .map(SqliteMemoryStore::new)
             .map_err(|error| PortError(error.to_string()))
             .and_then(|mut store| {
@@ -725,8 +968,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             }
         }
         pending.insert(turn, (text.to_owned(), None));
-        self.record_observation(turn, text);
-        if let Some(enrichment) = &self.enrichment
+        let observation_committed = self.record_observation(turn, text);
+        if observation_committed
+            && let Some(enrichment) = &self.enrichment
             && enrichment
                 .replace_latest(EnrichmentJob {
                     user_text: text.to_owned(),
@@ -3318,7 +3562,7 @@ mod tests {
             history,
             DEFAULT_CONVERSATION_ID,
             Some(sender),
-            None,
+            Some(path.clone()),
         );
         let mut tracker = TurnTracker::new();
         for assistant in ["覚えました", "もう一度覚えました"] {

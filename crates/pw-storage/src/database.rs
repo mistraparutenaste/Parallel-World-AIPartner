@@ -17,7 +17,9 @@ const MESSAGES_ID_CURSOR_MIGRATION: &str =
 const MEMORY_TYPED_MIGRATION: &str = include_str!("../migrations/0009_typed_memory.sql");
 const MEMORY_OBSERVATION_LEDGER_MIGRATION: &str =
     include_str!("../migrations/0010_memory_observation_ledger.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 10;
+const OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION: &str =
+    include_str!("../migrations/0011_observation_recovery_and_privacy.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -52,7 +54,17 @@ impl Database {
     /// migration fails, or the bundled `SQLite` is too old for safe WAL use.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StorageError> {
         let connection = Connection::open(path)?;
-        Self::configure(connection, true)
+        Self::configure(connection, true, Duration::from_secs(5))
+    }
+
+    /// Opens the durable database with a bounded lock wait.  Event paths use
+    /// this fail-open variant so a competing writer never delays chat start.
+    pub fn open_with_busy_timeout(
+        path: impl AsRef<Path>,
+        busy_timeout: Duration,
+    ) -> Result<Self, StorageError> {
+        let connection = Connection::open(path)?;
+        Self::configure(connection, true, busy_timeout)
     }
 
     /// Opens a migrated in-memory database for tests and ephemeral work.
@@ -63,16 +75,20 @@ impl Database {
     /// or when the bundled `SQLite` version is unsupported.
     pub fn open_in_memory() -> Result<Self, StorageError> {
         let connection = Connection::open_in_memory()?;
-        Self::configure(connection, false)
+        Self::configure(connection, false, Duration::from_secs(5))
     }
 
-    fn configure(mut connection: Connection, enable_wal: bool) -> Result<Self, StorageError> {
+    fn configure(
+        mut connection: Connection,
+        enable_wal: bool,
+        busy_timeout: Duration,
+    ) -> Result<Self, StorageError> {
         let version = rusqlite::version().to_owned();
         if rusqlite::version_number() < 3_051_003 {
             return Err(StorageError::UnsupportedSqlite { found: version });
         }
         connection.pragma_update(None, "foreign_keys", true)?;
-        connection.busy_timeout(Duration::from_secs(5))?;
+        connection.busy_timeout(busy_timeout)?;
         if enable_wal {
             connection.pragma_update(None, "journal_mode", "WAL")?;
         }
@@ -152,6 +168,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 10)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 11 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 11)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -225,7 +248,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
 
         for table in [
@@ -254,13 +277,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 11).unwrap();
+        connection.pragma_update(None, "user_version", 12).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 11,
-                supported: 10
+                found: 12,
+                supported: 11
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -288,7 +311,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
 
         drop(reopened);
@@ -329,7 +352,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -453,7 +476,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -497,7 +520,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 10);
+        assert_eq!(version, 11);
         let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
@@ -537,7 +560,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);

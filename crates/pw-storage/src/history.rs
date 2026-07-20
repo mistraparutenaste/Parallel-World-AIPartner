@@ -351,6 +351,25 @@ impl ConversationHistory for SqliteConversationHistory {
             .optional()
             .map_err(adapter_error)?
             .is_some();
+        // History deletion is also a privacy boundary for the observation
+        // ledger.  Keep only content-free tombstones so a late worker lease
+        // cannot promote raw text after the user deleted the conversation.
+        transaction.execute(
+            "UPDATE memory_observations SET deletion_generation=deletion_generation+1,user_text='[deleted]',input_hash='tombstone:' || id,processing_state='deferred',lease_owner=NULL,lease_expires_at=NULL,attempt_token=NULL,retry_after_at=NULL,last_error='history deleted',deleted_at=CAST(strftime('%s','now') AS INTEGER),updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE conversation_id=?1 AND deleted_at IS NULL",
+            [conversation_id],
+        ).map_err(adapter_error)?;
+        transaction.execute(
+            "UPDATE memory_candidates SET content='[deleted]',candidate_state='rejected',rejection_reason='history deleted',updated_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE conversation_id=?1)",
+            [conversation_id],
+        ).map_err(adapter_error)?;
+        transaction.execute(
+            "UPDATE memory_provenance SET tombstoned_at=CAST(strftime('%s','now') AS INTEGER) WHERE observation_id IN (SELECT id FROM memory_observations WHERE conversation_id=?1)",
+            [conversation_id],
+        ).map_err(adapter_error)?;
+        transaction.execute(
+            "DELETE FROM memories WHERE pinned=0 AND id IN (SELECT memory_id FROM memory_provenance WHERE observation_id IN (SELECT id FROM memory_observations WHERE conversation_id=?1)) AND NOT EXISTS (SELECT 1 FROM memory_provenance p JOIN memory_observations o ON o.id=p.observation_id WHERE p.memory_id=memories.id AND o.deleted_at IS NULL)",
+            [conversation_id],
+        ).map_err(adapter_error)?;
         transaction
             .execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])
             .map_err(adapter_error)?;

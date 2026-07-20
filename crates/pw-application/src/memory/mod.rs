@@ -27,9 +27,9 @@ pub use lifecycle::{
     MemoryState, memory_strength, prompt_rank, should_become_dormant,
 };
 pub use observation::{
-    CandidateOperation, CandidateProvenanceRelation, ClassificationRun, NewObservation,
-    ObservationLease, ObservationOutcome, ObservationStore, PersistedCandidate, ProcessingState,
-    input_hash, request_key,
+    CandidateOperation, CandidateProvenanceRelation, ClassificationOutcome, ClassificationRun,
+    NewObservation, ObservationLease, ObservationOutcome, ObservationStore, PersistedCandidate,
+    ProcessingState, input_hash, request_key,
 };
 pub use promotion::{
     MemoryPromoter, PromotionResult, ProvenanceLink, ProvisionalMemoryChangeSet,
@@ -37,4 +37,5 @@ pub use promotion::{
 };
 pub use validator::{
     CandidateRelation, NormalizationEdit, TypedCandidate, ValidationError, validate_candidate,
+    validate_candidate_for_source,
 };
