@@ -2419,6 +2419,7 @@ mod tests {
     fn unavailable_classifier_uses_only_exact_match_fallback() {
         let candidate = MemoryCandidate {
             id: 7,
+            revision: Some(1),
             content: "私は猫が好きです".into(),
             state: MemoryState::Active,
             pinned: false,
@@ -3202,6 +3203,7 @@ mod tests {
     fn candidate(id: i64, content: impl Into<String>) -> MemoryCandidate {
         MemoryCandidate {
             id,
+            revision: Some(1),
             content: content.into(),
             state: MemoryState::Active,
             pinned: false,

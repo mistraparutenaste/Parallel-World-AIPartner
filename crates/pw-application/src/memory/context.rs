@@ -1,4 +1,4 @@
-use super::{MemoryAction, MemoryCandidate};
+use super::{MemoryAction, MemoryAtom, MemoryCandidate};
 use crate::PortError;
 use crate::conversation::{ChatMessage, ChatRole};
 use serde::{Deserialize, Serialize};
@@ -121,6 +121,19 @@ pub trait MemoryStore {
         updated_at: i64,
     ) -> Result<i64, PortError>;
     fn update_memory(&mut self, id: i64, content: &str, updated_at: i64) -> Result<(), PortError>;
+    /// Loads the typed projection without treating legacy rows as user-attributed facts.
+    fn load_memory_atom(&self, _id: i64) -> Result<Option<MemoryAtom>, PortError> {
+        Ok(None)
+    }
+    /// Applies a typed projection only if its observed revision is still current.
+    fn update_memory_atom_cas(
+        &mut self,
+        _atom: &MemoryAtom,
+        _expected_revision: i64,
+        _updated_at: i64,
+    ) -> Result<MemoryAtom, PortError> {
+        Err(PortError("typed memory updates unsupported".into()))
+    }
     fn delete_memory(&mut self, id: i64) -> Result<(), PortError>;
     fn delete_summary(&mut self, conversation_id: &str) -> Result<(), PortError>;
     fn search(&self, query: &str, limit: usize) -> Result<Vec<MemoryRecord>, PortError>;

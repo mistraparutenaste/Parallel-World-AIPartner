@@ -2,7 +2,9 @@
 
 mod consolidation;
 mod context;
+pub mod epistemic;
 mod lifecycle;
+mod validator;
 
 pub use consolidation::{
     HybridConsolidator, LlmMemoryClassifier, MemoryClassifier, ProposedAction,
@@ -14,7 +16,14 @@ pub use context::{
     StoredSummary, SummaryEntry, SummaryGenerator, SummaryWorker, is_role_preserving_summary,
     is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
 };
+pub use epistemic::{
+    Attribution, Conditionality, DiscourseFeatures, EpistemicForm, Fictionality, MemoryAtom,
+    Polarity, SourceMode, SourceSpan, SpeechAct, SubjectScope, TemporalScope, VerificationStatus,
+};
 pub use lifecycle::{
     DORMANT_DELETE_AFTER_SECONDS, EvidenceKind, MemoryAction, MemoryCandidate, MemoryEvidence,
     MemoryState, memory_strength, prompt_rank, should_become_dormant,
+};
+pub use validator::{
+    CandidateRelation, NormalizationEdit, TypedCandidate, ValidationError, validate_candidate,
 };

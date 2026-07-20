@@ -27,6 +27,8 @@ pub struct MemoryEvidence {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemoryCandidate {
     pub id: i64,
+    /// `None` is reserved for adapters that cannot prove a current row revision.
+    pub revision: Option<i64>,
     pub content: String,
     pub state: MemoryState,
     pub pinned: bool,

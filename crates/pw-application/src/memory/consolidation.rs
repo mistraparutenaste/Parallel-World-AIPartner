@@ -292,6 +292,7 @@ mod tests {
     fn candidate(id: i64, content: &str) -> MemoryCandidate {
         MemoryCandidate {
             id,
+            revision: Some(1),
             content: content.into(),
             state: MemoryState::Active,
             pinned: false,

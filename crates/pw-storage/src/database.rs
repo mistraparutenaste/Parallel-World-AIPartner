@@ -14,7 +14,8 @@ const MEMORY_UNIQUE_MIGRATION: &str = include_str!("../migrations/0006_memory_co
 const MEMORY_LIFECYCLE_MIGRATION: &str = include_str!("../migrations/0007_memory_lifecycle.sql");
 const MESSAGES_ID_CURSOR_MIGRATION: &str =
     include_str!("../migrations/0008_messages_id_cursor.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 8;
+const MEMORY_TYPED_MIGRATION: &str = include_str!("../migrations/0009_typed_memory.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -135,6 +136,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 8)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 9 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_TYPED_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 9)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -154,7 +162,8 @@ mod tests {
 
     use super::{
         DETACHED_TURN_SEQUENCE_MIGRATION, Database, INITIAL_MIGRATION, MEMORY_FTS_MIGRATION,
-        MEMORY_UNIQUE_MIGRATION, TURN_IDENTITY_MIGRATION, TURN_SEQUENCE_MIGRATION,
+        MEMORY_LIFECYCLE_MIGRATION, MEMORY_UNIQUE_MIGRATION, TURN_IDENTITY_MIGRATION,
+        TURN_SEQUENCE_MIGRATION,
     };
 
     #[test]
@@ -207,7 +216,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            8
+            9
         );
 
         for table in [
@@ -231,13 +240,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 9).unwrap();
+        connection.pragma_update(None, "user_version", 10).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 9,
-                supported: 8
+                found: 10,
+                supported: 9
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -265,7 +274,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            8
+            9
         );
 
         drop(reopened);
@@ -306,7 +315,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            8
+            9
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -430,26 +439,31 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            8
+            9
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn v8_upgrade_adds_the_message_id_cursor_index() {
+    fn v9_upgrade_keeps_message_cursor_and_adds_typed_legacy_defaults() {
         let path =
             std::env::temp_dir().join(format!("pw-v8-id-cursor-{}.sqlite3", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        drop(Database::open(&path).unwrap());
         {
             let connection = rusqlite::Connection::open(&path).unwrap();
-            connection
-                .execute_batch(
-                    "DROP INDEX messages_conversation_id_cursor;
-                     PRAGMA user_version=7;",
-                )
-                .unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+                MEMORY_LIFECYCLE_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.execute_batch("INSERT INTO memories(content,created_at,updated_at,state,pinned,mention_count,last_seen_at) VALUES('legacy typed projection',1,1,'active',0,1,1); PRAGMA user_version=7;").unwrap();
         }
 
         let database = Database::open(&path).unwrap();
@@ -469,8 +483,35 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
+        let typed: (i64, String, String, String, String) = database
+            .connection()
+            .query_row(
+                "SELECT revision,subject_scope,epistemic_form,attribution,source_mode FROM memories WHERE content='legacy typed projection'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            typed,
+            (
+                1,
+                "legacy_unknown".into(),
+                "legacy_untyped".into(),
+                "unknown".into(),
+                "reported".into()
+            )
+        );
         drop(database);
+        let reopened = Database::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .connection()
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            9
+        );
+        drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 }

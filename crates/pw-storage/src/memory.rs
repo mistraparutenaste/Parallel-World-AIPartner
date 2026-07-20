@@ -1,8 +1,10 @@
 use crate::Database;
 use pw_application::PortError;
 use pw_application::memory::{
-    DORMANT_DELETE_AFTER_SECONDS, EvidenceKind, EvidenceSource, MaintenanceReport, MemoryAction,
-    MemoryCandidate, MemoryEvidence, MemoryRecord, MemoryState, MemoryStore, StoredSummary,
+    Attribution, Conditionality, DORMANT_DELETE_AFTER_SECONDS, DiscourseFeatures, EpistemicForm,
+    EvidenceKind, EvidenceSource, Fictionality, MaintenanceReport, MemoryAction, MemoryAtom,
+    MemoryCandidate, MemoryEvidence, MemoryRecord, MemoryState, MemoryStore, Polarity, SourceMode,
+    SpeechAct, StoredSummary, SubjectScope, TemporalScope, VerificationStatus,
     is_safe_persistent_content, memory_strength, prompt_rank, should_become_dormant,
 };
 use std::collections::HashSet;
@@ -55,9 +57,9 @@ impl SqliteMemoryStore {
                 .replace('_', "\\_");
             let pattern = format!("%{escaped}%");
             let sql = if active_only {
-                "SELECT id,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE state='active' AND content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
+                "SELECT id,revision,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE state='active' AND content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
             } else {
-                "SELECT id,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
+                "SELECT id,revision,content,state,pinned,mention_count,last_seen_at,0.0 FROM memories WHERE content LIKE ?1 ESCAPE '\\' ORDER BY updated_at DESC,id DESC LIMIT ?2"
             };
             query_candidate_rows(self.database.connection(), sql, &pattern, limit)?
         } else {
@@ -65,9 +67,9 @@ impl SqliteMemoryStore {
                 return Ok(Vec::new());
             };
             let sql = if active_only {
-                "SELECT m.id,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 AND m.state='active' ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
+                "SELECT m.id,m.revision,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 AND m.state='active' ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
             } else {
-                "SELECT m.id,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
+                "SELECT m.id,m.revision,m.content,m.state,m.pinned,m.mention_count,m.last_seen_at,bm25(memories_fts) FROM memories_fts f JOIN memories m ON m.id=f.rowid WHERE memories_fts MATCH ?1 ORDER BY bm25(memories_fts),m.updated_at DESC LIMIT ?2"
             };
             query_candidate_rows(self.database.connection(), sql, &phrase, limit)?
         };
@@ -90,6 +92,7 @@ impl SqliteMemoryStore {
             };
             candidates.push(MemoryCandidate {
                 id: row.id,
+                revision: Some(row.revision),
                 content: row.content,
                 state: parse_state(&row.state)?,
                 pinned: row.pinned,
@@ -166,6 +169,7 @@ fn fts_disjunction(query: &str) -> Option<String> {
 
 struct CandidateRow {
     id: i64,
+    revision: i64,
     content: String,
     state: String,
     pinned: bool,
@@ -187,12 +191,13 @@ fn query_candidate_rows(
         .query_map(params![query, limit], |row| {
             Ok(CandidateRow {
                 id: row.get(0)?,
-                content: row.get(1)?,
-                state: row.get(2)?,
-                pinned: row.get(3)?,
-                mention_count: row.get(4)?,
-                last_seen_at: row.get(5)?,
-                bm25: row.get(6)?,
+                revision: row.get(1)?,
+                content: row.get(2)?,
+                state: row.get(3)?,
+                pinned: row.get(4)?,
+                mention_count: row.get(5)?,
+                last_seen_at: row.get(6)?,
+                bm25: row.get(7)?,
             })
         })
         .map_err(|error| PortError(error.to_string()))?
@@ -206,6 +211,180 @@ fn parse_state(state: &str) -> Result<MemoryState, PortError> {
         "dormant" => Ok(MemoryState::Dormant),
         "superseded" => Ok(MemoryState::Superseded),
         value => Err(PortError(format!("unknown memory state: {value}"))),
+    }
+}
+
+fn parse_subject_scope(value: &str) -> Result<SubjectScope, PortError> {
+    match value {
+        "user_self" => Ok(SubjectScope::UserSelf),
+        "external_world" => Ok(SubjectScope::ExternalWorld),
+        "other_person" => Ok(SubjectScope::OtherPerson),
+        "fictional_subject" => Ok(SubjectScope::FictionalSubject),
+        "legacy_unknown" => Ok(SubjectScope::LegacyUnknown),
+        _ => Err(PortError(format!("unknown subject scope: {value}"))),
+    }
+}
+fn parse_epistemic_form(value: &str) -> Result<EpistemicForm, PortError> {
+    match value {
+        "fact_claim" => Ok(EpistemicForm::FactClaim),
+        "belief" => Ok(EpistemicForm::Belief),
+        "impression" => Ok(EpistemicForm::Impression),
+        "prediction_or_hunch" => Ok(EpistemicForm::PredictionOrHunch),
+        "metaphor" => Ok(EpistemicForm::Metaphor),
+        "emotion" => Ok(EpistemicForm::Emotion),
+        "legacy_untyped" => Ok(EpistemicForm::LegacyUntyped),
+        _ => Err(PortError(format!("unknown epistemic form: {value}"))),
+    }
+}
+fn parse_attribution(value: &str) -> Result<Attribution, PortError> {
+    match value {
+        "user" => Ok(Attribution::User),
+        "assistant" => Ok(Attribution::Assistant),
+        "named_third_party" => Ok(Attribution::NamedThirdParty),
+        "external_source" => Ok(Attribution::ExternalSource),
+        "unknown" => Ok(Attribution::Unknown),
+        _ => Err(PortError(format!("unknown attribution: {value}"))),
+    }
+}
+fn parse_speech_act(value: &str) -> Result<SpeechAct, PortError> {
+    match value {
+        "asserted" => Ok(SpeechAct::Asserted),
+        "questioned" => Ok(SpeechAct::Questioned),
+        _ => Err(PortError(format!("unknown speech act: {value}"))),
+    }
+}
+fn parse_source_mode(value: &str) -> Result<SourceMode, PortError> {
+    match value {
+        "direct" => Ok(SourceMode::Direct),
+        "reported" => Ok(SourceMode::Reported),
+        "quoted" => Ok(SourceMode::Quoted),
+        _ => Err(PortError(format!("unknown source mode: {value}"))),
+    }
+}
+fn parse_polarity(value: &str) -> Result<Polarity, PortError> {
+    match value {
+        "affirmed" => Ok(Polarity::Affirmed),
+        "negated" => Ok(Polarity::Negated),
+        _ => Err(PortError(format!("unknown polarity: {value}"))),
+    }
+}
+fn parse_conditionality(value: &str) -> Result<Conditionality, PortError> {
+    match value {
+        "actual" => Ok(Conditionality::Actual),
+        "hypothetical" => Ok(Conditionality::Hypothetical),
+        _ => Err(PortError(format!("unknown conditionality: {value}"))),
+    }
+}
+fn parse_fictionality(value: &str) -> Result<Fictionality, PortError> {
+    match value {
+        "real_world" => Ok(Fictionality::RealWorld),
+        "fictional" => Ok(Fictionality::Fictional),
+        "unknown" => Ok(Fictionality::Unknown),
+        _ => Err(PortError(format!("unknown fictionality: {value}"))),
+    }
+}
+fn parse_verification_status(value: &str) -> Result<VerificationStatus, PortError> {
+    match value {
+        "not_applicable" => Ok(VerificationStatus::NotApplicable),
+        "user_reported" => Ok(VerificationStatus::UserReported),
+        "unverified_external_claim" => Ok(VerificationStatus::UnverifiedExternalClaim),
+        "externally_corroborated" => Ok(VerificationStatus::ExternallyCorroborated),
+        "externally_contradicted" => Ok(VerificationStatus::ExternallyContradicted),
+        "disputed" => Ok(VerificationStatus::Disputed),
+        "unknown" => Ok(VerificationStatus::Unknown),
+        _ => Err(PortError(format!("unknown verification status: {value}"))),
+    }
+}
+fn parse_temporal_scope(value: &str) -> Result<TemporalScope, PortError> {
+    match value {
+        "stable" => Ok(TemporalScope::Stable),
+        "current" => Ok(TemporalScope::Current),
+        "past" => Ok(TemporalScope::Past),
+        "future" => Ok(TemporalScope::Future),
+        "unknown" => Ok(TemporalScope::Unknown),
+        _ => Err(PortError(format!("unknown temporal scope: {value}"))),
+    }
+}
+
+fn encode_subject_scope(value: SubjectScope) -> &'static str {
+    match value {
+        SubjectScope::UserSelf => "user_self",
+        SubjectScope::ExternalWorld => "external_world",
+        SubjectScope::OtherPerson => "other_person",
+        SubjectScope::FictionalSubject => "fictional_subject",
+        SubjectScope::LegacyUnknown => "legacy_unknown",
+    }
+}
+fn encode_epistemic_form(value: EpistemicForm) -> &'static str {
+    match value {
+        EpistemicForm::FactClaim => "fact_claim",
+        EpistemicForm::Belief => "belief",
+        EpistemicForm::Impression => "impression",
+        EpistemicForm::PredictionOrHunch => "prediction_or_hunch",
+        EpistemicForm::Metaphor => "metaphor",
+        EpistemicForm::Emotion => "emotion",
+        EpistemicForm::LegacyUntyped => "legacy_untyped",
+    }
+}
+fn encode_attribution(value: Attribution) -> &'static str {
+    match value {
+        Attribution::User => "user",
+        Attribution::Assistant => "assistant",
+        Attribution::NamedThirdParty => "named_third_party",
+        Attribution::ExternalSource => "external_source",
+        Attribution::Unknown => "unknown",
+    }
+}
+fn encode_speech_act(value: SpeechAct) -> &'static str {
+    match value {
+        SpeechAct::Asserted => "asserted",
+        SpeechAct::Questioned => "questioned",
+    }
+}
+fn encode_source_mode(value: SourceMode) -> &'static str {
+    match value {
+        SourceMode::Direct => "direct",
+        SourceMode::Reported => "reported",
+        SourceMode::Quoted => "quoted",
+    }
+}
+fn encode_polarity(value: Polarity) -> &'static str {
+    match value {
+        Polarity::Affirmed => "affirmed",
+        Polarity::Negated => "negated",
+    }
+}
+fn encode_conditionality(value: Conditionality) -> &'static str {
+    match value {
+        Conditionality::Actual => "actual",
+        Conditionality::Hypothetical => "hypothetical",
+    }
+}
+fn encode_fictionality(value: Fictionality) -> &'static str {
+    match value {
+        Fictionality::RealWorld => "real_world",
+        Fictionality::Fictional => "fictional",
+        Fictionality::Unknown => "unknown",
+    }
+}
+fn encode_verification_status(value: VerificationStatus) -> &'static str {
+    match value {
+        VerificationStatus::NotApplicable => "not_applicable",
+        VerificationStatus::UserReported => "user_reported",
+        VerificationStatus::UnverifiedExternalClaim => "unverified_external_claim",
+        VerificationStatus::ExternallyCorroborated => "externally_corroborated",
+        VerificationStatus::ExternallyContradicted => "externally_contradicted",
+        VerificationStatus::Disputed => "disputed",
+        VerificationStatus::Unknown => "unknown",
+    }
+}
+fn encode_temporal_scope(value: TemporalScope) -> &'static str {
+    match value {
+        TemporalScope::Stable => "stable",
+        TemporalScope::Current => "current",
+        TemporalScope::Past => "past",
+        TemporalScope::Future => "future",
+        TemporalScope::Unknown => "unknown",
     }
 }
 
@@ -396,7 +575,7 @@ fn apply_reinforce(
     }
     transaction
         .execute(
-            "UPDATE memories SET mention_count=mention_count+?1,last_seen_at=MAX(last_seen_at,?2),updated_at=MAX(updated_at,?2),pinned=CASE WHEN state!='superseded' AND ?3 THEN 1 ELSE pinned END,state_changed_at=CASE WHEN state='dormant' THEN NULL ELSE state_changed_at END,state=CASE WHEN state='dormant' THEN 'active' ELSE state END WHERE id=?4",
+            "UPDATE memories SET revision=revision+1,mention_count=mention_count+?1,last_seen_at=MAX(last_seen_at,?2),updated_at=MAX(updated_at,?2),pinned=CASE WHEN state!='superseded' AND ?3 THEN 1 ELSE pinned END,state_changed_at=CASE WHEN state='dormant' THEN NULL ELSE state_changed_at END,state=CASE WHEN state='dormant' THEN 'active' ELSE state END WHERE id=?4",
             params![1, now, pin, memory_id],
         )
         .map_err(|error| PortError(error.to_string()))?;
@@ -418,7 +597,7 @@ fn apply_supersede(
     let replacement_id = create_memory(transaction, content, pin_replacement, source, now)?;
     transaction
         .execute(
-            "UPDATE memories SET state='superseded',pinned=0,state_changed_at=MAX(COALESCE(state_changed_at,updated_at,?1),updated_at,?1),superseded_by=?2,updated_at=MAX(updated_at,?1) WHERE id=?3",
+            "UPDATE memories SET revision=revision+1,state='superseded',pinned=0,state_changed_at=MAX(COALESCE(state_changed_at,updated_at,?1),updated_at,?1),superseded_by=?2,updated_at=MAX(updated_at,?1) WHERE id=?3",
             params![now, replacement_id, old_memory_id],
         )
         .map_err(|error| PortError(error.to_string()))?;
@@ -470,11 +649,92 @@ impl MemoryStore for SqliteMemoryStore {
         self.database
             .connection()
             .execute(
-                "UPDATE memories SET content=?1,updated_at=?2 WHERE id=?3",
+                "UPDATE memories SET revision=revision+1,content=?1,updated_at=?2 WHERE id=?3",
                 params![content, updated_at, id],
             )
             .map(|_| ())
             .map_err(|e| PortError(e.to_string()))
+    }
+    fn load_memory_atom(&self, id: i64) -> Result<Option<MemoryAtom>, PortError> {
+        let values = self.database.connection().query_row(
+            "SELECT id,revision,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,state FROM memories WHERE id=?1",
+            [id],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?, row.get::<_, String>(12)?, row.get::<_, String>(13)?)),
+        ).optional().map_err(|error| PortError(error.to_string()))?;
+        values
+            .map(
+                |(
+                    id,
+                    revision,
+                    content,
+                    subject_scope,
+                    epistemic_form,
+                    attribution,
+                    speech_act,
+                    source_mode,
+                    polarity,
+                    conditionality,
+                    fictionality,
+                    verification_status,
+                    temporal_scope,
+                    state,
+                )| {
+                    Ok(MemoryAtom {
+                        id,
+                        revision,
+                        content,
+                        subject_scope: parse_subject_scope(&subject_scope)?,
+                        epistemic_form: parse_epistemic_form(&epistemic_form)?,
+                        attribution: parse_attribution(&attribution)?,
+                        discourse: DiscourseFeatures {
+                            speech_act: parse_speech_act(&speech_act)?,
+                            source_mode: parse_source_mode(&source_mode)?,
+                            polarity: parse_polarity(&polarity)?,
+                            conditionality: parse_conditionality(&conditionality)?,
+                            fictionality: parse_fictionality(&fictionality)?,
+                        },
+                        verification_status: parse_verification_status(&verification_status)?,
+                        temporal_scope: parse_temporal_scope(&temporal_scope)?,
+                        lifecycle_state: parse_state(&state)?,
+                        source_spans: Vec::new(),
+                    })
+                },
+            )
+            .transpose()
+    }
+    fn update_memory_atom_cas(
+        &mut self,
+        atom: &MemoryAtom,
+        expected_revision: i64,
+        updated_at: i64,
+    ) -> Result<MemoryAtom, PortError> {
+        if !is_safe_persistent_content(&atom.content) {
+            return Err(PortError(
+                "refusing to persist secret-shaped memory content".into(),
+            ));
+        }
+        if atom.attribution == Attribution::Assistant {
+            return Err(PortError(
+                "assistant-attributed memory cannot enter the long-term projection".into(),
+            ));
+        }
+        let state = match atom.lifecycle_state {
+            MemoryState::Active => "active",
+            MemoryState::Dormant => "dormant",
+            MemoryState::Superseded => "superseded",
+        };
+        let changed = self.database.connection().execute(
+            "UPDATE memories SET revision=revision+1,content=?1,updated_at=?2,subject_scope=?3,epistemic_form=?4,attribution=?5,speech_act=?6,source_mode=?7,polarity=?8,conditionality=?9,fictionality=?10,verification_status=?11,temporal_scope=?12,state=?13 WHERE id=?14 AND revision=?15",
+            params![atom.content, updated_at, encode_subject_scope(atom.subject_scope), encode_epistemic_form(atom.epistemic_form), encode_attribution(atom.attribution), encode_speech_act(atom.discourse.speech_act), encode_source_mode(atom.discourse.source_mode), encode_polarity(atom.discourse.polarity), encode_conditionality(atom.discourse.conditionality), encode_fictionality(atom.discourse.fictionality), encode_verification_status(atom.verification_status), encode_temporal_scope(atom.temporal_scope), state, atom.id, expected_revision],
+        ).map_err(|error| PortError(error.to_string()))?;
+        if changed != 1 {
+            return Err(PortError(format!(
+                "stale memory target {} at revision {expected_revision}",
+                atom.id
+            )));
+        }
+        self.load_memory_atom(atom.id)?
+            .ok_or_else(|| PortError(format!("memory {} disappeared after CAS update", atom.id)))
     }
     fn delete_memory(&mut self, id: i64) -> Result<(), PortError> {
         self.database
@@ -659,7 +919,7 @@ impl MemoryStore for SqliteMemoryStore {
             if should_become_dormant(&evidence, now) {
                 dormant += transaction
                     .execute(
-                        "UPDATE memories SET state='dormant',state_changed_at=?1,updated_at=MAX(updated_at,?1) WHERE id=?2 AND state='active' AND pinned=0",
+                        "UPDATE memories SET revision=revision+1,state='dormant',state_changed_at=?1,updated_at=MAX(updated_at,?1) WHERE id=?2 AND state='active' AND pinned=0",
                         params![now, id],
                     )
                     .map_err(|error| PortError(error.to_string()))?;
@@ -712,8 +972,8 @@ mod tests {
     use super::SqliteMemoryStore;
     use crate::Database;
     use pw_application::memory::{
-        DORMANT_DELETE_AFTER_SECONDS, EvidenceSource, MemoryAction, MemoryState, MemoryStore,
-        prompt_rank,
+        Attribution, DORMANT_DELETE_AFTER_SECONDS, EpistemicForm, EvidenceSource, MemoryAction,
+        MemoryState, MemoryStore, SubjectScope, VerificationStatus, prompt_rank,
     };
 
     #[test]
@@ -745,6 +1005,29 @@ mod tests {
         assert_eq!(store.search("コーヒー", 10).unwrap().len(), 1);
         store.delete_memory(id).unwrap();
         assert!(store.search("コーヒー", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn typed_projection_round_trips_and_rejects_stale_cas() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let id = store.upsert_memory(None, "typed projection", 1).unwrap();
+        let mut atom = store.load_memory_atom(id).unwrap().unwrap();
+        assert_eq!(atom.revision, 1);
+        assert_eq!(atom.subject_scope, SubjectScope::LegacyUnknown);
+        atom.subject_scope = SubjectScope::UserSelf;
+        atom.epistemic_form = EpistemicForm::Belief;
+        atom.attribution = Attribution::User;
+        atom.verification_status = VerificationStatus::UserReported;
+        atom.content = "typed projection updated".into();
+        let updated = store.update_memory_atom_cas(&atom, 1, 2).unwrap();
+        assert_eq!(updated.revision, 2);
+        assert_eq!(updated.subject_scope, SubjectScope::UserSelf);
+        assert_eq!(updated.epistemic_form, EpistemicForm::Belief);
+        assert!(store.update_memory_atom_cas(&atom, 1, 3).is_err());
+        assert_eq!(
+            store.search("updated", 10).unwrap()[0].content,
+            "typed projection updated"
+        );
     }
 
     #[test]
