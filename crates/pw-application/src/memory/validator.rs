@@ -172,8 +172,8 @@ fn validate_action_content(candidate: &TypedCandidate) -> Result<(), ValidationE
             Some(content)
         }
         ProposedAction::Pin {
-            memory_id: None,
             content: Some(content),
+            ..
         } => Some(content),
         ProposedAction::Reinforce { .. } | ProposedAction::Pin { .. } | ProposedAction::Ignore => {
             None
@@ -587,6 +587,34 @@ mod tests {
 
         assert_eq!(
             validate_candidate(&value, "turn:1", "I like cats", &[]),
+            Err(ValidationError::ActionContentMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_targeted_pin_content_that_differs_from_the_validated_atom() {
+        let target = MemoryCandidate {
+            id: 3,
+            revision: Some(1),
+            content: "I like cats".into(),
+            state: MemoryState::Active,
+            pinned: false,
+            mention_count: 1,
+            last_seen_at: 0,
+            lexical_relevance: 1.0,
+            strength: 1.0,
+        };
+        let mut value = candidate("I like cats");
+        value.relation = CandidateRelation::Same;
+        value.target_memory_id = Some(3);
+        value.expected_target_revision = Some(1);
+        value.proposed_action = ProposedAction::Pin {
+            memory_id: Some(3),
+            content: Some("I own a yacht".into()),
+        };
+
+        assert_eq!(
+            validate_candidate(&value, "turn:1", "I like cats", &[target]),
             Err(ValidationError::ActionContentMismatch)
         );
     }

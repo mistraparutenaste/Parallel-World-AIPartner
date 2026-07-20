@@ -522,6 +522,22 @@ fn find_source_memory(
         .map_err(|error| PortError(error.to_string()))
 }
 
+fn find_source_memory_excluding(
+    transaction: &Transaction<'_>,
+    content: &str,
+    source: &EvidenceSource,
+    excluded_memory_id: i64,
+) -> Result<Option<i64>, PortError> {
+    transaction
+        .query_row(
+            "SELECT m.id FROM memories m JOIN memory_evidence e ON e.memory_id=m.id WHERE m.content=?1 AND m.id!=?2 AND e.kind='user_mention' AND e.source_conversation_id=?3 AND e.source_turn_id=?4 ORDER BY m.id LIMIT 1",
+            params![content, excluded_memory_id, source.conversation_id, source_turn_id(source)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| PortError(error.to_string()))
+}
+
 fn create_memory(
     transaction: &Transaction<'_>,
     content: &str,
@@ -592,12 +608,18 @@ fn load_versioned_lifecycle_target(
     transaction: &Transaction<'_>,
     memory_id: i64,
     expected_revision: i64,
-) -> Result<MemoryState, PortError> {
+) -> Result<(MemoryState, bool), PortError> {
     let target = transaction
         .query_row(
-            "SELECT revision,state FROM memories WHERE id=?1",
+            "SELECT revision,state,pinned FROM memories WHERE id=?1",
             [memory_id],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? != 0,
+                ))
+            },
         )
         .optional()
         .map_err(|error| PortError(error.to_string()))?
@@ -607,7 +629,7 @@ fn load_versioned_lifecycle_target(
             "stale memory target {memory_id} at revision {expected_revision}"
         )));
     }
-    parse_state(&target.1)
+    Ok((parse_state(&target.1)?, target.2))
 }
 
 fn apply_reinforce_versioned(
@@ -618,21 +640,23 @@ fn apply_reinforce_versioned(
     source: &EvidenceSource,
     now: i64,
 ) -> Result<i64, PortError> {
-    if load_versioned_lifecycle_target(transaction, memory_id, expected_revision)?
-        == MemoryState::Superseded
-    {
+    let (state, pinned) =
+        load_versioned_lifecycle_target(transaction, memory_id, expected_revision)?;
+    if state == MemoryState::Superseded {
         return Err(PortError(format!(
             "cannot reinforce superseded memory {memory_id}"
         )));
     }
     let inserted = insert_evidence(transaction, memory_id, "user_mention", 1.0, source, now)?;
-    if inserted == 0 {
+    let must_revive = state == MemoryState::Dormant;
+    let must_pin = pin && !pinned;
+    if inserted == 0 && !must_revive && !must_pin {
         return Ok(memory_id);
     }
     let changed = transaction
         .execute(
-            "UPDATE memories SET revision=revision+1,mention_count=mention_count+?1,last_seen_at=MAX(last_seen_at,?2),updated_at=MAX(updated_at,?2),pinned=CASE WHEN state!='superseded' AND ?3 THEN 1 ELSE pinned END,state_changed_at=CASE WHEN state='dormant' THEN NULL ELSE state_changed_at END,state=CASE WHEN state='dormant' THEN 'active' ELSE state END WHERE id=?4 AND revision=?5 AND state!='superseded'",
-            params![1, now, pin, memory_id, expected_revision],
+            "UPDATE memories SET revision=revision+1,mention_count=mention_count+?1,last_seen_at=CASE WHEN ?1 THEN MAX(last_seen_at,?2) ELSE last_seen_at END,updated_at=MAX(updated_at,?2),pinned=CASE WHEN ?3 THEN 1 ELSE pinned END,state_changed_at=CASE WHEN state='dormant' THEN NULL ELSE state_changed_at END,state=CASE WHEN state='dormant' THEN 'active' ELSE state END WHERE id=?4 AND revision=?5 AND state!='superseded'",
+            params![i64::from(inserted != 0), now, pin, memory_id, expected_revision],
         )
         .map_err(|error| PortError(error.to_string()))?;
     if changed != 1 {
@@ -674,16 +698,45 @@ fn apply_supersede_versioned(
     source: &EvidenceSource,
     now: i64,
 ) -> Result<i64, PortError> {
-    if load_versioned_lifecycle_target(transaction, old_memory_id, expected_revision)?
+    if load_versioned_lifecycle_target(transaction, old_memory_id, expected_revision)?.0
         == MemoryState::Superseded
     {
         return Err(PortError(format!(
             "cannot supersede already superseded memory {old_memory_id}"
         )));
     }
-    let replacement_id = match find_source_memory(transaction, content, source)? {
-        Some(id) => id,
-        None => create_memory(transaction, content, pin_replacement, source, now)?,
+    let replacement_id = match find_source_memory_excluding(
+        transaction,
+        content,
+        source,
+        old_memory_id,
+    )? {
+        Some(id) => {
+            transaction
+                .execute(
+                    "UPDATE memories SET revision=revision+1,state='active',pinned=CASE WHEN ?1 THEN 1 ELSE pinned END,state_changed_at=NULL,superseded_by=NULL,updated_at=MAX(updated_at,?2) WHERE id=?3 AND (state!='active' OR superseded_by IS NOT NULL OR (?1 AND pinned=0))",
+                    params![pin_replacement, now, id],
+                )
+                .map_err(|error| PortError(error.to_string()))?;
+            id
+        }
+        None => {
+            let self_replacement = transaction
+                .query_row(
+                    "SELECT 1 FROM memories WHERE id=?1 AND content=?2",
+                    params![old_memory_id, content],
+                    |_| Ok(()),
+                )
+                .optional()
+                .map_err(|error| PortError(error.to_string()))?
+                .is_some();
+            if self_replacement {
+                return Err(PortError(format!(
+                    "cannot supersede memory {old_memory_id} with itself as the replacement"
+                )));
+            }
+            create_memory(transaction, content, pin_replacement, source, now)?
+        }
     };
     let changed = transaction
         .execute(
@@ -1333,6 +1386,271 @@ mod tests {
                 .lifecycle_state,
             MemoryState::Active
         );
+    }
+
+    #[test]
+    fn versioned_supersede_replaces_a_dormant_same_source_row() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let old_id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "I like cats".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let replacement_source = EvidenceSource::new("default", 2);
+        let dormant_id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "I like dogs".into(),
+                    pinned: false,
+                },
+                &replacement_source,
+                2,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .database
+            .connection()
+            .execute(
+                "UPDATE memories SET state='dormant',state_changed_at=3 WHERE id=?1",
+                [dormant_id],
+            )
+            .unwrap();
+        let expected_revision = store.load_memory_atom(old_id).unwrap().unwrap().revision;
+
+        let replacement_id = store
+            .apply_action_versioned(
+                &MemoryAction::Supersede {
+                    old_memory_id: old_id,
+                    content: "I like dogs".into(),
+                    pin_replacement: true,
+                },
+                Some(expected_revision),
+                &replacement_source,
+                4,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(replacement_id, dormant_id);
+        let replacement: (String, i64, Option<i64>) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT state,pinned,superseded_by FROM memories WHERE id=?1",
+                [replacement_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(replacement, ("active".into(), 1, None));
+        assert_eq!(
+            store
+                .load_memory_atom(replacement_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
+            MemoryState::Active
+        );
+    }
+
+    #[test]
+    fn versioned_supersede_replaces_a_superseded_same_source_row() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let old_id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "I like cats".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let replacement_source = EvidenceSource::new("default", 2);
+        let superseded_id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "I like dogs".into(),
+                    pinned: false,
+                },
+                &replacement_source,
+                2,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .database
+            .connection()
+            .execute(
+                "UPDATE memories SET state='superseded',state_changed_at=3 WHERE id=?1",
+                [superseded_id],
+            )
+            .unwrap();
+        let expected_revision = store.load_memory_atom(old_id).unwrap().unwrap().revision;
+
+        let replacement_id = store
+            .apply_action_versioned(
+                &MemoryAction::Supersede {
+                    old_memory_id: old_id,
+                    content: "I like dogs".into(),
+                    pin_replacement: false,
+                },
+                Some(expected_revision),
+                &replacement_source,
+                4,
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(replacement_id, superseded_id);
+        assert_eq!(
+            store
+                .load_memory_atom(replacement_id)
+                .unwrap()
+                .unwrap()
+                .lifecycle_state,
+            MemoryState::Active
+        );
+    }
+
+    #[test]
+    fn versioned_supersede_never_uses_its_old_target_as_the_replacement() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source = EvidenceSource::new("default", 1);
+        let old_id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "same content".into(),
+                    pinned: true,
+                },
+                &source,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let expected_revision = store.load_memory_atom(old_id).unwrap().unwrap().revision;
+
+        let error = store
+            .apply_action_versioned(
+                &MemoryAction::Supersede {
+                    old_memory_id: old_id,
+                    content: "same content".into(),
+                    pin_replacement: false,
+                },
+                Some(expected_revision),
+                &EvidenceSource::new("default", 2),
+                2,
+            )
+            .unwrap_err();
+
+        let old: (String, Option<i64>) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT state,superseded_by FROM memories WHERE id=?1",
+                [old_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(error.0.contains("itself as the replacement"));
+        assert_eq!(old, ("active".into(), None));
+    }
+
+    #[test]
+    fn duplicate_source_targeted_pin_still_applies_the_pin_transition() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source = EvidenceSource::new("default", 1);
+        let id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "pin this".into(),
+                    pinned: false,
+                },
+                &source,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let expected_revision = store.load_memory_atom(id).unwrap().unwrap().revision;
+
+        store
+            .apply_action_versioned(
+                &MemoryAction::Reinforce {
+                    memory_id: id,
+                    pin: true,
+                },
+                Some(expected_revision),
+                &source,
+                2,
+            )
+            .unwrap();
+
+        let target: (i64, String, i64, i64) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT pinned,state,mention_count,revision FROM memories WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(target, (1, "active".into(), 1, expected_revision + 1));
+    }
+
+    #[test]
+    fn duplicate_source_reinforce_revives_a_dormant_memory() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source = EvidenceSource::new("default", 1);
+        let id = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "revive this".into(),
+                    pinned: false,
+                },
+                &source,
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .database
+            .connection()
+            .execute(
+                "UPDATE memories SET state='dormant',state_changed_at=2 WHERE id=?1",
+                [id],
+            )
+            .unwrap();
+        let expected_revision = store.load_memory_atom(id).unwrap().unwrap().revision;
+
+        store
+            .apply_action_versioned(
+                &MemoryAction::Reinforce {
+                    memory_id: id,
+                    pin: false,
+                },
+                Some(expected_revision),
+                &source,
+                3,
+            )
+            .unwrap();
+
+        let target: (String, Option<i64>, i64, i64) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT state,state_changed_at,mention_count,revision FROM memories WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(target, ("active".into(), None, 1, expected_revision + 1));
     }
 
     #[test]
