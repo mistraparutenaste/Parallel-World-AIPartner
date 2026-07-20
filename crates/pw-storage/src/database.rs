@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use thiserror::Error;
 
 const INITIAL_MIGRATION: &str = include_str!("../migrations/0001_initial.sql");
@@ -115,124 +115,45 @@ impl Database {
         if enable_wal {
             connection.pragma_update(None, "journal_mode", "WAL")?;
         }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        // Re-read the schema version after taking SQLite's writer lock.  Two
+        // workers may open a fresh path at the same time; checking the version
+        // before the lock lets both run the same ALTER TABLE migration.
+        let migration = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let mut current: i64 =
+            migration.pragma_query_value(None, "user_version", |row| row.get(0))?;
         if current > CURRENT_SCHEMA_VERSION {
             return Err(StorageError::FutureSchema {
                 found: current,
                 supported: CURRENT_SCHEMA_VERSION,
             });
         }
-        if current == 0 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(INITIAL_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 1)?;
-            transaction.commit()?;
+        macro_rules! apply_migration {
+            ($version:expr, $sql:expr) => {
+                if current < $version {
+                    migration.execute_batch($sql)?;
+                    migration.pragma_update(None, "user_version", $version)?;
+                    current = $version;
+                }
+            };
         }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 2 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(TURN_IDENTITY_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 2)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 3 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(TURN_SEQUENCE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 3)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 4 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(DETACHED_TURN_SEQUENCE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 4)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 5 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_FTS_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 5)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 6 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_UNIQUE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 6)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 7 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_LIFECYCLE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 7)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 8 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MESSAGES_ID_CURSOR_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 8)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 9 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_TYPED_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 9)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 10 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_OBSERVATION_LEDGER_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 10)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 11 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 11)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 12 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(PROMOTION_REPLAY_FENCE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 12)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 13 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 13)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 14 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(DIALOGUE_STATE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 14)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 15 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(MEMORY_POLICY_FENCES_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 15)?;
-            transaction.commit()?;
-        }
-        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if current < 16 {
-            let transaction = connection.transaction()?;
-            transaction.execute_batch(TEMPORARY_CONVERSATION_FENCE_MIGRATION)?;
-            transaction.pragma_update(None, "user_version", 16)?;
-            transaction.commit()?;
-        }
+        apply_migration!(1, INITIAL_MIGRATION);
+        apply_migration!(2, TURN_IDENTITY_MIGRATION);
+        apply_migration!(3, TURN_SEQUENCE_MIGRATION);
+        apply_migration!(4, DETACHED_TURN_SEQUENCE_MIGRATION);
+        apply_migration!(5, MEMORY_FTS_MIGRATION);
+        apply_migration!(6, MEMORY_UNIQUE_MIGRATION);
+        apply_migration!(7, MEMORY_LIFECYCLE_MIGRATION);
+        apply_migration!(8, MESSAGES_ID_CURSOR_MIGRATION);
+        apply_migration!(9, MEMORY_TYPED_MIGRATION);
+        apply_migration!(10, MEMORY_OBSERVATION_LEDGER_MIGRATION);
+        apply_migration!(11, OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION);
+        apply_migration!(12, PROMOTION_REPLAY_FENCE_MIGRATION);
+        apply_migration!(13, MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION);
+        apply_migration!(14, DIALOGUE_STATE_MIGRATION);
+        apply_migration!(15, MEMORY_POLICY_FENCES_MIGRATION);
+        apply_migration!(16, TEMPORARY_CONVERSATION_FENCE_MIGRATION);
+        let _ = current;
+        migration.commit()?;
         Ok(Self { connection })
     }
 
