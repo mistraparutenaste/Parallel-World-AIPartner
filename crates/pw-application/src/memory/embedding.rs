@@ -186,24 +186,27 @@ fn apply_hits(
     limit: usize,
 ) -> Vec<super::MemoryRecord> {
     let Some(mut hits) = result else {
-        return lexical_candidates.into_iter().take(limit).collect();
+        return lexical_fallback(lexical_candidates, limit);
     };
-    hits.truncate(MAX_EMBEDDING_CANDIDATES);
+    if hits.is_empty() || hits.len() > MAX_EMBEDDING_CANDIDATES {
+        return lexical_fallback(lexical_candidates, limit);
+    }
     let valid_ids = lexical_candidates
         .iter()
         .take(MAX_EMBEDDING_CANDIDATES)
         .map(|candidate| candidate.id)
         .collect::<std::collections::HashSet<_>>();
-    hits.retain(|hit| {
-        valid_ids.contains(&hit.memory_id)
-            && hit.score.is_finite()
-            && (0.0..=1.0).contains(&hit.score)
+    let mut seen_ids = std::collections::HashSet::with_capacity(hits.len());
+    let malformed = hits.iter().any(|hit| {
+        !valid_ids.contains(&hit.memory_id)
+            || !hit.score.is_finite()
+            || !(0.0..=1.0).contains(&hit.score)
+            || !seen_ids.insert(hit.memory_id)
     });
-    hits.sort_by(|left, right| right.score.total_cmp(&left.score));
-    hits.dedup_by_key(|hit| hit.memory_id);
-    if hits.is_empty() {
-        return lexical_candidates.into_iter().take(limit).collect();
+    if malformed {
+        return lexical_fallback(lexical_candidates, limit);
     }
+    hits.sort_by(|left, right| right.score.total_cmp(&left.score));
     let mut ranked = Vec::with_capacity(limit.min(lexical_candidates.len()));
     for hit in hits {
         if let Some(candidate) = lexical_candidates
@@ -334,5 +337,60 @@ mod tests {
         }];
         assert_eq!(fallback.rerank(&"q".repeat(1_000), candidates, 1)[0].id, 1);
         assert!(fallback.is_enabled());
+    }
+
+    struct MixedMalformed(Vec<EmbeddingHit>);
+    impl MemoryEmbedder for MixedMalformed {
+        fn rank(
+            &mut self,
+            _: &str,
+            _: &[super::super::MemoryRecord],
+        ) -> Result<Vec<EmbeddingHit>, PortError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn any_malformed_hit_falls_back_instead_of_partially_reranking() {
+        for hits in [
+            vec![
+                EmbeddingHit {
+                    memory_id: 2,
+                    score: 0.9,
+                },
+                EmbeddingHit {
+                    memory_id: 999,
+                    score: 0.8,
+                },
+            ],
+            vec![
+                EmbeddingHit {
+                    memory_id: 2,
+                    score: 0.9,
+                },
+                EmbeddingHit {
+                    memory_id: 1,
+                    score: f32::NAN,
+                },
+            ],
+            vec![
+                EmbeddingHit {
+                    memory_id: 2,
+                    score: 0.9,
+                },
+                EmbeddingHit {
+                    memory_id: 2,
+                    score: 0.8,
+                },
+            ],
+        ] {
+            let mut fallback =
+                LexicalFallback::enabled(MixedMalformed(hits), Duration::from_millis(10));
+            let ranked = fallback.rerank("tea", records(), 2);
+            assert_eq!(
+                ranked.iter().map(|item| item.id).collect::<Vec<_>>(),
+                [1, 2]
+            );
+        }
     }
 }
