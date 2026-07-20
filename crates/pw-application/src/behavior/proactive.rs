@@ -431,15 +431,31 @@ pub struct ProactiveGatePolicy {
     pub frequency: FrequencyPolicy,
 }
 
-/// Grants one optional proactive turn only while the captured idle epoch is
-/// still current and the durable frequency snapshot allows it.
-#[must_use]
-pub fn grant_proactive_turn<H: FrequencyHistory>(
+/// Lease returned inside the atomic proactive-claim closure. Callers should
+/// check [`Self::is_cancelled`] immediately before enqueueing UI/TTS output.
+pub struct ProactiveLease<'a> {
+    gate: &'a InteractionGate,
+    epoch: u64,
+}
+
+impl ProactiveLease<'_> {
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.gate.is_cancelled(self.epoch)
+    }
+}
+
+/// Evaluates all proactive gates and runs the action at the claim boundary.
+pub fn with_proactive_turn<H, T>(
     gate: &InteractionGate,
     history: &H,
     candidate: &Candidate,
     policy: ProactiveGatePolicy,
-) -> bool {
+    action: impl FnOnce(ProactiveLease<'_>) -> T,
+) -> Option<T>
+where
+    H: FrequencyHistory,
+{
     if !policy.master_enabled
         || !policy.profile_enabled
         || policy.temporary_conversation
@@ -449,20 +465,30 @@ pub fn grant_proactive_turn<H: FrequencyHistory>(
             .snoozed_until
             .is_some_and(|until| until < 0 || until > policy.now)
     {
-        return false;
+        return None;
     }
-    let Some(epoch) = gate.capture_idle_epoch() else {
-        return false;
-    };
+    let epoch = gate.capture_idle_epoch()?;
     if !eligible_to_evaluate(
         history,
         *candidate.topic_hash(),
         policy.now,
         policy.frequency,
     ) {
-        return false;
+        return None;
     }
-    gate.claim_if_idle(epoch, || true).unwrap_or(false)
+    gate.claim_if_idle(epoch, || action(ProactiveLease { gate, epoch }))
+}
+
+/// Grants one optional proactive turn only while the captured idle epoch is
+/// still current and the durable frequency snapshot allows it.
+#[must_use]
+pub fn grant_proactive_turn<H: FrequencyHistory>(
+    gate: &InteractionGate,
+    history: &H,
+    candidate: &Candidate,
+    policy: ProactiveGatePolicy,
+) -> bool {
+    with_proactive_turn(gate, history, candidate, policy, |_| true).unwrap_or(false)
 }
 
 #[derive(Debug, Default)]
@@ -534,6 +560,7 @@ impl InteractionGate {
             return None;
         }
         state.proactive_claimed = true;
+        drop(state);
         Some(grant())
     }
 }
@@ -545,7 +572,7 @@ mod tests {
     use super::{
         CandidateEngine, CategoryId, FrequencyHistory, FrequencyPolicy, FrequencySnapshot,
         HistoryQuery, InteractionGate, Observation, ProactiveGatePolicy, ProactiveThresholds,
-        grant_proactive_turn,
+        grant_proactive_turn, with_proactive_turn,
     };
 
     struct History(FrequencySnapshot);
@@ -626,5 +653,18 @@ mod tests {
         assert!(!grant_proactive_turn(&gate, &history, &candidate, policy()));
         gate.end_user_turn();
         assert!(grant_proactive_turn(&gate, &history, &candidate, policy()));
+    }
+
+    #[test]
+    fn proactive_lease_cancels_output_when_user_turn_begins_after_claim() {
+        let gate = InteractionGate::new();
+        let history = History(FrequencySnapshot::default());
+        let candidate = candidate();
+        let cancelled = with_proactive_turn(&gate, &history, &candidate, policy(), |lease| {
+            gate.begin_user_turn();
+            lease.is_cancelled()
+        });
+        assert_eq!(cancelled, Some(true));
+        gate.end_user_turn();
     }
 }
