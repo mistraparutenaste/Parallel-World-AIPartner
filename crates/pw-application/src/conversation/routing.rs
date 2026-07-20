@@ -709,28 +709,48 @@ mod tests {
         );
     }
 
-    struct SlowPlanner;
-    impl ResponsePlanner for SlowPlanner {
+    struct DeterministicTimeoutPlanner {
+        started: std::sync::mpsc::SyncSender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+        finished: std::sync::mpsc::SyncSender<()>,
+    }
+    impl ResponsePlanner for DeterministicTimeoutPlanner {
         fn plan(
             &mut self,
             kind: TurnKind,
             _utterance: &str,
             _context: &MemoryContext,
         ) -> Result<ResponsePlan, PortError> {
-            thread::sleep(Duration::from_millis(10));
-            Ok(ResponsePlan {
+            self.started
+                .send(())
+                .map_err(|_| PortError("test did not await planner start".into()))?;
+            self.release
+                .recv()
+                .map_err(|_| PortError("test did not release planner".into()))?;
+            let plan = ResponsePlan {
                 kind,
                 goal: "goal".into(),
                 retrieval_query: None,
                 directives: Vec::new(),
-            })
+            };
+            self.finished
+                .send(())
+                .map_err(|_| PortError("test did not await planner finish".into()))?;
+            Ok(plan)
         }
     }
 
     #[test]
     fn elapsed_planning_budget_falls_back() {
+        let (started_sender, started_receiver) = std::sync::mpsc::sync_channel(1);
+        let (release_sender, release_receiver) = std::sync::mpsc::sync_channel(1);
+        let (finished_sender, finished_receiver) = std::sync::mpsc::sync_channel(1);
         let mut pipeline = ResponsePipeline::new(
-            SlowPlanner,
+            DeterministicTimeoutPlanner {
+                started: started_sender,
+                release: release_receiver,
+                finished: finished_sender,
+            },
             PassThrough,
             PassThrough,
             PlanningBudget {
@@ -741,6 +761,24 @@ mod tests {
             pipeline
                 .try_prepare(TurnKind::Memory, "remember", &MemoryContext::default())
                 .is_none()
+        );
+        started_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .expect("planner must start before it is released");
+        release_sender.send(()).expect("planner must be releasable");
+        finished_receiver
+            .recv_timeout(Duration::from_millis(50))
+            .expect("planner must finish after release");
+        for _ in 0..1000 {
+            pipeline.reclaim_pending();
+            if pipeline.pending.is_none() {
+                break;
+            }
+            thread::yield_now();
+        }
+        assert!(
+            pipeline.pending.is_none(),
+            "timed-out worker must terminate"
         );
     }
 
