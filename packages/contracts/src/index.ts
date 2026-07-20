@@ -49,6 +49,11 @@ export type { ConversationLogPageDto } from './generated/ConversationLogPageDto'
 export type { ConversationHistoryDeletedEventDto } from './generated/ConversationHistoryDeletedEventDto';
 export type { DataUsageDto } from './generated/DataUsageDto';
 export type { DataDeletionResultDto } from './generated/DataDeletionResultDto';
+export type { MemoryCenterDto } from './generated/MemoryCenterDto';
+export type { MemoryDomainControlDto } from './generated/MemoryDomainControlDto';
+export type { PendingMemoryCandidateDto } from './generated/PendingMemoryCandidateDto';
+export type { CommitmentSummaryDto } from './generated/CommitmentSummaryDto';
+export type { DialogueSummaryDto } from './generated/DialogueSummaryDto';
 export type { ConversationStateDto } from './generated/ConversationStateDto';
 export type { ConversationStateEventDto } from './generated/ConversationStateEventDto';
 export type { LlmSettingsDto } from './generated/LlmSettingsDto';

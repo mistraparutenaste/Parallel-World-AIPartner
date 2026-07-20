@@ -7,6 +7,7 @@ pub mod character;
 pub mod chat;
 pub mod data;
 pub mod diagnostics;
+pub mod memory_center;
 pub mod persona;
 pub mod safety;
 pub mod tts;

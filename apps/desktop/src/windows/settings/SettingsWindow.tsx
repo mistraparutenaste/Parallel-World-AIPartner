@@ -15,6 +15,7 @@ import { DataPanel } from './DataPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
+import { MemoryCenterPanel } from './MemoryCenterPanel';
 import { PersonalityPanel } from './PersonalityPanel';
 import { RuntimeHealthPanel } from './RuntimeHealthPanel';
 import { TechnicalLogPanel } from './TechnicalLogPanel';
@@ -214,7 +215,7 @@ function SettingsContent({
     case 'character':
       return <div className="panel-stack"><CharacterPanel /></div>;
     case 'data':
-      return <div className="panel-stack"><DataPanel /><ConversationLogPanel /></div>;
+      return <div className="panel-stack"><MemoryCenterPanel /><DataPanel /><ConversationLogPanel /></div>;
     case 'diagnostics':
       return (
         <div className="panel-stack">

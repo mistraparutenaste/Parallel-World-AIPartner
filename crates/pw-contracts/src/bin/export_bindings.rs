@@ -13,17 +13,19 @@ use pw_contracts::{
     AudioDiagnosticsDto, AudioLevelEventDto, BehaviorSettingsChangedEventDto, BehaviorSettingsDto,
     CharacterCursorEventDto, CharacterManifestDto, CharacterRendererDto, CharacterRendererKindDto,
     CharacterSettingsChangedEventDto, CharacterSettingsDto, CharacterSetupDto,
-    CharacterSourceStatusDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto, CompanionModeDto,
-    ConsentStateDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
-    ConversationMessageDto, ConversationStateDto, ConversationStateEventDto,
-    DarkExpressionSafetyChangedEventDto, DarkExpressionSafetySettingsDto, DataDeletionResultDto,
-    DataUsageDto, DeviceFallbackEventDto, DiagnosticReportDto, ExclusionRuleDto, FailureClassDto,
-    FrequencyPolicyDto, FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto,
-    HealthStatusDto, LlmSettingsDto, ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto,
-    MotionGroupDto, PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto,
-    QuietHoursRuleDto, RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto,
-    SafewordTriggeredEventDto, ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto,
-    SpeechStopEventDto, StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
+    CharacterSourceStatusDto, ChatMessageEventDto, ChatPlacementDto, ChatRoleDto,
+    CommitmentSummaryDto, CompanionModeDto, ConsentStateDto, ConversationHistoryDeletedEventDto,
+    ConversationLogPageDto, ConversationMessageDto, ConversationStateDto,
+    ConversationStateEventDto, DarkExpressionSafetyChangedEventDto,
+    DarkExpressionSafetySettingsDto, DataDeletionResultDto, DataUsageDto, DeviceFallbackEventDto,
+    DiagnosticReportDto, DialogueSummaryDto, ExclusionRuleDto, FailureClassDto, FrequencyPolicyDto,
+    FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto, HealthStatusDto,
+    LlmSettingsDto, MemoryCenterDto, MemoryDomainControlDto, ModeActivationRulesDto,
+    ModeProfileDto, ModeProfilesDto, MotionGroupDto, PendingMemoryCandidateDto, PersonaProfileDto,
+    PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto, QuietHoursRuleDto,
+    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SafewordTriggeredEventDto,
+    ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto,
+    StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto, TtsEngineKind,
     TtsSettingsDto, TtsStateEventDto, TtsVoiceDto, UiPreferencesDto, UpdateStateDto,
     UpdateStatusDto, UserDictWordDto,
@@ -101,6 +103,12 @@ fn main() {
         .expect("export deletion event bindings");
     DataUsageDto::export_all(&config).expect("export DataUsageDto bindings");
     DataDeletionResultDto::export_all(&config).expect("export DataDeletionResultDto bindings");
+    MemoryCenterDto::export_all(&config).expect("export MemoryCenterDto bindings");
+    MemoryDomainControlDto::export_all(&config).expect("export MemoryDomainControlDto bindings");
+    PendingMemoryCandidateDto::export_all(&config)
+        .expect("export PendingMemoryCandidateDto bindings");
+    CommitmentSummaryDto::export_all(&config).expect("export CommitmentSummaryDto bindings");
+    DialogueSummaryDto::export_all(&config).expect("export DialogueSummaryDto bindings");
     ConversationStateEventDto::export_all(&config)
         .expect("export ConversationStateEventDto bindings");
     LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");

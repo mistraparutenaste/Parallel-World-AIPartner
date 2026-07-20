@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-memory-domain-control"
+description = "Enables the set_memory_domain_control command without any pre-configured scope."
+commands.allow = ["set_memory_domain_control"]
+
+[[permission]]
+identifier = "deny-set-memory-domain-control"
+description = "Denies the set_memory_domain_control command without any pre-configured scope."
+commands.deny = ["set_memory_domain_control"]

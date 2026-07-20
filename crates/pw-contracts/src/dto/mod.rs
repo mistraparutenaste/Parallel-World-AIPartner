@@ -9,6 +9,7 @@ mod character_manifest;
 mod chat;
 mod data;
 mod diagnostics;
+mod memory_center;
 mod persona;
 mod runtime_health;
 mod safety;
@@ -48,6 +49,10 @@ pub use data::{DataDeletionResultDto, DataUsageDto};
 pub use diagnostics::{
     DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto,
+};
+pub use memory_center::{
+    CommitmentSummaryDto, DialogueSummaryDto, MemoryCenterDto, MemoryDomainControlDto,
+    PendingMemoryCandidateDto,
 };
 pub use persona::{
     DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto,

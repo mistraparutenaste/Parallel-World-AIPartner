@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-memory-center"
+description = "Enables the get_memory_center command without any pre-configured scope."
+commands.allow = ["get_memory_center"]
+
+[[permission]]
+identifier = "deny-get-memory-center"
+description = "Denies the get_memory_center command without any pre-configured scope."
+commands.deny = ["get_memory_center"]
