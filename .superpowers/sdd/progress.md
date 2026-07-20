@@ -19,7 +19,8 @@ Base: `ed18ec2`
 | 3. Domains/version/tombstone/commitment/dialogue state | completed | `a88ab13` + `df6ee5f` + `012c9e8` | PASS: `.superpowers/sdd/task-3-privacy-release-review.md` | Schema v13-v16; policy promotion fence, deletion generations, temporary privacy trigger/CAS, migration/reopen. |
 | 4. Conditional planner/realizer routing | completed | `f08e913` + `ceb70f5` + `0647e1b` | PASS: `.superpowers/sdd/task-4-fix-review.md` | Simple turns bypass planning; bounded planned surface, timeout port recovery, kind mismatch/fail-open. |
 | 5. Memory Center and controls | completed | `5c39f0c` + `32e2917` | PASS: `.superpowers/sdd/task-5-fix-review-final.md` | Typed DTOs, blocking/CAS commands, bounded redacted center, individual/all deletion fences, temporary mode and settings UI. |
-| 6. Relationship/mood/reflection/proactive integration | in progress | pending | pending |  |
+| 6. Relationship/mood/reflection/proactive integration | completed | `f302c69` + `b76d6db` + `adc8d50` + `33bb3b1` + `9de683b` + `d9faaff` | PASS: `.superpowers/sdd/task-6-review-final.md` | Bounded signal/commitment worker, planned-only consented context, completion enqueue, atomic proactive claim/lease and fail-closed gates. |
+| 7. Optional embeddings, acceptance tests, docs, final verification | in progress | pending | pending |  |
 | 7. Optional embeddings, acceptance tests, docs, final verification | pending | pending | pending |  |
 
 ## Operating rules
