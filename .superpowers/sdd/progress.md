@@ -17,9 +17,9 @@ Base: `ed18ec2`
 | 1. Typed epistemic memory + schema v9 | completed | `017dbd6` + `5b563fc` + `78357fe` + `b04dbb3` | PASS: `.superpowers/sdd/task-1-release-review.md` | v8 preserved; typed projection, validator, lifecycle CAS, retry safety. |
 | 2. Observation/candidate/promotion persistence | completed | `868eb94` + `3b5fea8` + `6435d4e` + `51a0a1f` + `c72f09a` | PASS: `.superpowers/sdd/task-2-release-review3.md` | Schema v10–v12, durable worker, retry fences, delete tombstones, bounded writer. |
 | 3. Domains/version/tombstone/commitment/dialogue state | completed | `a88ab13` + `df6ee5f` + `012c9e8` | PASS: `.superpowers/sdd/task-3-privacy-release-review.md` | Schema v13-v16; policy promotion fence, deletion generations, temporary privacy trigger/CAS, migration/reopen. |
-| 4. Conditional planner/realizer routing | pending | pending | pending |  |
-| 5. Memory Center and controls | pending | pending | pending |  |
-| 6. Relationship/mood/reflection/proactive integration | pending | pending | pending |  |
+| 4. Conditional planner/realizer routing | completed | `f08e913` + `ceb70f5` + `0647e1b` | PASS: `.superpowers/sdd/task-4-fix-review.md` | Simple turns bypass planning; bounded planned surface, timeout port recovery, kind mismatch/fail-open. |
+| 5. Memory Center and controls | completed | `5c39f0c` + `32e2917` | PASS: `.superpowers/sdd/task-5-fix-review-final.md` | Typed DTOs, blocking/CAS commands, bounded redacted center, individual/all deletion fences, temporary mode and settings UI. |
+| 6. Relationship/mood/reflection/proactive integration | in progress | pending | pending |  |
 | 7. Optional embeddings, acceptance tests, docs, final verification | pending | pending | pending |  |
 
 ## Operating rules
