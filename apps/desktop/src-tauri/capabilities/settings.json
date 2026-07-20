@@ -18,6 +18,7 @@
     "allow-get-memory-center",
     "allow-set-memory-domain-control",
     "allow-set-temporary-conversation",
+    "allow-delete-memory",
     "allow-get-data-usage",
     "allow-read-technical-log",
     "allow-get-character-manifest",

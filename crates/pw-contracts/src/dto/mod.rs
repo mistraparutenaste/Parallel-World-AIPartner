@@ -52,7 +52,7 @@ pub use diagnostics::{
 };
 pub use memory_center::{
     CommitmentSummaryDto, DialogueSummaryDto, MemoryCenterDto, MemoryDomainControlDto,
-    PendingMemoryCandidateDto,
+    MemorySummaryDto, PendingMemoryCandidateDto,
 };
 pub use persona::{
     DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto,

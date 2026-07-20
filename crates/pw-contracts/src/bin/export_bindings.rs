@@ -20,15 +20,15 @@ use pw_contracts::{
     DarkExpressionSafetySettingsDto, DataDeletionResultDto, DataUsageDto, DeviceFallbackEventDto,
     DiagnosticReportDto, DialogueSummaryDto, ExclusionRuleDto, FailureClassDto, FrequencyPolicyDto,
     FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto, HealthStatusDto,
-    LlmSettingsDto, MemoryCenterDto, MemoryDomainControlDto, ModeActivationRulesDto,
-    ModeProfileDto, ModeProfilesDto, MotionGroupDto, PendingMemoryCandidateDto, PersonaProfileDto,
-    PersonaSettingsDto, ProcessOwnershipDto, QueueMetricsDto, QuietHoursRuleDto,
-    RuntimeDiagnosticsDto, RuntimeFeatureDto, RuntimeHealthEventDto, SafewordTriggeredEventDto,
-    ScheduleActivationRuleDto, ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto,
-    StaticExpressionDto, SttPhaseDto, SttStateEventDto, TechnicalLogChunkDto,
-    TechnicalLogCursorDto, ThemePreferenceDto, TranscriptEventDto, TriggerPolicyDto, TtsEngineKind,
-    TtsSettingsDto, TtsStateEventDto, TtsVoiceDto, UiPreferencesDto, UpdateStateDto,
-    UpdateStatusDto, UserDictWordDto,
+    LlmSettingsDto, MemoryCenterDto, MemoryDomainControlDto, MemorySummaryDto,
+    ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto, MotionGroupDto,
+    PendingMemoryCandidateDto, PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto,
+    QueueMetricsDto, QuietHoursRuleDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
+    RuntimeHealthEventDto, SafewordTriggeredEventDto, ScheduleActivationRuleDto,
+    ShortcutSettingsDto, SpeechAudioEventDto, SpeechStopEventDto, StaticExpressionDto, SttPhaseDto,
+    SttStateEventDto, TechnicalLogChunkDto, TechnicalLogCursorDto, ThemePreferenceDto,
+    TranscriptEventDto, TriggerPolicyDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
+    TtsVoiceDto, UiPreferencesDto, UpdateStateDto, UpdateStatusDto, UserDictWordDto,
 };
 use ts_rs::{Config, TS};
 
@@ -105,6 +105,7 @@ fn main() {
     DataDeletionResultDto::export_all(&config).expect("export DataDeletionResultDto bindings");
     MemoryCenterDto::export_all(&config).expect("export MemoryCenterDto bindings");
     MemoryDomainControlDto::export_all(&config).expect("export MemoryDomainControlDto bindings");
+    MemorySummaryDto::export_all(&config).expect("export MemorySummaryDto bindings");
     PendingMemoryCandidateDto::export_all(&config)
         .expect("export PendingMemoryCandidateDto bindings");
     CommitmentSummaryDto::export_all(&config).expect("export CommitmentSummaryDto bindings");

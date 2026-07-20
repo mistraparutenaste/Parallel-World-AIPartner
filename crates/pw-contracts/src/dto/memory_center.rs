@@ -8,12 +8,31 @@ use ts_rs::TS;
 pub struct MemoryCenterDto {
     pub schema_version: u16,
     pub domains: Vec<MemoryDomainControlDto>,
+    pub memories: Vec<MemorySummaryDto>,
     pub pending: Vec<PendingMemoryCandidateDto>,
     pub commitments: Vec<CommitmentSummaryDto>,
     pub dialogue: Option<DialogueSummaryDto>,
     pub temporary: bool,
     #[ts(type = "number")]
     pub temporary_revision: i64,
+}
+
+/// A bounded, privacy-safe view of a durable memory. The renderer never
+/// receives the source observation or the unredacted content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "MemorySummaryDto.ts")]
+pub struct MemorySummaryDto {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub preview: String,
+    pub state: String,
+    pub pinned: bool,
+    #[ts(type = "number")]
+    pub created_at: i64,
+    #[ts(type = "number")]
+    pub updated_at: i64,
+    #[ts(type = "number")]
+    pub revision: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

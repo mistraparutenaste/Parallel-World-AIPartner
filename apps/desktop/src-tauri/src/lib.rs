@@ -84,6 +84,7 @@ pub fn run() {
             commands::memory_center::get_memory_center,
             commands::memory_center::set_memory_domain_control,
             commands::memory_center::set_temporary_conversation,
+            commands::memory_center::delete_memory,
             commands::ui::get_ui_preferences,
             commands::ui::set_theme_preference,
             commands::ui::set_chat_placement,

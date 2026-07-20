@@ -51,6 +51,7 @@ export type { DataUsageDto } from './generated/DataUsageDto';
 export type { DataDeletionResultDto } from './generated/DataDeletionResultDto';
 export type { MemoryCenterDto } from './generated/MemoryCenterDto';
 export type { MemoryDomainControlDto } from './generated/MemoryDomainControlDto';
+export type { MemorySummaryDto } from './generated/MemorySummaryDto';
 export type { PendingMemoryCandidateDto } from './generated/PendingMemoryCandidateDto';
 export type { CommitmentSummaryDto } from './generated/CommitmentSummaryDto';
 export type { DialogueSummaryDto } from './generated/DialogueSummaryDto';

@@ -2,10 +2,11 @@
 import type { CommitmentSummaryDto } from "./CommitmentSummaryDto";
 import type { DialogueSummaryDto } from "./DialogueSummaryDto";
 import type { MemoryDomainControlDto } from "./MemoryDomainControlDto";
+import type { MemorySummaryDto } from "./MemorySummaryDto";
 import type { PendingMemoryCandidateDto } from "./PendingMemoryCandidateDto";
 
 /**
  * Privacy-safe snapshot rendered by the Memory Center.  It deliberately
  * contains bounded derived previews, never source observations or transcripts.
  */
-export type MemoryCenterDto = { schema_version: number, domains: Array<MemoryDomainControlDto>, pending: Array<PendingMemoryCandidateDto>, commitments: Array<CommitmentSummaryDto>, dialogue: DialogueSummaryDto | null, temporary: boolean, temporary_revision: number, };
+export type MemoryCenterDto = { schema_version: number, domains: Array<MemoryDomainControlDto>, memories: Array<MemorySummaryDto>, pending: Array<PendingMemoryCandidateDto>, commitments: Array<CommitmentSummaryDto>, dialogue: DialogueSummaryDto | null, temporary: boolean, temporary_revision: number, };
