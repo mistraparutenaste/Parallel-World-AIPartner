@@ -13,7 +13,7 @@ use pw_application::memory::{
     is_safe_persistent_content, memory_strength, memory_write_disposition, prompt_rank,
     redact_persistent_content, should_become_dormant, validate_candidate_for_source,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
@@ -157,9 +157,12 @@ impl SqliteMemoryStore {
             .map(|row| row.bm25)
             .fold(f64::NEG_INFINITY, f64::max);
         let has_bm25_range = rows.len() > 1 && (worst - best).abs() > f64::EPSILON;
+        let candidate_ids = rows.iter().map(|row| row.id).collect::<Vec<_>>();
+        let mut evidence_by_memory =
+            load_evidence_for_memories(self.database.connection(), &candidate_ids)?;
         let mut candidates = Vec::with_capacity(rows.len());
         for row in rows.drain(..) {
-            let evidence = load_evidence(self.database.connection(), row.id)?;
+            let evidence = evidence_by_memory.remove(&row.id).unwrap_or_default();
             let lexical_relevance = if has_bm25_range {
                 (worst - row.bm25) / (worst - best)
             } else {
@@ -1593,37 +1596,57 @@ fn parse_evidence_kind(kind: &str) -> Result<EvidenceKind, PortError> {
     }
 }
 
-fn load_evidence(
+fn load_evidence_for_memories(
     connection: &Connection,
-    memory_id: i64,
-) -> Result<Vec<MemoryEvidence>, PortError> {
+    memory_ids: &[i64],
+) -> Result<HashMap<i64, Vec<MemoryEvidence>>, PortError> {
+    if memory_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = std::iter::repeat_n("?", memory_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let mut statement = connection
-        .prepare(
-            "SELECT id,kind,occurred_at,weight FROM memory_evidence WHERE memory_id=?1 ORDER BY id",
-        )
+        .prepare(&format!(
+            "SELECT memory_id,id,kind,occurred_at,weight FROM memory_evidence \
+             WHERE memory_id IN ({placeholders}) ORDER BY memory_id,id"
+        ))
         .map_err(|error| PortError(error.to_string()))?;
     let rows = statement
-        .query_map([memory_id], |row| {
+        .query_map(rusqlite::params_from_iter(memory_ids), |row| {
             Ok((
                 row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, f64>(3)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, f64>(4)?,
             ))
         })
         .map_err(|error| PortError(error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| PortError(error.to_string()))?;
-    rows.into_iter()
-        .map(|(id, kind, occurred_at, weight)| {
-            Ok(MemoryEvidence {
+    let mut evidence_by_memory = HashMap::<i64, Vec<MemoryEvidence>>::new();
+    for (memory_id, id, kind, occurred_at, weight) in rows {
+        evidence_by_memory
+            .entry(memory_id)
+            .or_default()
+            .push(MemoryEvidence {
                 id,
                 kind: parse_evidence_kind(&kind)?,
                 occurred_at,
                 weight,
-            })
-        })
-        .collect()
+            });
+    }
+    Ok(evidence_by_memory)
+}
+
+fn load_evidence(
+    connection: &Connection,
+    memory_id: i64,
+) -> Result<Vec<MemoryEvidence>, PortError> {
+    Ok(load_evidence_for_memories(connection, &[memory_id])?
+        .remove(&memory_id)
+        .unwrap_or_default())
 }
 
 fn load_active_maintenance_rows(
@@ -2376,7 +2399,10 @@ impl MemoryStore for SqliteMemoryStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{SqliteMemoryStore, delete_all_memories_in_transaction, load_evidence};
+    use super::{
+        SqliteMemoryStore, delete_all_memories_in_transaction, load_evidence,
+        load_evidence_for_memories,
+    };
     use crate::Database;
     use pw_application::memory::{
         Attribution, CandidateOperation, CandidateProvenanceRelation, ClassificationRun,
@@ -4068,6 +4094,50 @@ mod tests {
             .unwrap();
         assert_eq!(final_five.len(), 5);
         assert!(final_five.iter().any(|candidate| candidate.id == strong));
+    }
+
+    #[test]
+    fn batch_evidence_load_groups_all_candidate_evidence() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let first = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee cats".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 1),
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        let second = store
+            .apply_action(
+                &MemoryAction::Add {
+                    content: "coffee dogs".into(),
+                    pinned: false,
+                },
+                &EvidenceSource::new("default", 2),
+                2,
+            )
+            .unwrap()
+            .unwrap();
+        store
+            .apply_action(
+                &MemoryAction::Reinforce {
+                    memory_id: second,
+                    pin: false,
+                },
+                &EvidenceSource::new("default", 3),
+                3,
+            )
+            .unwrap();
+
+        let evidence =
+            load_evidence_for_memories(store.database.connection(), &[second, first]).unwrap();
+
+        assert_eq!(evidence[&first].len(), 1);
+        assert_eq!(evidence[&second].len(), 2);
+        assert!(evidence[&second][0].id < evidence[&second][1].id);
     }
 
     #[test]
