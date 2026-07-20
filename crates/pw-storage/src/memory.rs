@@ -2557,6 +2557,120 @@ mod tests {
     }
 
     #[test]
+    fn temporary_switch_tombstones_and_removes_a_real_promoted_add() {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let source_text = "I like green tea";
+        let observation = NewObservation::new("temporary-promoted", 8, source_text, 10);
+        store.insert_observation(observation.clone()).unwrap();
+        let lease = store
+            .claim_next_observation("worker", 10, 30)
+            .unwrap()
+            .unwrap();
+        let run = ClassificationRun::new(
+            lease.observation_id,
+            "test",
+            10,
+            &lease.canonical_input_hash,
+        );
+        let run_id = pw_application::memory::ObservationStore::begin_classification_run(
+            &mut store, &lease, &run, 11,
+        )
+        .unwrap();
+        let candidate_id = pw_application::memory::ObservationStore::persist_candidate(
+            &mut store,
+            PersistedCandidate {
+                classification_run_id: run_id,
+                ordinal: 0,
+                atom: MemoryAtom {
+                    id: 0,
+                    revision: 1,
+                    content: source_text.into(),
+                    subject_scope: SubjectScope::UserSelf,
+                    epistemic_form: EpistemicForm::FactClaim,
+                    attribution: Attribution::User,
+                    discourse: DiscourseFeatures {
+                        speech_act: SpeechAct::Asserted,
+                        source_mode: SourceMode::Direct,
+                        polarity: Polarity::Affirmed,
+                        conditionality: pw_application::memory::Conditionality::Actual,
+                        fictionality: Fictionality::RealWorld,
+                    },
+                    verification_status: VerificationStatus::UserReported,
+                    temporal_scope: TemporalScope::Stable,
+                    lifecycle_state: MemoryState::Active,
+                    source_spans: vec![SourceSpan {
+                        source_id: lease.canonical_input_hash.clone(),
+                        start: 0,
+                        end: source_text.len(),
+                    }],
+                },
+                target_memory_id: None,
+                expected_target_revision: None,
+                operation: CandidateOperation::Add,
+                relation: CandidateProvenanceRelation::Originated,
+                domain: MemoryDomain::SemanticUser,
+                write_class: MemoryWriteClass::NormalExplicit,
+                normalization_edits: Vec::new(),
+            },
+            11,
+        )
+        .unwrap()
+        .id();
+        let change_set = ProvisionalMemoryChangeSet {
+            request_key: run.request_key.clone(),
+            lease,
+            classification_run_id: run_id,
+            classifier_version: run.classifier_version.clone(),
+            schema_version: run.schema_version,
+            input_hash: run.input_hash.clone(),
+            actions: vec![VersionedMemoryAction {
+                action: MemoryAction::Add {
+                    content: source_text.into(),
+                    pinned: false,
+                },
+                expected_revision: None,
+            }],
+            provenance: vec![ProvenanceLink {
+                candidate_id,
+                relation: "originated".into(),
+            }],
+        };
+        let promoted = store.promote(&change_set, 12).unwrap();
+        assert_eq!(promoted.promoted_memory_ids.len(), 1);
+        let memory_id = promoted.promoted_memory_ids[0];
+
+        // This is the post-promotion race the temporary trigger must close:
+        // provenance cascades away, so the trigger itself must tombstone the
+        // final-support memory before it deletes the source graph.
+        store.database.connection().execute(
+            "INSERT INTO temporary_conversations(conversation_id,temporary,revision,updated_at) VALUES('temporary-promoted',1,1,13)",
+            [],
+        ).unwrap();
+        let remaining: i64 = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE id=?1",
+                [memory_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+        let tombstone: (i64, i64, i64) = store.database.connection().query_row(
+            "SELECT generation,final_support_removed,pinned FROM memory_tombstones WHERE memory_id=?1",
+            [memory_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        assert_eq!(tombstone, (1, 1, 0));
+        let observations: i64 = store.database.connection().query_row(
+            "SELECT COUNT(*) FROM memory_observations WHERE conversation_id='temporary-promoted'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(observations, 0);
+    }
+
+    #[test]
     fn promotion_policy_is_enforced_for_all_write_classes_and_domain_consents() {
         let cases = [
             (MemoryWriteClass::NormalExplicit, "normal_explicit"),

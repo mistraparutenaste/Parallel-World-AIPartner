@@ -137,7 +137,6 @@ impl CompanionStateStore for SqliteCompanionStateStore {
         if commitment.conversation_id.trim().is_empty()
             || commitment.revision < 0
             || !is_safe_persistent_content(&commitment.content)
-            || self.is_temporary_conversation(&commitment.conversation_id)?
         {
             return Ok(CasOutcome::Rejected);
         }
@@ -148,21 +147,25 @@ impl CompanionStateStore for SqliteCompanionStateStore {
             .map_err(state_error)?;
         let outcome = match (commitment.id, expected_revision) {
             (None, None) => {
-                transaction.execute(
-                    "INSERT INTO commitments(conversation_id,content,status,due_at,next_check_at,expires_at,revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?7)",
+                let changed = transaction.execute(
+                    "INSERT INTO commitments(conversation_id,content,status,due_at,next_check_at,expires_at,revision,created_at,updated_at) SELECT ?1,?2,?3,?4,?5,?6,1,?7,?7 WHERE NOT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?1 AND temporary=1)",
                     params![commitment.conversation_id, commitment.content, commitment.status.as_str(), commitment.due_at, commitment.next_check_at, commitment.expires_at, now],
                 ).map_err(state_error)?;
-                CasOutcome::Applied(1)
+                if changed == 1 {
+                    CasOutcome::Applied(1)
+                } else {
+                    temporary_write_outcome(&transaction, &commitment.conversation_id)?
+                }
             }
             (Some(id), Some(expected)) if expected >= 0 => {
                 let changed = transaction.execute(
-                    "UPDATE commitments SET content=?1,status=?2,due_at=?3,next_check_at=?4,expires_at=?5,revision=revision+1,updated_at=?6 WHERE id=?7 AND revision=?8",
-                    params![commitment.content, commitment.status.as_str(), commitment.due_at, commitment.next_check_at, commitment.expires_at, now, id, expected],
+                    "UPDATE commitments SET content=?1,status=?2,due_at=?3,next_check_at=?4,expires_at=?5,revision=revision+1,updated_at=?6 WHERE id=?7 AND revision=?8 AND NOT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?9 AND temporary=1)",
+                    params![commitment.content, commitment.status.as_str(), commitment.due_at, commitment.next_check_at, commitment.expires_at, now, id, expected, commitment.conversation_id],
                 ).map_err(state_error)?;
                 if changed == 1 {
                     CasOutcome::Applied(expected + 1)
                 } else {
-                    CasOutcome::Conflict
+                    temporary_write_outcome(&transaction, &commitment.conversation_id)?
                 }
             }
             _ => CasOutcome::Rejected,
@@ -185,10 +188,7 @@ impl CompanionStateStore for SqliteCompanionStateStore {
         now: i64,
     ) -> Result<CasOutcome, PortError> {
         state.validate()?;
-        if expected_revision < 0
-            || state.expires_at <= now
-            || self.is_temporary_conversation(&state.conversation_id)?
-        {
+        if expected_revision < 0 || state.expires_at <= now {
             return Ok(CasOutcome::Rejected);
         }
         let transaction = self
@@ -196,30 +196,26 @@ impl CompanionStateStore for SqliteCompanionStateStore {
             .connection_mut()
             .transaction()
             .map_err(state_error)?;
-        let existing: Option<i64> = transaction
-            .query_row(
-                "SELECT revision FROM dialogue_states WHERE conversation_id=?1",
-                [&state.conversation_id],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(state_error)?;
-        let outcome = match existing {
-            None if expected_revision == 0 => {
-                transaction.execute(
-                    "INSERT INTO dialogue_states(conversation_id,mood,relationship_summary,relationship_score,reaction,reflection_cursor,reflection_state,expires_at,revision,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,1,?9)",
+        let outcome = if expected_revision == 0 {
+            let changed = transaction.execute(
+                    "INSERT INTO dialogue_states(conversation_id,mood,relationship_summary,relationship_score,reaction,reflection_cursor,reflection_state,expires_at,revision,updated_at) SELECT ?1,?2,?3,?4,?5,?6,?7,?8,1,?9 WHERE NOT EXISTS(SELECT 1 FROM dialogue_states WHERE conversation_id=?1) AND NOT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?1 AND temporary=1)",
                     params![state.conversation_id, state.mood, state.relationship_summary, state.relationship_score, state.reaction, state.reflection_cursor, state.reflection_state, state.expires_at, now],
                 ).map_err(state_error)?;
+            if changed == 1 {
                 CasOutcome::Applied(1)
+            } else {
+                temporary_write_outcome(&transaction, &state.conversation_id)?
             }
-            Some(revision) if revision == expected_revision => {
-                transaction.execute(
-                    "UPDATE dialogue_states SET mood=?1,relationship_summary=?2,relationship_score=?3,reaction=?4,reflection_cursor=?5,reflection_state=?6,expires_at=?7,revision=revision+1,updated_at=?8 WHERE conversation_id=?9 AND revision=?10",
+        } else {
+            let changed = transaction.execute(
+                    "UPDATE dialogue_states SET mood=?1,relationship_summary=?2,relationship_score=?3,reaction=?4,reflection_cursor=?5,reflection_state=?6,expires_at=?7,revision=revision+1,updated_at=?8 WHERE conversation_id=?9 AND revision=?10 AND NOT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?9 AND temporary=1)",
                     params![state.mood, state.relationship_summary, state.relationship_score, state.reaction, state.reflection_cursor, state.reflection_state, state.expires_at, now, state.conversation_id, expected_revision],
                 ).map_err(state_error)?;
-                CasOutcome::Applied(revision + 1)
+            if changed == 1 {
+                CasOutcome::Applied(expected_revision + 1)
+            } else {
+                temporary_write_outcome(&transaction, &state.conversation_id)?
             }
-            _ => CasOutcome::Conflict,
         };
         transaction.commit().map_err(state_error)?;
         Ok(outcome)
@@ -311,6 +307,28 @@ impl CompanionStateStore for SqliteCompanionStateStore {
         transaction.commit().map_err(state_error)?;
         Ok(CasOutcome::Applied(tombstone.generation))
     }
+}
+
+/// A conditional write failed.  While its transaction holds the SQLite writer
+/// lock, this read cannot be invalidated by a concurrent temporary switch, so
+/// callers get a stable distinction between privacy rejection and ordinary
+/// optimistic-concurrency conflict.
+fn temporary_write_outcome(
+    transaction: &rusqlite::Transaction<'_>,
+    conversation_id: &str,
+) -> Result<CasOutcome, PortError> {
+    let temporary: bool = transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM temporary_conversations WHERE conversation_id=?1 AND temporary=1)",
+            [conversation_id],
+            |row| row.get(0),
+        )
+        .map_err(state_error)?;
+    Ok(if temporary {
+        CasOutcome::Rejected
+    } else {
+        CasOutcome::Conflict
+    })
 }
 
 fn state_error(error: rusqlite::Error) -> PortError {
@@ -424,6 +442,137 @@ mod tests {
                 .unwrap(),
             CasOutcome::Rejected
         );
+    }
+
+    #[test]
+    fn temporary_switch_fences_two_connection_commitment_and_dialogue_writes() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-temporary-state-fence-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let mut writer = SqliteCompanionStateStore::new(Database::open(&path).unwrap());
+        let mut switcher = SqliteCompanionStateStore::new(Database::open(&path).unwrap());
+
+        let commitment = |conversation_id: &str, id, revision| Commitment {
+            id,
+            conversation_id: conversation_id.into(),
+            content: "follow up".into(),
+            status: CommitmentStatus::Open,
+            due_at: None,
+            next_check_at: None,
+            expires_at: Some(20),
+            revision,
+        };
+
+        // Seed update targets, then make writer's preflight observation stale.
+        assert_eq!(
+            writer
+                .save_commitment(commitment("update", None, 0), None, 1)
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        assert_eq!(
+            writer
+                .compare_and_set_dialogue_state(
+                    DialogueState {
+                        conversation_id: "update".into(),
+                        ..dialogue(20)
+                    },
+                    0,
+                    1
+                )
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        assert!(!writer.is_temporary_conversation("update").unwrap());
+        assert_eq!(
+            switcher
+                .set_temporary_conversation(
+                    TemporaryConversationSettings {
+                        conversation_id: "update".into(),
+                        temporary: true,
+                        revision: 0
+                    },
+                    0,
+                    2
+                )
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        assert_eq!(
+            writer
+                .save_commitment(commitment("update", Some(1), 1), Some(1), 3)
+                .unwrap(),
+            CasOutcome::Rejected
+        );
+        assert_eq!(
+            writer
+                .compare_and_set_dialogue_state(
+                    DialogueState {
+                        conversation_id: "update".into(),
+                        revision: 1,
+                        ..dialogue(20)
+                    },
+                    1,
+                    3
+                )
+                .unwrap(),
+            CasOutcome::Rejected
+        );
+
+        // The same fence applies to conditional inserts after a stale read.
+        assert!(!writer.is_temporary_conversation("insert").unwrap());
+        assert_eq!(
+            switcher
+                .set_temporary_conversation(
+                    TemporaryConversationSettings {
+                        conversation_id: "insert".into(),
+                        temporary: true,
+                        revision: 0
+                    },
+                    0,
+                    4
+                )
+                .unwrap(),
+            CasOutcome::Applied(1)
+        );
+        assert_eq!(
+            writer
+                .save_commitment(commitment("insert", None, 0), None, 5)
+                .unwrap(),
+            CasOutcome::Rejected
+        );
+        assert_eq!(
+            writer
+                .compare_and_set_dialogue_state(
+                    DialogueState {
+                        conversation_id: "insert".into(),
+                        ..dialogue(20)
+                    },
+                    0,
+                    5
+                )
+                .unwrap(),
+            CasOutcome::Rejected
+        );
+        for table in ["commitments", "dialogue_states"] {
+            let remaining: i64 = writer
+                .database
+                .connection()
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM {table} WHERE conversation_id IN ('update','insert')"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(remaining, 0, "temporary fence retained {table}");
+        }
+        drop(writer);
+        drop(switcher);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

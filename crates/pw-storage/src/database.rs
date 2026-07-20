@@ -26,7 +26,9 @@ const MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION: &str =
 const DIALOGUE_STATE_MIGRATION: &str = include_str!("../migrations/0014_dialogue_state.sql");
 const MEMORY_POLICY_FENCES_MIGRATION: &str =
     include_str!("../migrations/0015_memory_policy_fences.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 15;
+const TEMPORARY_CONVERSATION_FENCE_MIGRATION: &str =
+    include_str!("../migrations/0016_temporary_conversation_fence.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 16;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -224,6 +226,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 15)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 16 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(TEMPORARY_CONVERSATION_FENCE_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 16)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -250,10 +259,12 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        DETACHED_TURN_SEQUENCE_MIGRATION, Database, INITIAL_MIGRATION, MEMORY_FTS_MIGRATION,
-        MEMORY_LIFECYCLE_MIGRATION, MEMORY_OBSERVATION_LEDGER_MIGRATION, MEMORY_TYPED_MIGRATION,
-        MEMORY_UNIQUE_MIGRATION, OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION,
-        TURN_IDENTITY_MIGRATION, TURN_SEQUENCE_MIGRATION,
+        DETACHED_TURN_SEQUENCE_MIGRATION, DIALOGUE_STATE_MIGRATION, Database, INITIAL_MIGRATION,
+        MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION, MEMORY_FTS_MIGRATION, MEMORY_LIFECYCLE_MIGRATION,
+        MEMORY_OBSERVATION_LEDGER_MIGRATION, MEMORY_POLICY_FENCES_MIGRATION,
+        MEMORY_TYPED_MIGRATION, MEMORY_UNIQUE_MIGRATION,
+        OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION, TURN_IDENTITY_MIGRATION,
+        TURN_SEQUENCE_MIGRATION,
     };
 
     #[test]
@@ -306,7 +317,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
 
         for table in [
@@ -342,13 +353,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 16).unwrap();
+        connection.pragma_update(None, "user_version", 17).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 16,
-                supported: 15
+                found: 17,
+                supported: 16
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -376,7 +387,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
 
         drop(reopened);
@@ -417,7 +428,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -541,7 +552,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -585,7 +596,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
         let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
@@ -625,7 +636,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -701,7 +712,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -758,14 +769,14 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn populated_v12_fixture_upgrades_through_v15_and_reopens() {
+    fn populated_v12_fixture_upgrades_through_v16_and_reopens() {
         let path = std::env::temp_dir().join(format!(
             "pw-v12-companion-state-{}.sqlite3",
             std::process::id()
@@ -808,7 +819,7 @@ mod tests {
             .connection()
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 15);
+        assert_eq!(version, 16);
         drop(database);
         assert_eq!(
             Database::open(&path)
@@ -816,8 +827,57 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            15
+            16
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn v15_database_replaces_the_temporary_privacy_trigger_on_upgrade() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-v15-temporary-fence-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            for migration in [
+                INITIAL_MIGRATION,
+                TURN_IDENTITY_MIGRATION,
+                TURN_SEQUENCE_MIGRATION,
+                DETACHED_TURN_SEQUENCE_MIGRATION,
+                MEMORY_FTS_MIGRATION,
+                MEMORY_UNIQUE_MIGRATION,
+                MEMORY_LIFECYCLE_MIGRATION,
+                super::MESSAGES_ID_CURSOR_MIGRATION,
+                MEMORY_TYPED_MIGRATION,
+                MEMORY_OBSERVATION_LEDGER_MIGRATION,
+                OBSERVATION_RECOVERY_AND_PRIVACY_MIGRATION,
+                super::PROMOTION_REPLAY_FENCE_MIGRATION,
+                MEMORY_DOMAINS_AND_COMMITMENTS_MIGRATION,
+                DIALOGUE_STATE_MIGRATION,
+                MEMORY_POLICY_FENCES_MIGRATION,
+            ] {
+                connection.execute_batch(migration).unwrap();
+            }
+            connection.pragma_update(None, "user_version", 15).unwrap();
+        }
+        let database = Database::open(&path).unwrap();
+        let version: i64 = database
+            .connection()
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        let trigger: String = database
+            .connection()
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='temporary_conversations_privacy_fence_insert'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(version, 16);
+        assert!(trigger.contains("memory_tombstones"));
+        drop(database);
         let _ = std::fs::remove_file(path);
     }
 }
