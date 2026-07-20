@@ -213,6 +213,12 @@
           "markdownDescription": "Enables the delete_memories command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_memory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-memory",
+          "markdownDescription": "Enables the delete_memory command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_user_dict_word command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-user-dict-word",
@@ -283,6 +289,12 @@
           "type": "string",
           "const": "allow-get-llm-settings",
           "markdownDescription": "Enables the get_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_memory_center command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-memory-center",
+          "markdownDescription": "Enables the get_memory_center command without any pre-configured scope."
         },
         {
           "description": "Enables the get_persona_profile command without any pre-configured scope.",
@@ -477,6 +489,12 @@
           "markdownDescription": "Enables the set_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_memory_domain_control command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-memory-domain-control",
+          "markdownDescription": "Enables the set_memory_domain_control command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_persona_profile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-persona-profile",
@@ -493,6 +511,12 @@
           "type": "string",
           "const": "allow-set-speech-playback",
           "markdownDescription": "Enables the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_temporary_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-temporary-conversation",
+          "markdownDescription": "Enables the set_temporary_conversation command without any pre-configured scope."
         },
         {
           "description": "Enables the set_theme_preference command without any pre-configured scope.",
@@ -559,6 +583,12 @@
           "type": "string",
           "const": "deny-delete-memories",
           "markdownDescription": "Denies the delete_memories command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_memory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-memory",
+          "markdownDescription": "Denies the delete_memory command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_user_dict_word command without any pre-configured scope.",
@@ -631,6 +661,12 @@
           "type": "string",
           "const": "deny-get-llm-settings",
           "markdownDescription": "Denies the get_llm_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_memory_center command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-memory-center",
+          "markdownDescription": "Denies the get_memory_center command without any pre-configured scope."
         },
         {
           "description": "Denies the get_persona_profile command without any pre-configured scope.",
@@ -825,6 +861,12 @@
           "markdownDescription": "Denies the set_llm_settings command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_memory_domain_control command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-memory-domain-control",
+          "markdownDescription": "Denies the set_memory_domain_control command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_persona_profile command without any pre-configured scope.",
           "type": "string",
           "const": "deny-set-persona-profile",
@@ -841,6 +883,12 @@
           "type": "string",
           "const": "deny-set-speech-playback",
           "markdownDescription": "Denies the set_speech_playback command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_temporary_conversation command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-temporary-conversation",
+          "markdownDescription": "Denies the set_temporary_conversation command without any pre-configured scope."
         },
         {
           "description": "Denies the set_theme_preference command without any pre-configured scope.",
