@@ -445,7 +445,9 @@ pub fn grant_proactive_turn<H: FrequencyHistory>(
         || policy.temporary_conversation
         || policy.policy_error
         || policy.now < 0
-        || policy.snoozed_until.is_some_and(|until| until > policy.now)
+        || policy
+            .snoozed_until
+            .is_some_and(|until| until < 0 || until > policy.now)
     {
         return false;
     }
@@ -605,6 +607,14 @@ mod tests {
             mutate(&mut blocked);
             assert!(!grant_proactive_turn(&gate, &history, &candidate, blocked));
         }
+        let mut invalid_snooze = policy();
+        invalid_snooze.snoozed_until = Some(-1);
+        assert!(!grant_proactive_turn(
+            &gate,
+            &history,
+            &candidate,
+            invalid_snooze
+        ));
 
         let limited = History(FrequencySnapshot {
             topic_exists: true,

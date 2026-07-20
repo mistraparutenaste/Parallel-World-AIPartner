@@ -114,6 +114,21 @@ pub fn detect_explicit_commitment(
             "\u{3057}\u{307e}\u{3059}\u{306d}",         // しますね
         ],
     );
+    let action_phrase = contains_any(
+        trimmed,
+        &[
+            "\u{3057}\u{307e}\u{3059}",
+            "\u{3084}\u{308a}\u{307e}\u{3059}",
+            "\u{3057}\u{3066}\u{304a}\u{304d}\u{307e}\u{3059}",
+            "\u{78ba}\u{8a8d}",
+            "\u{9023}\u{7d61}",
+            "\u{884c}\u{304d}",
+            "\u{4e88}\u{7d04}",
+            "\u{5bfe}\u{5fdc}",
+        ],
+    );
+    let prefix_requires_action = contains_any(trimmed, &["\u{5fc5}\u{305a}", "\u{6b21}\u{306f}"]);
+    let japanese_explicit = japanese_explicit && (!prefix_requires_action || action_phrase);
     if !english_explicit && !japanese_explicit {
         return None;
     }
@@ -171,7 +186,8 @@ mod tests {
 
     #[test]
     fn commitment_matching_is_phrase_based_and_bounded() {
-        for ordinary in ["今日はやすみです", "やめます"] {
+        for ordinary in ["今日はやすみです", "やめます", "必ず雨です", "次は晴れです"]
+        {
             assert!(detect_explicit_commitment("chat", ordinary, 10).is_none());
         }
         assert!(detect_explicit_commitment("chat", "必ず資料を確認します", 10).is_some());

@@ -15,6 +15,8 @@
   cancellation checks.
 - Hardened explicit commitment matching to phrase allow-lists and added an
   atomic idle-epoch claim to prevent duplicate proactive grants.
+- Prefix-only Japanese cues (`必ず`/`次は`) now require an action phrase;
+  invalid negative snooze timestamps fail closed.
 - Planned retrieval now uses one `IMMEDIATE` SQLite snapshot for temporary
   status, consent controls, dialogue state, and commitments.
 - Async control writes preserve payload revisions for CAS.
