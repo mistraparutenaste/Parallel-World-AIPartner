@@ -2,7 +2,7 @@
 //! maps control JSON onto the character.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -17,10 +17,10 @@ use pw_application::conversation::{
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
 use pw_application::memory::{
     DEFAULT_MEMORY_LIMIT, EvidenceSource, HybridConsolidator, JapanesePersistentFactGenerator,
-    LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, PersistentFactGenerator,
-    ProposedAction, RollingSummaryGenerator, SummaryGenerator, has_explicit_pin_intent,
-    is_role_preserving_summary, is_safe_persistent_content, merge_rolling_summaries,
-    redact_persistent_content,
+    LlmMemoryClassifier, MemoryClassifier, MemoryContext, MemoryStore, NewObservation,
+    ObservationOutcome, PersistentFactGenerator, ProposedAction, RollingSummaryGenerator,
+    SummaryGenerator, has_explicit_pin_intent, is_role_preserving_summary,
+    is_safe_persistent_content, merge_rolling_summaries, redact_persistent_content,
 };
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
@@ -610,18 +610,20 @@ struct PersistentConversationEvents<E, H> {
     conversation_id: String,
     pending_users: Mutex<HashMap<TurnId, (String, Option<String>)>>,
     enrichment: Option<EnrichmentSender>,
+    observation_database_path: Option<PathBuf>,
 }
 
 impl<E, H> PersistentConversationEvents<E, H> {
     #[cfg(test)]
     fn new(inner: E, history: H, conversation_id: impl Into<String>) -> Self {
-        Self::new_with_enrichment(inner, history, conversation_id, None)
+        Self::new_with_enrichment(inner, history, conversation_id, None, None)
     }
     fn new_with_enrichment(
         inner: E,
         history: H,
         conversation_id: impl Into<String>,
         enrichment: Option<EnrichmentSender>,
+        observation_database_path: Option<PathBuf>,
     ) -> Self {
         Self {
             inner,
@@ -629,6 +631,49 @@ impl<E, H> PersistentConversationEvents<E, H> {
             conversation_id: conversation_id.into(),
             pending_users: Mutex::new(HashMap::new()),
             enrichment,
+            observation_database_path,
+        }
+    }
+
+    fn record_observation(&self, turn: TurnId, text: &str) {
+        let Some(path) = &self.observation_database_path else {
+            return;
+        };
+        let result = Database::open(path)
+            .map(SqliteMemoryStore::new)
+            .map_err(|error| PortError(error.to_string()))
+            .and_then(|mut store| {
+                store
+                    .insert_observation(NewObservation::new(
+                        &self.conversation_id,
+                        turn.value(),
+                        text,
+                        unix_timestamp(),
+                    ))
+                    .map(|_| ())
+            });
+        if let Err(error) = result {
+            tracing::warn!(%error, "memory observation persistence failed; conversation remains available");
+        }
+    }
+
+    fn finalize_observation(&self, turn: TurnId, outcome: ObservationOutcome) {
+        let Some(path) = &self.observation_database_path else {
+            return;
+        };
+        let result = Database::open(path)
+            .map(SqliteMemoryStore::new)
+            .map_err(|error| PortError(error.to_string()))
+            .and_then(|mut store| {
+                store.finalize_observation_by_turn(
+                    &self.conversation_id,
+                    turn.value(),
+                    outcome,
+                    unix_timestamp(),
+                )
+            });
+        if let Err(error) = result {
+            tracing::warn!(%error, "memory observation outcome finalization failed; conversation remains available");
         }
     }
 
@@ -680,6 +725,17 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             }
         }
         pending.insert(turn, (text.to_owned(), None));
+        self.record_observation(turn, text);
+        if let Some(enrichment) = &self.enrichment
+            && enrichment
+                .replace_latest(EnrichmentJob {
+                    user_text: text.to_owned(),
+                    turn_id: turn.value(),
+                })
+                .is_err()
+        {
+            tracing::warn!("memory enrichment worker unavailable; conversation remains available");
+        }
         self.inner.on_user_message(turn, text);
     }
     fn on_control(&self, turn: TurnId, control: &ReplyControl) {
@@ -703,7 +759,9 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
             speech_text,
         ) {
             tracing::warn!(%error, "conversation history persistence degraded to memory");
+            self.finalize_observation(turn, ObservationOutcome::HistoryPersistFailed);
         } else {
+            self.finalize_observation(turn, ObservationOutcome::Completed);
             if let Some(enrichment) = &self.enrichment
                 && enrichment
                     .replace_latest(EnrichmentJob {
@@ -721,10 +779,12 @@ impl<E: ConversationEvents, H: ConversationHistory> ConversationEvents
     }
     fn on_cancelled(&self, turn: TurnId) {
         self.pending_users.lock().unwrap().remove(&turn);
+        self.finalize_observation(turn, ObservationOutcome::Cancelled);
         self.inner.on_cancelled(turn);
     }
     fn on_error(&self, turn: TurnId, message: &str) {
         self.pending_users.lock().unwrap().remove(&turn);
+        self.finalize_observation(turn, ObservationOutcome::LlmFailed);
         self.inner.on_error(turn, message);
     }
 }
@@ -1171,6 +1231,7 @@ impl ChatService {
             history,
             DEFAULT_CONVERSATION_ID,
             Some(enrichment_tx),
+            Some(database_path.clone()),
         );
 
         let context_thread = std::thread::Builder::new()
@@ -3257,6 +3318,7 @@ mod tests {
             history,
             DEFAULT_CONVERSATION_ID,
             Some(sender),
+            None,
         );
         let mut tracker = TurnTracker::new();
         for assistant in ["覚えました", "もう一度覚えました"] {
@@ -3297,6 +3359,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(evidence_count, 2);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn failed_or_cancelled_reply_keeps_the_accepted_user_observation() {
+        let path = std::env::temp_dir().join(format!(
+            "pw-observation-terminal-{}.sqlite3",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
+        let events = PersistentConversationEvents::new_with_enrichment(
+            NoopEvents::default(),
+            history,
+            DEFAULT_CONVERSATION_ID,
+            None,
+            Some(path.clone()),
+        );
+        let mut tracker = TurnTracker::new();
+        let failed = tracker.begin_turn();
+        events.on_user_message(failed, "first durable user observation");
+        events.on_error(failed, "offline");
+        let cancelled = tracker.begin_turn();
+        events.on_user_message(cancelled, "second durable user observation");
+        events.on_cancelled(cancelled);
+        drop(events);
+
+        let database = Database::open(&path).unwrap();
+        let outcomes = database
+            .connection()
+            .prepare("SELECT response_outcome FROM memory_observations ORDER BY turn_id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(outcomes, ["llm_failed", "cancelled"]);
         let _ = std::fs::remove_file(path);
     }
 
@@ -3849,6 +3948,7 @@ mod tests {
             history,
             "chat",
             Some(sender),
+            None,
         );
         let mut tracker = TurnTracker::new();
         let first = tracker.begin_turn();

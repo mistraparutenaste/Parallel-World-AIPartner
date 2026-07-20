@@ -15,7 +15,9 @@ const MEMORY_LIFECYCLE_MIGRATION: &str = include_str!("../migrations/0007_memory
 const MESSAGES_ID_CURSOR_MIGRATION: &str =
     include_str!("../migrations/0008_messages_id_cursor.sql");
 const MEMORY_TYPED_MIGRATION: &str = include_str!("../migrations/0009_typed_memory.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 9;
+const MEMORY_OBSERVATION_LEDGER_MIGRATION: &str =
+    include_str!("../migrations/0010_memory_observation_ledger.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -143,6 +145,13 @@ impl Database {
             transaction.pragma_update(None, "user_version", 9)?;
             transaction.commit()?;
         }
+        let current: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if current < 10 {
+            let transaction = connection.transaction()?;
+            transaction.execute_batch(MEMORY_OBSERVATION_LEDGER_MIGRATION)?;
+            transaction.pragma_update(None, "user_version", 10)?;
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
 
@@ -216,7 +225,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
 
         for table in [
@@ -224,6 +233,11 @@ mod tests {
             "messages",
             "conversation_summaries",
             "memories",
+            "memory_observations",
+            "memory_candidates",
+            "memory_classification_runs",
+            "memory_promotions",
+            "memory_provenance",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -240,13 +254,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 10).unwrap();
+        connection.pragma_update(None, "user_version", 11).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 10,
-                supported: 9
+                found: 11,
+                supported: 10
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -274,7 +288,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
 
         drop(reopened);
@@ -315,7 +329,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -439,7 +453,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -483,7 +497,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
         let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
@@ -523,7 +537,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            9
+            10
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);

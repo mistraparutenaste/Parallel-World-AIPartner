@@ -4,6 +4,8 @@ mod consolidation;
 mod context;
 pub mod epistemic;
 mod lifecycle;
+mod observation;
+mod promotion;
 mod validator;
 
 pub use consolidation::{
@@ -23,6 +25,15 @@ pub use epistemic::{
 pub use lifecycle::{
     DORMANT_DELETE_AFTER_SECONDS, EvidenceKind, MemoryAction, MemoryCandidate, MemoryEvidence,
     MemoryState, memory_strength, prompt_rank, should_become_dormant,
+};
+pub use observation::{
+    CandidateOperation, CandidateProvenanceRelation, ClassificationRun, NewObservation,
+    ObservationLease, ObservationOutcome, ObservationStore, PersistedCandidate, ProcessingState,
+    input_hash, request_key,
+};
+pub use promotion::{
+    MemoryPromoter, PromotionResult, ProvenanceLink, ProvisionalMemoryChangeSet,
+    VersionedMemoryAction,
 };
 pub use validator::{
     CandidateRelation, NormalizationEdit, TypedCandidate, ValidationError, validate_candidate,
