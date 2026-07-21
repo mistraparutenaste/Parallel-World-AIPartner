@@ -103,6 +103,8 @@ powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 
 Windowsで`ParallelWorld_run.bat`を使う場合は、managed Irodori環境を`%LOCALAPPDATA%\com.parallelworld.desktop\irodori`で確認し、未構築または破損時だけ構築するか尋ねます。固定downloadは約2.55 GB、構築に要求する保守的な空き容量は`17,976,201,340` bytesです。リポジトリ内やsystem Pythonへ環境は作らず、構築に必要なGitも検証済みMinGitをmanaged rootへ配置するためsystem Gitは不要です。BATはpause後もアプリ・cancel・errorの終了コードを保持します。外部のuser-managed Irodoriを使う場合は`PW_TTS_ENGINE`と`PW_IRODORI_DIR`を設定して`dev-up.ps1`を直接起動します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
+macOSでは、リポジトリルートの`ParallelWorld_run.command`をFinderからダブルクリックすると、frontend typecheckとRust `cargo check`を実行してから`tauri dev`を起動します。初回にmacOSが実行を拒否した場合は、Terminalで`chmod +x ParallelWorld_run.command`を一度実行してください。このランチャーはWindows専用のmanaged Irodori環境を構築しません。TTSを使う場合は、設定画面でユーザー管理の外部エンドポイントを指定してください。
+
 ## 外部モデルとサービス
 
 ### LLM
