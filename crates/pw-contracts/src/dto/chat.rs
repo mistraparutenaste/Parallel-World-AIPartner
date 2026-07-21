@@ -70,14 +70,40 @@ pub struct ConversationStateEventDto {
     pub message: Option<String>,
 }
 
+/// LLM endpoint presets supported by the desktop settings UI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export_to = "LlmProviderKind.ts")]
+pub enum LlmProviderKind {
+    #[default]
+    Local,
+    Openai,
+    Gemini,
+    OpencodeZen,
+    Custom,
+}
+
 /// Persisted LLM connection and prompt settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "LlmSettingsDto.ts")]
 pub struct LlmSettingsDto {
     pub schema_version: u16,
+    /// Provider preset. Missing legacy values remain local.
+    #[serde(default)]
+    pub provider: LlmProviderKind,
     /// OpenAI-compatible base URL, e.g. `http://127.0.0.1:8080/v1`.
     pub base_url: String,
     pub model: String,
+    /// A replacement API key supplied by the UI. It is never persisted or
+    /// returned by the backend.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    /// Whether a key is currently stored in the operating-system credential store.
+    #[serde(default)]
+    pub api_key_configured: bool,
+    /// Requests deletion of the stored key. This command-only flag is not persisted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub clear_api_key: bool,
     /// Permit non-loopback endpoints.
     pub allow_remote: bool,
     pub system_prompt: String,

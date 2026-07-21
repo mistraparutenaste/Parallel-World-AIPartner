@@ -12,6 +12,7 @@ tauri-build = { workspace = true }
 [dependencies]
 async-trait = { workspace = true }
 image = { workspace = true }
+keyring = { workspace = true }
 pw-application = { workspace = true }
 pw-audio = { workspace = true }
 pw-contracts = { workspace = true }

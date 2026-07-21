@@ -58,6 +58,7 @@ export type { DialogueSummaryDto } from './generated/DialogueSummaryDto';
 export type { ConversationStateDto } from './generated/ConversationStateDto';
 export type { ConversationStateEventDto } from './generated/ConversationStateEventDto';
 export type { LlmSettingsDto } from './generated/LlmSettingsDto';
+export type { LlmProviderKind } from './generated/LlmProviderKind';
 export type { MotionGroupDto } from './generated/MotionGroupDto';
 export type { SpeechAudioEventDto } from './generated/SpeechAudioEventDto';
 export type { SpeechStopEventDto } from './generated/SpeechStopEventDto';

@@ -2,6 +2,31 @@ import type { LlmSettingsDto } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 
+type Provider = LlmSettingsDto['provider'];
+
+const PROVIDER_PRESETS: Record<
+  Provider,
+  { label: string; baseUrl?: string; remote: boolean }
+> = {
+  local: { label: 'ローカル / LAN', remote: false },
+  openai: {
+    label: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    remote: true,
+  },
+  gemini: {
+    label: 'Google Gemini（OpenAI互換）',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    remote: true,
+  },
+  opencode_zen: {
+    label: 'OpenCode Zen（Chat Completions）',
+    baseUrl: 'https://opencode.ai/zen/v1',
+    remote: true,
+  },
+  custom: { label: 'カスタム（OpenAI互換）', remote: true },
+};
+
 /**
  * LLM section of the settings window: endpoint, model and prompt
  * configuration. Non-loopback endpoints require the explicit
@@ -16,7 +41,11 @@ export function LlmPanel() {
     invoke<LlmSettingsDto>('get_llm_settings')
       .then((loaded) => {
         if (!cancelled) {
-          setSettings(loaded);
+          setSettings({
+            ...loaded,
+            api_key: loaded.api_key ?? '',
+            clear_api_key: loaded.clear_api_key ?? false,
+          });
         }
       })
       .catch((error: unknown) => {
@@ -31,6 +60,18 @@ export function LlmPanel() {
 
   const update = (patch: Partial<LlmSettingsDto>) => {
     setSettings((current) => (current ? { ...current, ...patch } : current));
+  };
+
+  const selectProvider = (provider: Provider) => {
+    const preset = PROVIDER_PRESETS[provider];
+    update({
+      provider,
+      ...(preset.baseUrl ? { base_url: preset.baseUrl } : {}),
+      allow_remote: preset.remote,
+      api_key: '',
+      api_key_configured: false,
+      clear_api_key: false,
+    });
   };
 
   const save = () => {
@@ -54,6 +95,20 @@ export function LlmPanel() {
       {settings !== null && (
         <>
           <div>
+            <label htmlFor="llm-provider">プロバイダー</label>
+            <select
+              id="llm-provider"
+              value={settings.provider}
+              onChange={(event) => selectProvider(event.target.value as Provider)}
+            >
+              {Object.entries(PROVIDER_PRESETS).map(([value, preset]) => (
+                <option key={value} value={value}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label htmlFor="llm-base-url">接続先 (OpenAI互換)</label>
             <input
               id="llm-base-url"
@@ -71,6 +126,42 @@ export function LlmPanel() {
               onChange={(event) => update({ model: event.target.value })}
             />
           </div>
+          {settings.provider !== 'local' && (
+            <div>
+              <label htmlFor="llm-api-key">APIキー</label>
+              <input
+                id="llm-api-key"
+                type="password"
+                value={settings.api_key}
+                placeholder={
+                  settings.api_key_configured
+                    ? '保存済み（変更する場合のみ入力）'
+                    : 'APIキーを入力'
+                }
+                autoComplete="off"
+                onChange={(event) =>
+                  update({ api_key: event.target.value, clear_api_key: false })
+                }
+              />
+              {settings.api_key_configured && (
+                <button
+                  type="button"
+                  onClick={() => update({ api_key: '', clear_api_key: true })}
+                >
+                  保存済みAPIキーを削除
+                </button>
+              )}
+              <p>
+                APIキーはOSの資格情報ストアに保存され、設定ファイルや画面には返されません。
+              </p>
+            </div>
+          )}
+          {settings.provider === 'opencode_zen' && (
+            <p>
+              OpenCode ZenはChat Completions対応モデルのみ利用できます。Responses
+              API専用モデルは未対応です。
+            </p>
+          )}
           <div>
             <label>
               <input

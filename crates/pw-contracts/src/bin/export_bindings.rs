@@ -20,7 +20,7 @@ use pw_contracts::{
     DarkExpressionSafetySettingsDto, DataDeletionResultDto, DataUsageDto, DeviceFallbackEventDto,
     DiagnosticReportDto, DialogueSummaryDto, ExclusionRuleDto, FailureClassDto, FrequencyPolicyDto,
     FrontendDiagnosticDto, FrontendErrorKindDto, FullscreenActivationRuleDto, HealthStatusDto,
-    LlmSettingsDto, MemoryCenterDto, MemoryDomainControlDto, MemorySummaryDto,
+    LlmProviderKind, LlmSettingsDto, MemoryCenterDto, MemoryDomainControlDto, MemorySummaryDto,
     ModeActivationRulesDto, ModeProfileDto, ModeProfilesDto, MotionGroupDto,
     PendingMemoryCandidateDto, PersonaProfileDto, PersonaSettingsDto, ProcessOwnershipDto,
     QueueMetricsDto, QuietHoursRuleDto, RuntimeDiagnosticsDto, RuntimeFeatureDto,
@@ -101,6 +101,8 @@ fn main() {
     ConversationLogPageDto::export_all(&config).expect("export ConversationLogPageDto bindings");
     ConversationHistoryDeletedEventDto::export_all(&config)
         .expect("export deletion event bindings");
+    LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");
+    LlmProviderKind::export_all(&config).expect("export LlmProviderKind bindings");
     DataUsageDto::export_all(&config).expect("export DataUsageDto bindings");
     DataDeletionResultDto::export_all(&config).expect("export DataDeletionResultDto bindings");
     MemoryCenterDto::export_all(&config).expect("export MemoryCenterDto bindings");
@@ -112,7 +114,6 @@ fn main() {
     DialogueSummaryDto::export_all(&config).expect("export DialogueSummaryDto bindings");
     ConversationStateEventDto::export_all(&config)
         .expect("export ConversationStateEventDto bindings");
-    LlmSettingsDto::export_all(&config).expect("export LlmSettingsDto bindings");
     TtsEngineKind::export_all(&config).expect("export TtsEngineKind bindings");
     TtsSettingsDto::export_all(&config).expect("export TtsSettingsDto bindings");
     TtsVoiceDto::export_all(&config).expect("export TtsVoiceDto bindings");

@@ -43,7 +43,7 @@ pub use character_manifest::{
 };
 pub use chat::{
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
-    ConversationMessageDto, ConversationStateEventDto, LlmSettingsDto,
+    ConversationMessageDto, ConversationStateEventDto, LlmProviderKind, LlmSettingsDto,
 };
 pub use data::{DataDeletionResultDto, DataUsageDto};
 pub use diagnostics::{

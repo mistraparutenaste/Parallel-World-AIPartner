@@ -61,7 +61,9 @@ pub fn get_llm_settings(layout: State<'_, AppDataLayout>) -> LlmSettingsDto {
 #[allow(clippy::needless_pass_by_value)] // tauri commands take owned args
 pub fn set_llm_settings(
     layout: State<'_, AppDataLayout>,
+    service: State<'_, ChatService>,
     settings: LlmSettingsDto,
 ) -> Result<(), String> {
-    save_llm_settings(&layout, &settings)
+    save_llm_settings(&layout, &settings)?;
+    service.reset()
 }

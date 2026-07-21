@@ -58,6 +58,7 @@ fn full_turn_against_the_real_server() {
     let llm = OpenAiCompatClient::new(LlmClientConfig {
         base_url,
         model,
+        api_key: None,
         allow_remote: false,
         timeout: Duration::from_mins(3),
     })

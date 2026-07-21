@@ -2,10 +2,38 @@
 
 use std::path::{Path, PathBuf};
 
-use pw_contracts::{LlmSettingsDto, SCHEMA_VERSION};
+use pw_contracts::{LlmProviderKind, LlmSettingsDto, SCHEMA_VERSION};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "llm.json";
+const CREDENTIAL_SERVICE: &str = "com.parallelworld.desktop.llm";
+
+fn credential_account(provider: LlmProviderKind) -> &'static str {
+    match provider {
+        LlmProviderKind::Local => "local",
+        LlmProviderKind::Openai => "openai",
+        LlmProviderKind::Gemini => "gemini",
+        LlmProviderKind::OpencodeZen => "opencode-zen",
+        LlmProviderKind::Custom => "custom",
+    }
+}
+
+fn credential_entry(provider: LlmProviderKind) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(CREDENTIAL_SERVICE, credential_account(provider))
+        .map_err(|error| format!("failed to access credential store: {error}"))
+}
+
+/// Loads the provider key without exposing it through IPC or persisted settings.
+pub fn load_llm_api_key(provider: LlmProviderKind) -> Result<Option<String>, String> {
+    if provider == LlmProviderKind::Local {
+        return Ok(None);
+    }
+    match credential_entry(provider)?.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(format!("failed to read API key: {error}")),
+    }
+}
 
 /// Built-in defaults: llama-server on loopback and the reply format
 /// contract (control JSON prelude) from 基本設計 7章.
@@ -13,8 +41,12 @@ const FILE_NAME: &str = "llm.json";
 pub fn default_llm_settings() -> LlmSettingsDto {
     LlmSettingsDto {
         schema_version: SCHEMA_VERSION,
+        provider: LlmProviderKind::Local,
         base_url: "http://127.0.0.1:8080/v1".to_owned(),
         model: "default".to_owned(),
+        api_key: String::new(),
+        api_key_configured: false,
+        clear_api_key: false,
         allow_remote: false,
         system_prompt: "あなたはデスクトップに常駐するAIパートナーです。\
 応答の1行目には {\"emotion\":\"表情名\",\"intensity\":0.0から1.0,\"motion\":\"モーション名\"} \
@@ -35,7 +67,13 @@ fn settings_path(layout: &AppDataLayout) -> PathBuf {
 /// Loads settings, falling back to defaults when missing or invalid.
 #[must_use]
 pub fn load_llm_settings(layout: &AppDataLayout) -> LlmSettingsDto {
-    read_settings(&settings_path(layout)).unwrap_or_else(default_llm_settings)
+    let mut settings = read_settings(&settings_path(layout)).unwrap_or_else(default_llm_settings);
+    settings.api_key.clear();
+    settings.clear_api_key = false;
+    if settings.provider != LlmProviderKind::Local {
+        settings.api_key_configured = load_llm_api_key(settings.provider).ok().flatten().is_some();
+    }
+    settings
 }
 
 fn read_settings(path: &Path) -> Option<LlmSettingsDto> {
@@ -58,7 +96,26 @@ fn read_settings(path: &Path) -> Option<LlmSettingsDto> {
 pub fn save_llm_settings(layout: &AppDataLayout, settings: &LlmSettingsDto) -> Result<(), String> {
     pw_llm::validate_base_url(&settings.base_url, settings.allow_remote)
         .map_err(|error| error.to_string())?;
-    let json = serde_json::to_string_pretty(settings)
+    let api_key_configured = if settings.clear_api_key {
+        let entry = credential_entry(settings.provider)?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => false,
+            Err(error) => return Err(format!("failed to delete API key: {error}")),
+        }
+    } else if settings.api_key.trim().is_empty() {
+        settings.api_key_configured
+    } else {
+        let entry = credential_entry(settings.provider)?;
+        entry
+            .set_password(settings.api_key.trim())
+            .map_err(|error| format!("failed to store API key: {error}"))?;
+        true
+    };
+    let mut persisted = settings.clone();
+    persisted.api_key.clear();
+    persisted.api_key_configured = api_key_configured;
+    persisted.clear_api_key = false;
+    let json = serde_json::to_string_pretty(&persisted)
         .map_err(|error| format!("failed to serialize settings: {error}"))?;
     std::fs::create_dir_all(&layout.config)
         .map_err(|error| format!("failed to create config dir: {error}"))?;

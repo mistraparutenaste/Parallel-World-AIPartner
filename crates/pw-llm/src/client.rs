@@ -40,6 +40,8 @@ pub struct LlmClientConfig {
     /// e.g. `http://127.0.0.1:8080/v1`
     pub base_url: String,
     pub model: String,
+    /// Optional bearer token for authenticated OpenAI-compatible endpoints.
+    pub api_key: Option<String>,
     /// Permit non-loopback hosts (cloud endpoints).
     pub allow_remote: bool,
     /// Overall request timeout.
@@ -51,6 +53,7 @@ impl Default for LlmClientConfig {
         Self {
             base_url: "http://127.0.0.1:8080/v1".to_owned(),
             model: "default".to_owned(),
+            api_key: None,
             allow_remote: false,
             timeout: Duration::from_mins(2),
         }
@@ -134,9 +137,11 @@ impl LlmClient for OpenAiCompatClient {
         let (events, receiver) = sync_channel(16);
         let http = self.http.clone();
         let completions_url = self.completions_url.clone();
+        let api_key = self.config.api_key.clone();
         std::thread::spawn(move || {
             let _worker_guard = worker_guard;
-            let result = stream_request(&http, &completions_url, &body, &events);
+            let result =
+                stream_request(&http, &completions_url, &body, api_key.as_deref(), &events);
             let _ = events.send(StreamEvent::Finished(result));
         });
         loop {
@@ -187,14 +192,17 @@ fn stream_request(
     http: &reqwest::blocking::Client,
     completions_url: &str,
     body: &serde_json::Value,
+    api_key: Option<&str>,
     events: &std::sync::mpsc::SyncSender<StreamEvent>,
 ) -> Result<(), PortError> {
     let started = Instant::now();
     let message_count = body["messages"].as_array().map_or(0, Vec::len);
     tracing::info!(message_count, "llm request started");
-    let response = http
-        .post(completions_url)
-        .json(body)
+    let mut request = http.post(completions_url).json(body);
+    if let Some(api_key) = api_key {
+        request = request.bearer_auth(api_key);
+    }
+    let response = request
         .send()
         .map_err(|error| PortError(format!("llm request failed: {error}")))?;
     let status = response.status();

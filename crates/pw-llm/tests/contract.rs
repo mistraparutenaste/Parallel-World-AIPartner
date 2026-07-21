@@ -10,6 +10,7 @@ use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 struct MockServer {
     port: u16,
     received: Arc<Mutex<Vec<serde_json::Value>>>,
+    authorization: Arc<Mutex<Option<String>>>,
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -31,8 +32,15 @@ fn spawn_server(status: u16, body: String) -> MockServer {
     let port = server.server_addr().to_ip().unwrap().port();
     let received = Arc::new(Mutex::new(Vec::new()));
     let received_in = Arc::clone(&received);
+    let authorization = Arc::new(Mutex::new(None));
+    let authorization_in = Arc::clone(&authorization);
     let handle = std::thread::spawn(move || {
         if let Ok(mut request) = server.recv() {
+            *authorization_in.lock().unwrap() = request
+                .headers()
+                .iter()
+                .find(|header| header.field.equiv("Authorization"))
+                .map(|header| header.value.as_str().to_owned());
             let mut content = String::new();
             let _ = std::io::Read::read_to_string(request.as_reader(), &mut content);
             if let Ok(json) = serde_json::from_str(&content) {
@@ -50,6 +58,7 @@ fn spawn_server(status: u16, body: String) -> MockServer {
     MockServer {
         port,
         received,
+        authorization,
         handle: Some(handle),
     }
 }
@@ -66,6 +75,7 @@ fn client_for(port: u16) -> OpenAiCompatClient {
     OpenAiCompatClient::new(LlmClientConfig {
         base_url: format!("http://127.0.0.1:{port}/v1"),
         model: "test-model".into(),
+        api_key: None,
         allow_remote: false,
         timeout: Duration::from_secs(5),
     })
@@ -90,6 +100,7 @@ fn hung_server_is_bounded_by_the_production_client_timeout() {
     let mut client = OpenAiCompatClient::new(LlmClientConfig {
         base_url: format!("http://127.0.0.1:{port}/v1"),
         model: "test-model".into(),
+        api_key: None,
         allow_remote: false,
         timeout: Duration::from_millis(100),
     })
@@ -112,6 +123,7 @@ fn cancellation_interrupts_a_request_waiting_for_response_headers() {
     let mut client = OpenAiCompatClient::new(LlmClientConfig {
         base_url: format!("http://127.0.0.1:{port}/v1"),
         model: "test-model".into(),
+        api_key: None,
         allow_remote: false,
         timeout: Duration::from_secs(30),
     })
@@ -196,6 +208,28 @@ fn malformed_sse_chunks_are_skipped() {
         .unwrap();
 
     assert_eq!(output, "有効なデルタ。");
+}
+
+#[test]
+fn sends_a_bearer_token_when_configured() {
+    let server = spawn_server(200, sse_body(&["ok"]));
+    let mut client = OpenAiCompatClient::new(LlmClientConfig {
+        base_url: format!("http://127.0.0.1:{}/v1", server.port),
+        model: "test-model".into(),
+        api_key: Some("provider-secret".into()),
+        allow_remote: false,
+        timeout: Duration::from_secs(5),
+    })
+    .unwrap();
+
+    client
+        .stream_chat(&messages(), &AtomicBool::new(false), &mut |_| {})
+        .unwrap();
+
+    assert_eq!(
+        server.authorization.lock().unwrap().as_deref(),
+        Some("Bearer provider-secret")
+    );
 }
 
 #[test]

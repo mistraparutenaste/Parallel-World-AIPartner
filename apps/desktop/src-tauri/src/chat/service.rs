@@ -1694,6 +1694,7 @@ impl ChatService {
         let llm_config = LlmClientConfig {
             base_url: settings.base_url.clone(),
             model: settings.model.clone(),
+            api_key: super::settings::load_llm_api_key(settings.provider)?,
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
         };
