@@ -81,8 +81,11 @@
   }
 }
 
-* {
+*,
+*::before,
+*::after {
   box-sizing: border-box;
+  font-weight: 400;
 }
 
 body {
@@ -119,7 +122,7 @@ button {
   border-radius: 999px;
   background: var(--accent);
   color: var(--on-accent);
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.03em;
   cursor: pointer;
 }
@@ -177,7 +180,7 @@ input[type='radio'] {
   margin: 0 0 3px;
   color: var(--accent-strong);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -378,7 +381,7 @@ input[type='radio'] {
   margin: 10px 0;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
 }
 
 /* label内包型のcheckbox/radioはテキストと同じ行に横並びにする
@@ -467,7 +470,7 @@ input[type='radio'] {
 
 .danger-action .danger-action__usage {
   color: var(--danger);
-  font-weight: 700;
+  font-weight: 400;
 }
 
 button.danger-button {
@@ -601,7 +604,7 @@ button.danger-button--confirm {
   margin-right: auto;
   background: var(--accent);
   color: var(--on-accent);
-  font-weight: 600;
+  font-weight: 400;
 }
 
 /* ユーザー吹き出しのしっぽ(左下・塗り)。 */
@@ -734,7 +737,7 @@ button.danger-button--confirm {
 }
 
 .character-size-control label {
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .character-size-control select {
@@ -754,7 +757,7 @@ button.danger-button--confirm {
   margin-bottom: 4px;
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .character-renderer-selector label {
@@ -788,7 +791,7 @@ button.danger-button--confirm {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--on-accent);
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .character-renderer-selector input:focus-visible + span {
@@ -986,7 +989,7 @@ body.transparent canvas {
   background: var(--surface);
   color: var(--accent-strong);
   font-size: 13px;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: 0.08em;
   transform: rotate(45deg);
 }
@@ -1039,14 +1042,14 @@ body.transparent canvas {
 
 .control-center[data-ui-style='diamond-pop'] .control-header h1 {
   font-size: 20px;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: 0.08em;
 }
 
 .control-center[data-ui-style='diamond-pop'] .theme-control {
   gap: 10px;
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 400;
   letter-spacing: 0.06em;
 }
 
@@ -1082,7 +1085,7 @@ body.transparent canvas {
   background: var(--surface);
   color: var(--muted);
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.04em;
 }
 
@@ -1149,7 +1152,7 @@ body.transparent canvas {
   background: var(--accent-soft);
   color: var(--accent-strong);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 400;
   letter-spacing: 0.06em;
 }
 
@@ -1166,7 +1169,7 @@ body.transparent canvas {
   padding: 0 10px;
   color: var(--accent-strong);
   font-size: 13px;
-  font-weight: 750;
+  font-weight: 400;
   letter-spacing: 0.05em;
 }
 
@@ -1210,7 +1213,7 @@ body.transparent canvas {
   color: var(--accent-strong);
   font-variant-numeric: tabular-nums;
   font-size: 11px;
-  font-weight: 750;
+  font-weight: 400;
   text-align: center;
 }
 
@@ -1244,7 +1247,7 @@ body.transparent canvas {
   margin: 0 0 16px;
   color: var(--danger);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.65;
 }
 
@@ -1481,7 +1484,7 @@ body:not(.transparent) #root {
 .control-center[data-ui-style='conversation-first'] .conversation-footprints li[aria-current='true'] {
   border-bottom-color: var(--accent);
   color: var(--accent-strong);
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .conversation-footprints li[aria-current='true']::before {
@@ -1608,7 +1611,7 @@ body:not(.transparent) #root {
   background: transparent;
   color: var(--accent-strong);
   font: inherit;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .conversation-safety-notice button:hover:not(:disabled),
@@ -1848,7 +1851,7 @@ body:not(.transparent) #root {
   border-radius: 5px;
   background: color-mix(in srgb, var(--surface) 52%, transparent);
   color: var(--accent-strong);
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: 0.08em;
   overflow: hidden;
   transition:
@@ -2376,7 +2379,7 @@ body:not(.transparent) #root {
   border-radius: 999px;
   color: var(--accent-strong);
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .personality-group {
@@ -2391,7 +2394,7 @@ body:not(.transparent) #root {
   padding: 0 14px 0 0;
   color: var(--accent-strong);
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .personality-group--dark {
@@ -2504,7 +2507,7 @@ body:not(.transparent) #root {
 
 .control-center[data-ui-style='conversation-first'] .dark-triad-warning {
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 400;
   line-height: 1.7;
 }
 
@@ -2519,7 +2522,7 @@ body:not(.transparent) #root {
   margin: 0 0 5px;
   color: var(--text);
   font-size: 14px;
-  font-weight: 750;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .safe-word-control > p {
@@ -2651,7 +2654,7 @@ body:not(.transparent) #root {
   border-radius: 999px;
   color: var(--accent-strong);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .conversation-feedback,
@@ -2725,7 +2728,7 @@ body:not(.transparent) #root {
   margin: 0;
   color: var(--accent-strong);
   font-size: 11px;
-  font-weight: 800;
+  font-weight: 400;
   letter-spacing: 0.08em;
   cursor: pointer;
 }
@@ -2867,7 +2870,7 @@ body:not(.transparent) #root {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent-strong);
-  font-weight: 800;
+  font-weight: 400;
 }
 
 .control-center[data-ui-style='conversation-first'] .quiet-hours-days input:focus-visible + span {
