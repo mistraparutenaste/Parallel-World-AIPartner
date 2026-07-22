@@ -7,18 +7,20 @@
 Parallel Worldは、Live2Dまたは静止画のキャラクターと、テキスト・音声で会話するローカル優先のデスクトップAIコンパニオンです。
 Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカル音声認識、AivisSpeech / Irodori-TTSによる読み上げ、SQLiteの会話履歴・記憶を一つのアプリに統合しています。
 
-現在は開発版です。日常利用に必要な会話、キャラクター表示、音声、履歴、設定、診断の主要機能は実装済みですが、一般配布用の署名・updater・モデル配布と、自発発話ランタイムの完成は今後の作業です。
+現在は開発版です。日常利用に必要な会話、キャラクター表示、音声、履歴、型付き記憶、設定、診断の主要機能は実装済みですが、一般配布用の署名・updater・モデル配布と、自発発話ランタイムの完成は今後の作業です。
 
-> 2026-07-18時点: Phase 0〜6、会話中心UI、UIインタラクションモーション A案v9は`main`へ実装済みです。Phase 7の一般配布対応と自発発話ランタイムは引き続き開発中です。
+> 2026-07-22時点: Phase 0〜6、会話中心UI、人間らしい対話エージェントの基盤、UIインタラクションモーション A案v9は`main`へ実装済みです。Phase 7の一般配布対応と自発発話ランタイムは引き続き開発中です。
 
 ## 主な機能
 
 - **会話中心のUI**: チャットを常時表示する単一シェル。左上「会話」・右上「性格」・下中央「設定」のひし形メニューで画面を切り替え、チャットは独立ウィンドウにも変更可能
-- **キャラクター表示**: 透明・最前面のLive2D表示と、PNG / 非アニメーションWebPによる静止画キャラクターに対応
+- **キャラクター表示**: 透明・最前面のLive2D表示と、PNG / 非アニメーションWebPによる静止画キャラクターに対応。設定から表示サイズを50〜200%へ変更可能
 - **音声入力**: `cpal`、Silero VAD、ReazonSpeech + `sherpa-onnx`によるローカル日本語STT
-- **LLM会話**: OpenAI互換Chat Completions API、ストリーミング応答、キャンセル、文章分割、キャラクター制御JSON
+- **LLM会話**: ローカル / LAN、OpenAI、Google Gemini、OpenCode Zen、カスタムのOpenAI互換Chat Completions API、ストリーミング応答、キャンセル、文章分割、キャラクター制御JSON
 - **音声合成**: AivisSpeech / Irodori-TTSの選択、voice・スタイル・音量・話速設定、文単位キュー、WAVキャッシュ、実再生開始に同期したキャラクター動作
-- **履歴と記憶**: SQLiteへの会話履歴、要約、長期記憶、FTS5検索、バックアップ、削除、データ使用量表示
+- **履歴と記憶**: SQLiteへの会話履歴、要約、8領域の型付き記憶、FTS5検索、バックアップ、削除、データ使用量表示
+- **メモリーセンター**: 領域ごとの保存許可、確認待ち候補、秘匿情報をマスクしたプレビュー、個別削除、一時会話モード、進行中の約束を管理
+- **応答ルーティング**: 通常会話を軽量な既存経路へ通し、記憶・約束・訂正など計画が必要な会話だけを制限時間付きで処理。異常時は通常応答へフォールバック
 - **キャラクター別の性格**: 自由記述、会話傾向、複数の性格スライダーをキャラクター単位で保存
 - **安全設定**: 強いダーク表現の明示同意、ユーザー共通セーフワード、生成・TTSの即時停止と停止状態の永続化
 - **会話設定**: 自発発話の主スイッチ、頻度、状況トリガー、静穏時間、一時停止を保存可能
@@ -34,6 +36,7 @@ Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカ�
 | --- | --- | --- |
 | Phase 0–6 | 完了 | 基盤、キャラクター、音声認識、LLM、TTS、履歴・記憶、安定性と復旧 |
 | UI拡張 | 実装済み | 会話中心シェル、性格・会話・安全設定、テーマ、UIインタラクションモーション A案v9 |
+| 対話エージェント基盤 | 実装済み | 型付き記憶、観測台帳、対話・約束状態、Memory Center、条件付き応答ルーティング、プライバシー境界 |
 | Phase 7 | 開発中 | ローカルbundle検証は利用可能。署名、公開updater、第三者ライセンス確認は未完了 |
 | 自発発話 | 一部実装 | 設定契約とUIは実装済み。候補生成から評価、最終ゲート、TTSまでの実行ランタイムは未完了 |
 | 会話の足跡 | 未実装 | エピソード分割、話題の再開、アーカイブUIは後続範囲 |
@@ -109,13 +112,15 @@ macOSでは、リポジトリルートの`ParallelWorld_run.command`をFinderか
 
 ### LLM
 
-OpenAI互換Chat Completions APIを使用します。既定値は次のとおりです。
+OpenAI互換Chat Completions APIを使用します。既定はローカル接続です。
 
 ```text
 http://127.0.0.1:8080/v1
 ```
 
-接続先、モデル名、リモート接続の許可は設定画面の「AI」から変更します。LLMサーバーやモデル本体はリポジトリに含まれません。
+設定画面の「AI」では、ローカル / LAN、OpenAI、Google Gemini（OpenAI互換）、OpenCode Zen（Chat Completions）、カスタム接続を選べます。接続先、モデル名、リモート接続の許可も変更できます。Responses API専用モデルは未対応です。
+
+クラウド接続はユーザーが明示的に選択した場合だけ有効になります。APIキーはOSの資格情報ストアへ保存し、`llm.json`、IPC応答、設定画面へ値を返しません。LLMサーバー、モデル本体、API利用料金はこのリポジトリに含まれません。
 
 ### AivisSpeech
 
@@ -167,7 +172,7 @@ Live2D SDKとモデルの利用条件は、`packages/live2d-runtime/vendor/READM
 
 ## データ保存
 
-設定、会話履歴、記憶、モデル、キャラクター、TTSキャッシュ、ログはOSのapp data配下へ分離して保存します。Windowsでは次のディレクトリです。
+設定、会話履歴、記憶、モデル、キャラクター、TTSキャッシュ、ログはOSのapp data配下へ分離して保存します。クラウドLLMのAPIキーだけはapp dataではなくOSの資格情報ストアに保存します。Windowsのapp data配置は次のとおりです。
 
 ```text
 %APPDATA%\com.parallelworld.desktop\
@@ -239,6 +244,7 @@ docs/superpowers/plans/       implementation plans and remaining phases
 - [開発環境セットアップ](docs/development/getting-started.md)
 - [Phase 6受け入れ検証](docs/development/phase6-acceptance.md)
 - [Windowsクラッシュ診断](docs/development/windows-crash-diagnostics.md)
+- [人間らしい対話エージェントの境界](docs/architecture/human-like-agent.md)
 - [会話中心UIの実装計画](docs/superpowers/plans/2026-07-17-conversation-first-ui-redesign.md)
 - [UIインタラクションモーション設計](docs/superpowers/specs/2026-07-17-ui-interaction-motion-design.md)
 - [UIインタラクションモーション A案v9実装計画](docs/superpowers/plans/2026-07-18-ui-interaction-motion-v9.md)
