@@ -206,6 +206,7 @@ describe('control center', () => {
   });
 
   it.each([
+    ['設定', 'settings', 'diamond'],
     ['性格', 'personality', 'diamond'],
     ['会話', 'conversation', 'circle'],
   ] as const)('uses three %s transition outlines from the clicked diamond', async (label, target, shape) => {
@@ -224,6 +225,26 @@ describe('control center', () => {
     expect(
       controlCenter.querySelector(`.screen-navigation [data-tab-id="${target}"]`),
     ).toHaveAttribute('data-confirming', 'true');
+    expect(controlCenter).toHaveAttribute('data-transition-speed', 'cinematic');
+    expect(controlCenter.querySelector('.screen-overlay')).toHaveAttribute(
+      'data-transition-stage',
+      'unified',
+    );
+  });
+
+  it('uses the shorter transition after revisiting a screen', async () => {
+    render(<SettingsWindow />);
+    const controlCenter = await screen.findByRole('main', { name: 'Parallel World' });
+
+    let navigation = screen.getByRole('tablist', { name: '画面メニュー' });
+    fireEvent.click(within(navigation).getByRole('tab', { name: '性格' }));
+    fireEvent.click(screen.getByRole('button', { name: '性格を閉じる' }));
+
+    navigation = await screen.findByRole('tablist', { name: '画面メニュー' });
+    fireEvent.click(within(navigation).getByRole('tab', { name: '性格' }));
+
+    expect(controlCenter).toHaveAttribute('data-transition', 'personality');
+    expect(controlCenter).toHaveAttribute('data-transition-speed', 'quick');
   });
 
   it('uses the seven-category heart crown and keeps logs under data and diagnostics', async () => {

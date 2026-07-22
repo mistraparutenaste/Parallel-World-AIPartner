@@ -17,13 +17,15 @@ describe('conversation-first motion styles', () => {
     expect(css).toMatch(/\.screen-tabs button:hover::after/);
   });
 
-  it('keeps settings transparent over the existing conversation background', async () => {
+  it('hides functional conversation content while rebuilding translucency inside overlays', async () => {
     const css = await readFile(stylesheet, 'utf8');
 
-    expect(css).toMatch(/\.screen-overlay--settings \{[\s\S]*?background: transparent;/);
-    expect(css).toMatch(/\[data-screen='settings'\][\s\S]*?\.conversation-layer/);
+    expect(css).toMatch(/\.conversation-layer\[aria-hidden='true'\] \{[\s\S]*?opacity: 0;/);
+    expect(css).toMatch(/\.screen-overlay \{[\s\S]*?background: var\(--page\);/);
+    expect(css).toMatch(/\.screen-overlay--settings \{[\s\S]*?background: var\(--page\);/);
+    expect(css).toMatch(/\.screen-overlay::after \{[\s\S]*?linear-gradient/);
     expect(css).toMatch(/@keyframes settings-gradient-in/);
-    expect(css).toMatch(/@keyframes settings-category-in/);
+    expect(css).not.toMatch(/animation: settings-category-in/);
   });
 
   it('defines the approved click and screen transition animations', async () => {
@@ -31,10 +33,14 @@ describe('conversation-first motion styles', () => {
 
     expect(css).toMatch(/\[data-confirming='true'\]/);
     expect(css).toMatch(/@keyframes main-diamond-confirm/);
-    expect(css).toMatch(/@keyframes personality-ring-expand/);
-    expect(css).toMatch(/@keyframes personality-view-in/);
-    expect(css).toMatch(/@keyframes conversation-ring-expand/);
-    expect(css).toMatch(/@keyframes conversation-view-in/);
+    expect(css).toMatch(/@keyframes screen-ripple-expand/);
+    expect(css).toMatch(/@keyframes screen-view-in/);
+    expect(css).toMatch(
+      /@keyframes screen-ripple-expand \{[\s\S]*?transform:[\s\S]*?scale\([\s\S]*?\}/,
+    );
+    expect(css).not.toMatch(
+      /@keyframes screen-ripple-expand \{[\s\S]*?(?:width|height): 160vmax/,
+    );
   });
 
   it('matches the approved v9 reflection timing, colors, and centered axis', async () => {
@@ -68,15 +74,18 @@ describe('conversation-first motion styles', () => {
     );
   });
 
-  it('does not silently disable the approved UI motion from the OS preference', async () => {
+  it('keeps cinematic motion, speeds up repeat visits, and honors reduced motion', async () => {
     const [css, component] = await Promise.all([
       readFile(stylesheet, 'utf8'),
       readFile(settingsWindow, 'utf8'),
     ]);
 
-    expect(component).not.toContain("matchMedia('(prefers-reduced-motion: reduce)')");
-    expect(css).not.toMatch(
-      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\.control-center\[data-ui-style='conversation-first'\] \*/,
+    expect(component).toContain("matchMedia('(prefers-reduced-motion: reduce)')");
+    expect(component).toContain("'quick'");
+    expect(css).toMatch(/\[data-transition-speed='quick'\]/);
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\[data-transition-speed='reduced'\]/,
     );
+    expect(css).toMatch(/@keyframes screen-content-fade/);
   });
 });

@@ -52,8 +52,8 @@ pub const WINDOWS: [WindowDefinition; 3] = [
         decorations: true,
         shadow: true,
         visible: true,
-        width: 720.0,
-        height: 1080.0,
+        width: 1040.0,
+        height: 700.0,
     },
 ];
 
@@ -121,5 +121,15 @@ mod tests {
             assert_eq!(window.shadow, !is_character, "{}", window.label);
             assert_eq!(window.visible, window.label != "chat", "{}", window.label);
         }
+    }
+
+    #[test]
+    fn settings_window_opens_at_the_conversation_first_landscape_size() {
+        let settings = super::WINDOWS
+            .iter()
+            .find(|window| window.label == "settings")
+            .expect("settings window definition");
+
+        assert_eq!((settings.width, settings.height), (1040.0, 700.0));
     }
 }
