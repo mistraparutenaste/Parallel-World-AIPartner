@@ -5,66 +5,13 @@
 # Parallel World
 
 Parallel Worldは、Live2Dまたは静止画のキャラクターと、テキスト・音声で会話するローカル優先のデスクトップAIコンパニオンです。
-Tauri 2とRustを中核に、React製の会話UI、OpenAI互換LLM、ローカル音声認識、AivisSpeech / Irodori-TTSによる読み上げ、SQLiteの会話履歴・記憶を一つのアプリに統合しています。
+会話、キャラクター、音声、履歴、記憶を一つのアプリにまとめ、外部サービスが停止しても影響する機能だけを無効にして起動できます。
 
-現在は開発版です。日常利用に必要な会話、キャラクター表示、音声、履歴、型付き記憶、設定、診断の主要機能は実装済みですが、一般配布用の署名・updater・モデル配布と、自発発話ランタイムの完成は今後の作業です。
+現在は開発版です。Phase 0〜6の主要機能は実装済みですが、一般配布用の署名・updater・モデル配布と、自発発話ランタイムは開発中です。
 
-> 2026-07-23時点: Phase 0〜6、会話中心UI、人間らしい対話エージェントの基盤、透明感のあるシアンと白を基調とした世界観UIは`main`へ実装済みです。Phase 7の一般配布対応と自発発話ランタイムは引き続き開発中です。
+## まず動かす
 
-## 主な機能
-
-- **会話中心のUI**: チャットを常時表示する単一シェル。左下の「会話」「性格」「設定」を3つのひし形でハート状にまとめ、右下の「チャット」と合わせて画面を切り替え。設定ウィンドウは`1040 × 700`で起動し、チャットは独立ウィンドウにも変更可能
-- **キャラクター表示**: 透明・最前面のLive2D表示と、PNG / 非アニメーションWebPによる静止画キャラクターに対応。設定から表示サイズを50〜200%へ変更可能
-- **音声入力**: `cpal`、Silero VAD、ReazonSpeech + `sherpa-onnx`によるローカル日本語STT
-- **LLM会話**: ローカル / LAN、OpenAI、Google Gemini、OpenCode Zen、カスタムのOpenAI互換Chat Completions API、ストリーミング応答、キャンセル、文章分割、キャラクター制御JSON
-- **音声合成**: AivisSpeech / Irodori-TTSの選択、voice・スタイル・音量・話速設定、文単位キュー、WAVキャッシュ、実再生開始に同期したキャラクター動作
-- **履歴と記憶**: SQLiteへの会話履歴、要約、8領域の型付き記憶、FTS5検索、バックアップ、削除、データ使用量表示
-- **メモリーセンター**: 領域ごとの保存許可、確認待ち候補、秘匿情報をマスクしたプレビュー、個別削除、一時会話モード、進行中の約束を管理
-- **応答ルーティング**: 通常会話を軽量な既存経路へ通し、記憶・約束・訂正など計画が必要な会話だけを制限時間付きで処理。異常時は通常応答へフォールバック
-- **キャラクター別の性格**: 「基本情報」「話し方と嗜好」「背景と境界」の3領域に分けた自由記述、会話傾向、複数の性格スライダーをキャラクター単位で保存
-- **安全設定**: 強いダーク表現の明示同意、ユーザー共通セーフワード、生成・TTSの即時停止と停止状態の永続化
-- **会話設定**: 自発発話の主スイッチ、頻度、状況トリガー、静穏時間、一時停止を保存可能
-- **診断と復旧**: STT / LLM / TTS / rendererの状態監視、再試行、circuit breaker、技術ログ、クラッシュ診断、データ書き出し
-- **表示設定**: ライト・ダーク・システムテーマ、会話配置の復元、キーボード操作
-- **世界観とUIモーション**: 透明感のあるシアンと白、斜めに走る光学的な背景、ひし形の操作部品を共通言語として使用。左下の各アイコンからシアン・青・紫の3重波紋が広がり、画面本体と一つのタイムラインで滑らかに遷移。再訪時は短縮し、OSの低モーション設定にも対応
-
-外部サービスやモデルが利用できない場合も、影響する機能だけを無効化してアプリを起動します。たとえばTTS停止中もテキスト会話は利用できます。
-
-## 現在の開発状況
-
-| 範囲 | 状態 | 内容 |
-| --- | --- | --- |
-| Phase 0–6 | 完了 | 基盤、キャラクター、音声認識、LLM、TTS、履歴・記憶、安定性と復旧 |
-| UI拡張 | 実装済み | 会話中心シェル、`1040 × 700`の初期画面、ハート状ダイヤナビゲーション、性格・会話・安全設定、テーマ、統一波紋トランジション |
-| 対話エージェント基盤 | 実装済み | 型付き記憶、観測台帳、対話・約束状態、Memory Center、条件付き応答ルーティング、プライバシー境界 |
-| Phase 7 | 開発中 | ローカルbundle検証は利用可能。署名、公開updater、第三者ライセンス確認は未完了 |
-| 自発発話 | 一部実装 | 設定契約とUIは実装済み。候補生成から評価、最終ゲート、TTSまでの実行ランタイムは未完了 |
-| 会話の足跡 | 未実装 | エピソード分割、話題の再開、アーカイブUIは後続範囲 |
-
-## アーキテクチャ
-
-```text
-Tauri 2 desktop application
-├─ React / Vite
-│  ├─ character window   Live2D / static-image renderer
-│  ├─ chat window        detachable conversation view
-│  └─ settings window    conversation shell / settings / logs
-├─ schema-versioned IPC and window-scoped capabilities
-└─ Rust workspace
-   ├─ pw-domain          domain models and conversation state
-   ├─ pw-application     use cases, policies, memory and recovery
-   ├─ pw-audio           microphone capture and resampling
-   ├─ pw-stt-sherpa      VAD / STT adapter
-   ├─ pw-llm             OpenAI-compatible HTTP / SSE client
-   ├─ pw-tts             TTS engine adapters and audio cache
-   ├─ pw-storage         SQLite history and memory storage
-   ├─ pw-platform        app data, logging and process supervision
-   └─ desktop Tauri      commands, windows and capabilities
-```
-
-生PCM、SQLite、モデル、任意ファイルアクセスはWebViewへ渡さず、Rust側の検証済みDTOとCapability境界を通して扱います。LLMとTTSの既定接続先はloopbackです。loopback以外のLLM接続は、設定で明示的に許可する必要があります。
-
-## 必要環境
+### 必要環境
 
 | ツール | バージョン |
 | --- | --- |
@@ -75,104 +22,83 @@ Tauri 2 desktop application
 
 WindowsではVisual Studio Build ToolsのC++ワークロードとWebView2 Runtime、macOSではXcode Command Line Toolsが必要です。
 
-## セットアップ
+### 1. インストール
 
-PowerShellでリポジトリルートから実行します。
+リポジトリのルートで実行します。
 
 ```powershell
 corepack enable pnpm
 corepack pnpm install --frozen-lockfile
 corepack pnpm build
-cargo test --workspace
 ```
 
-`corepack pnpm build`は、desktopが参照する`@parallel-world/live2d-runtime`の`dist`も生成します。初回セットアップ時とruntime更新後は、typecheckやtestより先に実行してください。
+`corepack pnpm build`は、アプリが参照するLive2D runtimeの`dist`も生成します。
 
-### 開発起動
+### 2. 音声モデルをダウンロード（任意）
 
-アプリだけを起動する場合:
-
-```powershell
-corepack pnpm --filter @parallel-world/desktop tauri dev
-```
-
-AivisSpeech Engineの起動確認、LLMと開発用アセットの確認もまとめて行う場合:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
-```
-
-`dev-up.ps1`は既定でAivisSpeechを`127.0.0.1:10101`、LLMを`127.0.0.1:1234`で確認します。`PW_TTS_ENGINE`、`PW_TTS_PORT`、`PW_LLM_PORT`、`PW_AIVIS_ENGINE`で変更できます。Irodoriのopt-in起動は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。アプリ本体のLLM初期値は`http://127.0.0.1:8080/v1`なので、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
-
-Windowsで`ParallelWorld_run.bat`を使う場合は、managed Irodori環境を`%LOCALAPPDATA%\com.parallelworld.desktop\irodori`で確認し、未構築または破損時だけ構築するか尋ねます。固定downloadは約2.55 GB、構築に要求する保守的な空き容量は`17,976,201,340` bytesです。リポジトリ内やsystem Pythonへ環境は作らず、構築に必要なGitも検証済みMinGitをmanaged rootへ配置するためsystem Gitは不要です。BATはpause後もアプリ・cancel・errorの終了コードを保持します。外部のuser-managed Irodoriを使う場合は`PW_TTS_ENGINE`と`PW_IRODORI_DIR`を設定して`dev-up.ps1`を直接起動します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
-
-macOSでは、リポジトリルートの`ParallelWorld_run.command`をFinderからダブルクリックすると、frontend typecheckとRust `cargo check`を実行してから`tauri dev`を起動します。初回にmacOSが実行を拒否した場合は、Terminalで`chmod +x ParallelWorld_run.command`を一度実行してください。このランチャーはWindows専用のmanaged Irodori環境を構築しません。TTSを使う場合は、設定画面でユーザー管理の外部エンドポイントを指定してください。
-
-## 外部モデルとサービス
-
-### LLM
-
-OpenAI互換Chat Completions APIを使用します。既定はローカル接続です。
-
-```text
-http://127.0.0.1:8080/v1
-```
-
-設定画面の「AI」では、ローカル / LAN、OpenAI、Google Gemini（OpenAI互換）、OpenCode Zen（Chat Completions）、カスタム接続を選べます。接続先、モデル名、リモート接続の許可も変更できます。Responses API専用モデルは未対応です。
-
-クラウド接続はユーザーが明示的に選択した場合だけ有効になります。APIキーはOSの資格情報ストアへ保存し、`llm.json`、IPC応答、設定画面へ値を返しません。LLMサーバー、モデル本体、API利用料金はこのリポジトリに含まれません。
-
-### AivisSpeech
-
-読み上げにはローカルのAivisSpeech Engineを使用します。既定値は`http://127.0.0.1:10101`です。未起動の場合は読み上げだけが無効になります。
-
-### Irodori-TTS
-
-Windowsの`ParallelWorld_run.bat`は、明示同意後に検証済み成果物からuser data配下へmanaged Irodori環境を構築できます。NVIDIAはCUDA 12.8、Radeon・IntelはCPUを選択し、Windows RadeonのWSL/ROCmとApple MPSは後日対応です。構築時の固定Git dependency解決には同梱せず取得・検証するMinGitを使い、通常起動はmanaged Python限定・追加download禁止・offlineで動作します。外部のuser-managed serverも選択でき、server側のdynamic LoRA adapter pathを設定できます。LoRAと参照音声は同梱・自動取得せず、repair後も保持します。安全な音声利用、固定成果物、起動変数は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
-
-### VAD / STT
-
-Silero VADとReazonSpeechのモデルを、manifestのURLとSHA-256に基づいてapp dataへ配置します。
+音声入力を使う場合は、Silero VADとReazonSpeechのモデルを配置します。配置しなくてもテキスト会話は起動できます。
 
 ```powershell
 node tools/scripts/download-stt-models.mjs
 ```
 
-モデルを配置していない場合も起動できますが、音声認識は利用できません。manifestは`content/model-manifests/`にあります。
-
-## キャラクター
-
-キャラクターのモデル・画像はGitや配布bundleへ含めず、各OSのapp data配下に配置します。Windowsの配置先は次のとおりです。
-
-```text
-%APPDATA%\com.parallelworld.desktop\characters\
-```
-
-### 開発用Live2Dモデル
-
-`project-input/live2d/selected/epsilon/epsilon_free/runtime/`に開発用モデルがある場合、次のスクリプトでapp dataへ同期できます。
+Live2Dの開発モデルがある場合は、次のコマンドでapp dataへ同期できます。
 
 ```powershell
 node tools/scripts/sync-live2d-dev-assets.mjs
 ```
 
-Live2D SDKとモデルの利用条件は、`packages/live2d-runtime/vendor/README.md`と`project-input/live2d/licenses/`を確認してください。
+WindowsでIrodori-TTSを使う場合は、起動時に`ParallelWorld_run.bat`からmanaged環境を構築できます。初回は大きなダウンロードが発生するため、詳しくは[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を確認してください。
 
-### 静止画キャラクター
+### 3. 起動
 
-```text
-%APPDATA%\com.parallelworld.desktop\characters\epsilon-static\
-├─ character.json
-└─ expressions\
-   ├─ neutral.png
-   └─ happy.webp
-```
+| 目的 | 実行方法 |
+| --- | --- |
+| アプリだけ起動 | `corepack pnpm --filter @parallel-world/desktop tauri dev` |
+| 音声・LLM・開発用アセットも確認 | `powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1` |
+| WindowsでIrodori-TTSを含めて起動 | `ParallelWorld_run.bat` |
+| macOSで起動 | `ParallelWorld_run.command`をFinderからダブルクリック |
 
-透明PNGまたは非アニメーションWebPを使用します。manifest形式、画像制限、パス検証は[静止画キャラクタープロファイル](project-input/static-character/README.md)を参照してください。静止画はリップシンクを行わず、実際の音声再生開始時にturnごとに一度だけ跳ねます。
+macOSで初回実行が拒否された場合は、Terminalで一度だけ`chmod +x ParallelWorld_run.command`を実行してください。
 
-## データ保存
+### 起動後に設定する接続先
 
-設定、会話履歴、記憶、モデル、キャラクター、TTSキャッシュ、ログはOSのapp data配下へ分離して保存します。クラウドLLMのAPIキーだけはapp dataではなくOSの資格情報ストアに保存します。Windowsのapp data配置は次のとおりです。
+- LLM: 既定値は`http://127.0.0.1:8080/v1`。設定画面の「AI」からローカル / LAN、OpenAI、Google Gemini、OpenCode Zen、カスタム接続を選択できます。
+- AivisSpeech: 既定値は`http://127.0.0.1:10101`。未起動でもテキスト会話は利用できます。
+- STT: モデルをダウンロードしていれば、ローカル日本語音声入力を利用できます。
+
+`dev-up.ps1`は既定でLLMの`127.0.0.1:1234`を確認します。アプリの既定値`8080`と異なるため、LM Studioなどを別ポートで使う場合は設定画面の「AI」で接続先を保存してください。
+
+## 主な機能
+
+- **会話**: ストリーミング応答、キャンセル、文章分割、キャラクター制御に対応したテキスト会話
+- **キャラクター**: Live2Dまたは静止画表示、キャラクターごとの性格・話し方・境界設定
+- **音声**: ローカル音声入力、AivisSpeech / Irodori-TTS、文単位の読み上げキューとキャラクター動作
+- **記憶**: SQLiteの会話履歴、要約、型付き記憶、検索、Memory Centerでの保存確認・削除
+- **安全と復旧**: セーフワード、生成・TTSの即時停止、サービスごとの再試行、診断ログ、データ書き出し
+
+## 現在の開発状況
+
+| 範囲 | 状態 |
+| --- | --- |
+| Phase 0–6 | 完了。基盤、キャラクター、音声、LLM、TTS、履歴・記憶、安定性と復旧 |
+| 会話中心UI | 実装済み。テーマ、設定、キーボード操作、統一モーションを含む |
+| 対話エージェント基盤 | 実装済み。型付き記憶、対話・約束状態、Memory Center、プライバシー境界 |
+| Phase 7 | 開発中。ローカルbundleは検証可能だが、署名・公開updaterは未完了 |
+| 自発発話 | 一部実装。設定とUIはあるが、実行ランタイムは未完了 |
+| 会話の足跡 | 未実装。エピソード分割、話題の再開、アーカイブUIは後続範囲 |
+
+## 技術情報
+
+### LLM・音声
+
+LLMはOpenAI互換Chat Completions APIを使用します。Responses API専用モデルは未対応です。クラウド接続はユーザーが明示的に選択した場合だけ有効になり、APIキーはOSの資格情報ストアに保存します。
+
+音声は、Silero VAD / ReazonSpeechによるローカルSTTと、AivisSpeech / Irodori-TTSによるTTSを組み合わせます。LLMとTTSの既定接続先はloopbackで、外部接続には設定での明示許可が必要です。
+
+### キャラクターとデータ
+
+キャラクターのモデル・画像はGitや配布bundleへ含めず、OSのapp data配下に配置します。Windowsの主な配置先は次のとおりです。
 
 ```text
 %APPDATA%\com.parallelworld.desktop\
@@ -185,9 +111,20 @@ Live2D SDKとモデルの利用条件は、`packages/live2d-runtime/vendor/READM
 └─ crashes\
 ```
 
-設定画面の「データ」から使用量確認、書き出し、会話履歴・記憶・TTSキャッシュの削除を行えます。秘密情報らしい内容は、プロンプト用記憶・要約と技術ログの境界でマスクします。
+設定画面からデータ使用量の確認、書き出し、会話履歴・記憶・TTSキャッシュの削除ができます。プロンプト用記憶・要約・技術ログの境界では、秘密情報らしい内容をマスクします。
 
-## 品質チェック
+### アーキテクチャ
+
+```text
+Tauri 2 desktop application
+├─ React / Vite     conversation, character and settings windows
+├─ typed IPC        schema-versioned DTOs and window-scoped capabilities
+└─ Rust workspace   domain, application, audio, STT, LLM, TTS, storage and platform
+```
+
+生PCM、SQLite、モデル、任意ファイルアクセスはWebViewへ直接渡さず、Rust側の検証済みDTOとCapability境界を通して扱います。
+
+### 開発者向けチェック
 
 ```powershell
 corepack pnpm build
@@ -199,58 +136,27 @@ cargo test --workspace
 corepack pnpm distribution:verify
 ```
 
-CIはWindowsとmacOSでfrontend build、typecheck、test、Rust format、clippy、testを実行します。
-
-型付きIPCを変更した場合は、Rust DTOからTypeScript bindingsを再生成します。生成ファイルを直接編集しないでください。
+型付きIPCを変更した場合は、Rust DTOからTypeScript bindingsを再生成します。
 
 ```powershell
 cargo run -p pw-contracts --bin export-bindings
 ```
 
-## ローカルbundle
-
-署名と公開updaterを使わない開発用bundleを生成できます。
+開発用bundleは次のコマンドで生成できます。一般公開用の署名・updater付きreleaseではありません。
 
 ```powershell
 corepack pnpm bundle:windows:local
 corepack pnpm bundle:macos:local
 ```
 
-macOS bundleはmacOS上で実行してください。現在のローカルbundleは一般公開用リリースではありません。署名証明書、Apple資格情報、公開updater endpointと鍵、第三者アセット・モデルの再配布条件が揃うまではproduction releaseとして扱いません。
-
-## リポジトリ構成
-
-```text
-apps/desktop/                 React / Vite / Tauri desktop app
-apps/desktop/src-tauri/       Tauri commands, windows and capabilities
-packages/contracts/           generated TypeScript DTOs
-packages/live2d-runtime/      Live2D and speech playback runtime
-crates/pw-domain/             domain models and conversation state
-crates/pw-application/        use cases, policies, memory and recovery
-crates/pw-audio/              microphone capture and audio processing
-crates/pw-stt-sherpa/         VAD / STT adapter
-crates/pw-llm/                OpenAI-compatible LLM adapter
-crates/pw-tts/                TTS engine adapters
-crates/pw-storage/            SQLite history and memory storage
-crates/pw-platform/           OS paths, logging and process supervision
-content/model-manifests/      external model metadata and checksums
-docs/development/             setup, diagnostics and acceptance records
-docs/superpowers/specs/       approved design documents
-docs/superpowers/plans/       implementation plans and remaining phases
-```
-
 ## 関連ドキュメント
 
 - [開発環境セットアップ](docs/development/getting-started.md)
+- [Irodori-TTSセットアップ](docs/setup/irodori-tts.md)
 - [Phase 6受け入れ検証](docs/development/phase6-acceptance.md)
-- [Windowsクラッシュ診断](docs/development/windows-crash-diagnostics.md)
 - [人間らしい対話エージェントの境界](docs/architecture/human-like-agent.md)
-- [会話中心UIの実装計画](docs/superpowers/plans/2026-07-17-conversation-first-ui-redesign.md)
-- [UIインタラクションモーション設計](docs/superpowers/specs/2026-07-17-ui-interaction-motion-design.md)
-- [UIインタラクションモーション A案v9実装計画](docs/superpowers/plans/2026-07-18-ui-interaction-motion-v9.md)
 - [Phase 7配布計画](docs/superpowers/plans/2026-07-13-phase-7-distribution.md)
-- [基本設計](基本設計.md)
-- [作業履歴](作業内容.md)
+- [静止画キャラクタープロファイル](project-input/static-character/README.md)
 
 ## ライセンスとクレジット
 
