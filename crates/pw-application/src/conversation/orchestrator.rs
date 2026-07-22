@@ -319,7 +319,7 @@ mod tests {
     use pw_domain::conversation::ConversationState;
     use pw_domain::reply::{ReplyControl, TurnId};
 
-    use super::super::ports::{ChatMessage, ConversationEvents, LlmClient};
+    use super::super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
     use super::super::prompt::PromptBuilder;
     use super::super::routing::{
         ExistingContextRetriever, FixedSurfaceRealizer, PlanningBudget, ResponsePlan,
@@ -328,6 +328,8 @@ mod tests {
     use super::{ConversationOrchestrator, OrchestratorConfig};
     use crate::PortError;
     use crate::memory::MemoryContext;
+
+    const EXPECTED_CONVERSATIONAL_STYLE_POLICY: &str = "自然な話し言葉で、短く一度に一つの話題に答える。フィラーや相づちは必要な場合のみ使う。フィラーは控えめに使い、短い返答では一つまでとし、毎回同じ表現を繰り返さない。説明の羅列、箇条書き、メタ発言、定型的な書き出し、頼まれていない話題の提案、サービスメニューのような言い回しを避ける。必要なときだけ自然な確認質問を一つ添え、習慣的な締めの質問や「今日は何をしますか」のような定型質問を繰り返さない。不明な事実は推測と明示し、約束・実行・感情を偽らない。";
 
     /// Emits scripted chunks, honouring the cancel flag.
     struct ScriptedLlm {
@@ -458,10 +460,18 @@ mod tests {
                 ConversationState::Idle,
             ]
         );
-        // Prompt contains rules, character, then the utterance.
-        let prompt = &prompts.lock().unwrap()[0];
-        let contents: Vec<_> = prompt.iter().map(|m| m.content.as_str()).collect();
-        assert_eq!(contents, ["規則", "キャラ", "ただいま"]);
+        // Prompt contains rules, character, dialogue policy, then the utterance.
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(
+            prompts[0],
+            [
+                ChatMessage::new(ChatRole::System, "規則"),
+                ChatMessage::new(ChatRole::System, "キャラ"),
+                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
+                ChatMessage::new(ChatRole::User, "ただいま"),
+            ]
+        );
     }
 
     #[test]
@@ -485,18 +495,19 @@ mod tests {
         orchestrator.submit_user_text("三つ目");
 
         let prompts = prompts.lock().unwrap();
-        let third: Vec<_> = prompts[2].iter().map(|m| m.content.as_str()).collect();
+        assert_eq!(prompts.len(), 3);
         // max 4 history messages: (一つ目, はい。, 二つ目, はい。).
         assert_eq!(
-            third,
+            prompts[2],
             [
-                "規則",
-                "キャラ",
-                "一つ目",
-                "はい。",
-                "二つ目",
-                "はい。",
-                "三つ目"
+                ChatMessage::new(ChatRole::System, "規則"),
+                ChatMessage::new(ChatRole::System, "キャラ"),
+                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
+                ChatMessage::new(ChatRole::User, "一つ目"),
+                ChatMessage::new(ChatRole::Assistant, "はい。"),
+                ChatMessage::new(ChatRole::User, "二つ目"),
+                ChatMessage::new(ChatRole::Assistant, "はい。"),
+                ChatMessage::new(ChatRole::User, "三つ目"),
             ]
         );
     }
@@ -522,19 +533,17 @@ mod tests {
 
         orchestrator.submit_user_text("new user");
 
-        let prompt = &prompts.lock().unwrap()[0];
-        let contents: Vec<_> = prompt
-            .iter()
-            .map(|message| message.content.as_str())
-            .collect();
+        let prompts = prompts.lock().unwrap();
+        assert_eq!(prompts.len(), 1);
         assert_eq!(
-            contents,
+            prompts[0],
             [
-                "規則",
-                "キャラ",
-                "saved user",
-                "saved assistant",
-                "new user"
+                ChatMessage::new(ChatRole::System, "規則"),
+                ChatMessage::new(ChatRole::System, "キャラ"),
+                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
+                ChatMessage::new(ChatRole::User, "saved user"),
+                ChatMessage::new(ChatRole::Assistant, "saved assistant"),
+                ChatMessage::new(ChatRole::User, "new user"),
             ]
         );
     }
@@ -635,8 +644,17 @@ mod tests {
         // History kept the failed turn's user message.
         orchestrator.submit_user_text("再挑戦");
         let prompts = prompts.lock().unwrap();
-        let second: Vec<_> = prompts[1].iter().map(|m| m.content.as_str()).collect();
-        assert_eq!(second, ["規則", "キャラ", "聞こえてる？", "再挑戦"]);
+        assert_eq!(prompts.len(), 2);
+        assert_eq!(
+            prompts[1],
+            [
+                ChatMessage::new(ChatRole::System, "規則"),
+                ChatMessage::new(ChatRole::System, "キャラ"),
+                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
+                ChatMessage::new(ChatRole::User, "聞こえてる？"),
+                ChatMessage::new(ChatRole::User, "再挑戦"),
+            ]
+        );
     }
 
     #[test]
