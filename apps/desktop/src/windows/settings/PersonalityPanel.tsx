@@ -437,19 +437,54 @@ export function PersonalityPanel() {
         <>
           <fieldset className="personality-group personality-group--narrative" aria-label="この子について">
             <legend>この子について</legend>
-            <div className="personality-fields">
-              <NarrativeField label="名前" value={narrative.name} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, name: value })} />
-              <NarrativeField label="一人称" value={narrative.first_person_pronoun} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, first_person_pronoun: value })} />
-              <NarrativeField label="ユーザーの名前" value={narrative.user_name} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, user_name: value })} />
-              <NarrativeField label="ユーザーの呼び方" value={narrative.user_address} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, user_address: value })} />
-              <NarrativeField label="関係性" value={narrative.relationship} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, relationship: value })} />
-              <NarrativeField label="話し方" value={narrative.speaking_style} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, speaking_style: value })} />
-              <NarrativeField label="興味" value={narrative.interests} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, interests: value })} />
-              <NarrativeField label="苦手なもの" value={narrative.dislikes} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, dislikes: value })} />
-              <NarrativeField label="価値観" value={narrative.values} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, values: value })} />
-              <NarrativeField label="背景" value={narrative.background} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, background: value })} />
-              <NarrativeField label="境界" value={narrative.boundaries} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, boundaries: value })} />
-              <NarrativeField label="自由記述" value={narrative.free_text} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, free_text: value })} />
+            <div className="personality-profile-groups">
+              <section
+                className="personality-profile-section personality-profile-section--identity"
+                aria-labelledby="personality-profile-identity"
+              >
+                <div className="personality-profile-section__heading">
+                  <span aria-hidden="true" />
+                  <h3 id="personality-profile-identity">基本情報</h3>
+                </div>
+                <div className="personality-fields">
+                  <NarrativeField label="名前" value={narrative.name} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, name: value })} />
+                  <NarrativeField label="一人称" value={narrative.first_person_pronoun} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, first_person_pronoun: value })} />
+                  <NarrativeField label="ユーザーの名前" value={narrative.user_name} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, user_name: value })} />
+                  <NarrativeField label="ユーザーの呼び方" value={narrative.user_address} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, user_address: value })} />
+                  <NarrativeField label="関係性" value={narrative.relationship} full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, relationship: value })} />
+                </div>
+              </section>
+
+              <section
+                className="personality-profile-section personality-profile-section--voice"
+                aria-labelledby="personality-profile-voice"
+              >
+                <div className="personality-profile-section__heading">
+                  <span aria-hidden="true" />
+                  <h3 id="personality-profile-voice">話し方と嗜好</h3>
+                </div>
+                <div className="personality-fields">
+                  <NarrativeField label="話し方" value={narrative.speaking_style} full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, speaking_style: value })} />
+                  <NarrativeField label="興味" value={narrative.interests} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, interests: value })} />
+                  <NarrativeField label="苦手なもの" value={narrative.dislikes} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, dislikes: value })} />
+                  <NarrativeField label="価値観" value={narrative.values} full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, values: value })} />
+                </div>
+              </section>
+
+              <section
+                className="personality-profile-section personality-profile-section--story"
+                aria-labelledby="personality-profile-story"
+              >
+                <div className="personality-profile-section__heading">
+                  <span aria-hidden="true" />
+                  <h3 id="personality-profile-story">背景と境界</h3>
+                </div>
+                <div className="personality-fields">
+                  <NarrativeField label="背景" value={narrative.background} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, background: value })} />
+                  <NarrativeField label="境界" value={narrative.boundaries} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, boundaries: value })} />
+                  <NarrativeField label="自由記述" value={narrative.free_text} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, free_text: value })} />
+                </div>
+              </section>
             </div>
             {narrativeDirty ? (
               <div className="personality-inline-actions">

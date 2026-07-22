@@ -1439,11 +1439,11 @@ body:not(.transparent) #root {
 }
 
 .control-center[data-ui-style='conversation-first'] .conversation-layer[aria-hidden='true'] {
+  opacity: 0;
   pointer-events: none;
 }
 
 .control-center[data-ui-style='conversation-first'][data-screen='settings'] .conversation-layer {
-  opacity: 0.13;
   transition-duration: 750ms;
 }
 
@@ -1724,13 +1724,37 @@ body:not(.transparent) #root {
     clamp(20px, 4vw, 60px)
     clamp(28px, 4vh, 44px);
   overflow: auto;
-  background: color-mix(in srgb, var(--page) 90%, transparent);
+  background: var(--page);
   animation: screen-content-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-overlay--settings {
-  background: transparent;
+  background: var(--page);
   animation: none;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay::after {
+  position: fixed;
+  z-index: 0;
+  inset: 0;
+  background:
+    linear-gradient(
+      132deg,
+      transparent 0 18%,
+      color-mix(in srgb, var(--accent) 7%, transparent) 18.2% 27%,
+      transparent 27.2% 66%,
+      color-mix(in srgb, var(--motion-reflection-highlight) 8%, transparent) 66.2% 72%,
+      transparent 72.2%
+    ),
+    linear-gradient(
+      42deg,
+      transparent 0 76%,
+      color-mix(in srgb, var(--accent) 10%, transparent) 76.2% 76.45%,
+      transparent 76.65%
+    );
+  content: '';
+  opacity: 0.9;
+  pointer-events: none;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-overlay--settings::before {
@@ -1746,7 +1770,7 @@ body:not(.transparent) #root {
 .control-center[data-ui-style='conversation-first'][data-transition='settings']
   .screen-overlay--settings::before {
   opacity: 0;
-  animation: settings-gradient-in 750ms ease-out forwards;
+  animation: settings-gradient-in var(--screen-transition-duration) ease-out forwards;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-close-button {
@@ -1758,22 +1782,54 @@ body:not(.transparent) #root {
   height: 44px;
   place-items: center;
   padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
+  border: 1.5px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface) 58%, transparent);
   color: var(--accent-strong);
-  font-size: 32px;
+  font-size: 25px;
   font-weight: 400;
   line-height: 1;
   cursor: pointer;
+  overflow: hidden;
+  transform: rotate(45deg);
   transition:
     background-color 140ms ease,
-    color 140ms ease;
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-close-button > span {
+  position: relative;
+  z-index: 2;
+  transform: rotate(-45deg);
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-close-button::after {
+  position: absolute;
+  z-index: 1;
+  top: 50%;
+  left: 50%;
+  width: 24%;
+  height: 180%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--motion-reflection-highlight),
+    transparent
+  );
+  content: '';
+  opacity: 0;
+  transform: translate(-50%, -50%) translateX(220%);
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-close-button:hover {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--accent);
+  transform: rotate(45deg) scale(1.04);
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-close-button:hover::after {
+  animation: glass-reflection 320ms cubic-bezier(0.18, 0.64, 0.28, 1) 1;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-close-button:focus-visible {
@@ -1782,25 +1838,107 @@ body:not(.transparent) #root {
 }
 
 :root[data-theme='dark'] .control-center[data-ui-style='conversation-first'] .screen-overlay {
-  background: rgb(6 26 32 / 86%);
+  background: var(--page);
 }
 
 :root[data-theme='dark']
   .control-center[data-ui-style='conversation-first']
   .screen-overlay--settings {
-  background: transparent;
+  background: var(--page);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .control-center[data-ui-style='conversation-first'] .screen-overlay {
-    background: rgb(6 26 32 / 86%);
+    background: var(--page);
   }
 
   :root:not([data-theme='light'])
     .control-center[data-ui-style='conversation-first']
     .screen-overlay--settings {
-    background: transparent;
+    background: var(--page);
   }
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay select {
+  appearance: none;
+  padding-inline-end: 38px;
+  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--accent-strong) 50%),
+    linear-gradient(135deg, var(--accent-strong) 50%, transparent 50%);
+  background-position:
+    calc(100% - 17px) 50%,
+    calc(100% - 11px) 50%;
+  background-repeat: no-repeat;
+  background-size: 6px 6px;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='checkbox'] {
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  min-height: 20px;
+  flex: none;
+  padding: 0;
+  border: 2px solid var(--accent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  box-shadow: inset 0 0 0 4px var(--page);
+  transform: rotate(45deg) scale(0.78);
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='checkbox']:checked {
+  border-color: var(--accent-strong);
+  background: var(--accent);
+  transform: rotate(45deg) scale(0.9);
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='checkbox']:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 52%, transparent);
+  outline-offset: 4px;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='range'] {
+  appearance: none;
+  height: 28px;
+  border: 0;
+  background: transparent;
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='range']::-webkit-slider-runnable-track {
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--line));
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  margin-top: -7px;
+  border: 2px solid var(--surface);
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+  transform: rotate(45deg);
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='range']::-moz-range-track {
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--line));
+}
+
+.control-center[data-ui-style='conversation-first'] .screen-overlay input[type='range']::-moz-range-thumb {
+  width: 17px;
+  height: 17px;
+  border: 2px solid var(--surface);
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+  transform: rotate(45deg);
 }
 
 @keyframes screen-content-in {
@@ -1963,13 +2101,6 @@ body:not(.transparent) #root {
   color: var(--on-accent);
 }
 
-.control-center[data-ui-style='conversation-first'][data-transition='settings']
-  .category-crown button {
-  opacity: 0;
-  animation: settings-category-in 552ms ease-out forwards;
-  animation-delay: var(--enter-delay);
-}
-
 .control-center[data-ui-style='conversation-first'] .category-crown button:active {
   transform: translate(-50%, -50%) rotate(45deg) scale(0.97);
 }
@@ -2126,6 +2257,13 @@ body:not(.transparent) #root {
   z-index: 8;
 }
 
+.control-center[data-ui-style='conversation-first'][data-transition] {
+  --screen-transition-duration: 760ms;
+  --screen-ripple-duration: 650ms;
+  --ring-delay-middle: 55ms;
+  --ring-delay-last: 110ms;
+}
+
 .control-center[data-ui-style='conversation-first'][data-transition]
   .screen-tabs button:not([data-confirming='true']) {
   opacity: 0;
@@ -2136,17 +2274,22 @@ body:not(.transparent) #root {
   .screen-tabs button[data-confirming='true'] {
   z-index: 2;
   pointer-events: none;
-  animation: main-diamond-confirm 500ms cubic-bezier(0.18, 0.78, 0.24, 1) forwards;
+  animation: main-diamond-confirm var(--screen-transition-duration)
+    cubic-bezier(0.18, 0.78, 0.24, 1) forwards;
 }
 
-.control-center[data-ui-style='conversation-first'][data-transition='personality']
-  .screen-overlay--personality {
-  animation: personality-view-in 800ms cubic-bezier(0.2, 0.72, 0.24, 1) forwards;
+.control-center[data-ui-style='conversation-first'][data-transition]
+  .screen-overlay[data-transition-stage='unified'] {
+  will-change: opacity, transform;
+  animation: screen-view-in var(--screen-transition-duration)
+    cubic-bezier(0.2, 0.72, 0.24, 1) forwards;
 }
 
-.control-center[data-ui-style='conversation-first'][data-transition='conversation']
-  .screen-overlay--conversation {
-  animation: conversation-view-in 800ms cubic-bezier(0.2, 0.72, 0.24, 1) forwards;
+.control-center[data-ui-style='conversation-first'][data-transition-speed='quick'] {
+  --screen-transition-duration: 420ms;
+  --screen-ripple-duration: 350ms;
+  --ring-delay-middle: 35ms;
+  --ring-delay-last: 70ms;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-transition-rings {
@@ -2165,23 +2308,18 @@ body:not(.transparent) #root {
   height: var(--screen-origin-size);
   border: 1.5px solid currentcolor;
   opacity: 0;
-  transform: translate(-50%, -50%);
-}
-
-.control-center[data-ui-style='conversation-first']
-  .screen-transition-rings--personality
-  .screen-transition-ring {
-  transform: translate(-50%, -50%) rotate(45deg);
-  animation: personality-ring-expand 760ms cubic-bezier(0.18, 0.7, 0.2, 1)
-    var(--ring-delay) forwards;
+  transform: translate(-50%, -50%) rotate(var(--ring-rotation, 45deg)) scale(0.72);
+  will-change: transform, opacity;
+  animation: screen-ripple-expand var(--screen-ripple-duration)
+    cubic-bezier(0.18, 0.7, 0.2, 1) var(--ring-delay) forwards;
 }
 
 .control-center[data-ui-style='conversation-first']
   .screen-transition-rings--conversation
   .screen-transition-ring {
+  --ring-rotation: 0deg;
+
   border-radius: 50%;
-  animation: conversation-ring-expand 760ms cubic-bezier(0.18, 0.7, 0.2, 1)
-    var(--ring-delay) forwards;
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-transition-ring--blue {
@@ -2191,7 +2329,7 @@ body:not(.transparent) #root {
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-transition-ring--highlight {
-  --ring-delay: 70ms;
+  --ring-delay: var(--ring-delay-middle);
 
   color: color-mix(
     in srgb,
@@ -2201,7 +2339,7 @@ body:not(.transparent) #root {
 }
 
 .control-center[data-ui-style='conversation-first'] .screen-transition-ring--purple {
-  --ring-delay: 140ms;
+  --ring-delay: var(--ring-delay-last);
 
   color: var(--motion-reflection-purple);
 }
@@ -2227,16 +2365,6 @@ body:not(.transparent) #root {
 }
 
 @keyframes settings-gradient-in {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes settings-category-in {
   from {
     opacity: 0;
   }
@@ -2280,11 +2408,10 @@ body:not(.transparent) #root {
   }
 }
 
-@keyframes personality-ring-expand {
+@keyframes screen-ripple-expand {
   0% {
-    width: var(--screen-origin-size);
-    height: var(--screen-origin-size);
     opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--ring-rotation, 45deg)) scale(0.72);
   }
 
   12% {
@@ -2296,65 +2423,20 @@ body:not(.transparent) #root {
   }
 
   100% {
-    width: 160vmax;
-    height: 160vmax;
     opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--ring-rotation, 45deg)) scale(18);
   }
 }
 
-@keyframes personality-view-in {
+@keyframes screen-view-in {
   0% {
-    opacity: 0.12;
-    clip-path: polygon(
-      var(--screen-origin-x) var(--screen-origin-y),
-      var(--screen-origin-x) var(--screen-origin-y),
-      var(--screen-origin-x) var(--screen-origin-y),
-      var(--screen-origin-x) var(--screen-origin-y)
-    );
+    opacity: 0;
+    transform: scale(0.995);
   }
 
   100% {
     opacity: 1;
-    clip-path: polygon(
-      var(--screen-origin-x) calc(var(--screen-origin-y) - 160vmax),
-      calc(var(--screen-origin-x) + 160vmax) var(--screen-origin-y),
-      var(--screen-origin-x) calc(var(--screen-origin-y) + 160vmax),
-      calc(var(--screen-origin-x) - 160vmax) var(--screen-origin-y)
-    );
-  }
-}
-
-@keyframes conversation-ring-expand {
-  0% {
-    width: var(--screen-origin-size);
-    height: var(--screen-origin-size);
-    opacity: 0;
-  }
-
-  12% {
-    opacity: 0.9;
-  }
-
-  72% {
-    opacity: 0.5;
-  }
-
-  100% {
-    width: 160vmax;
-    height: 160vmax;
-    opacity: 0;
-  }
-}
-
-@keyframes conversation-view-in {
-  0% {
-    opacity: 0.12;
-    clip-path: circle(0 at var(--screen-origin-x) var(--screen-origin-y));
-  }
-
-  100% {
-    opacity: 1;
-    clip-path: circle(160vmax at var(--screen-origin-x) var(--screen-origin-y));
+    transform: scale(1);
   }
 }
 
@@ -2431,6 +2513,57 @@ body:not(.transparent) #root {
   gap: 16px 24px;
 }
 
+.control-center[data-ui-style='conversation-first'] .personality-profile-groups {
+  display: grid;
+  gap: clamp(28px, 5vh, 48px);
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section {
+  position: relative;
+  width: min(100%, 760px);
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 68%, var(--line));
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section--identity {
+  margin-inline-end: auto;
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section--voice {
+  width: min(94%, 720px);
+  margin-inline: auto 0;
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section--story {
+  width: min(97%, 744px);
+  margin-inline: 0 auto;
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section__heading {
+  display: flex;
+  gap: 13px;
+  align-items: center;
+  margin: -24px 0 20px;
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section__heading > span {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 2px solid var(--accent);
+  background: var(--page);
+  transform: rotate(45deg);
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-profile-section__heading h3 {
+  margin: 0;
+  padding-inline: 4px 12px;
+  background: var(--page);
+  color: var(--text);
+  font-size: 15px;
+  letter-spacing: 0.06em;
+}
+
 .control-center[data-ui-style='conversation-first'] .personality-field {
   display: grid;
   gap: 6px;
@@ -2446,12 +2579,24 @@ body:not(.transparent) #root {
 .control-center[data-ui-style='conversation-first'] .personality-field input,
 .control-center[data-ui-style='conversation-first'] .personality-field textarea {
   width: 100%;
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent) 42%, transparent);
 }
 
 .control-center[data-ui-style='conversation-first'] .personality-field textarea {
-  min-height: 88px;
+  min-height: 112px;
   line-height: 1.65;
   resize: vertical;
+}
+
+.control-center[data-ui-style='conversation-first'] .personality-field input:focus-visible,
+.control-center[data-ui-style='conversation-first'] .personality-field textarea:focus-visible {
+  border-color: var(--accent-strong);
+  background: var(--surface);
+  box-shadow:
+    inset 3px 0 0 var(--accent),
+    0 0 18px color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .control-center[data-ui-style='conversation-first'] .personality-inline-actions {
@@ -2999,6 +3144,40 @@ body:not(.transparent) #root {
   .conversation-waiting > span {
     animation: none;
   }
+
+  .control-center[data-ui-style='conversation-first'] .conversation-layer {
+    transition: none;
+  }
+
+  .control-center[data-ui-style='conversation-first'][data-transition-speed='reduced']
+    .screen-overlay {
+    animation: screen-content-fade 120ms linear forwards;
+  }
+
+  .control-center[data-ui-style='conversation-first'][data-transition-speed='reduced']
+    .screen-overlay--settings::before,
+  .control-center[data-ui-style='conversation-first'][data-transition-speed='reduced']
+    .category-crown button,
+  .control-center[data-ui-style='conversation-first'][data-transition-speed='reduced']
+    .screen-tabs button[data-confirming='true'] {
+    animation: none;
+    opacity: 1;
+  }
+
+  .control-center[data-ui-style='conversation-first'][data-transition-speed='reduced']
+    .screen-transition-rings {
+    display: none;
+  }
+}
+
+@keyframes screen-content-fade {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
 }
 
 @media (max-width: 760px) {
@@ -3095,6 +3274,13 @@ body:not(.transparent) #root {
 
   .control-center[data-ui-style='conversation-first'] .personality-fields {
     grid-template-columns: 1fr;
+  }
+
+  .control-center[data-ui-style='conversation-first'] .personality-profile-section,
+  .control-center[data-ui-style='conversation-first'] .personality-profile-section--voice,
+  .control-center[data-ui-style='conversation-first'] .personality-profile-section--story {
+    width: 100%;
+    margin-inline: 0;
   }
 
   .control-center[data-ui-style='conversation-first'] .personality-field--full {

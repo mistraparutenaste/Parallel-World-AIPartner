@@ -51,9 +51,15 @@ const SETTINGS_ITEMS: Array<{ id: SettingsArea; label: string; enterOrder: numbe
 ];
 
 const SCREEN_TRANSITION_DURATION: Record<TransitionScreen, number> = {
-  settings: 750,
-  personality: 920,
-  conversation: 920,
+  settings: 760,
+  personality: 760,
+  conversation: 760,
+};
+
+const QUICK_SCREEN_TRANSITION_DURATION: Record<TransitionScreen, number> = {
+  settings: 420,
+  personality: 420,
+  conversation: 420,
 };
 
 type ScreenTransition = {
@@ -61,6 +67,7 @@ type ScreenTransition = {
   originX: number;
   originY: number;
   originSize: number;
+  speed: 'cinematic' | 'quick' | 'reduced';
 };
 
 function TabList<T extends string>({
@@ -250,6 +257,7 @@ export function SettingsWindow() {
   const restoreScreenMenuFocus = useRef(false);
   const screenTransitionTimer = useRef<number | null>(null);
   const screenNavigationRef = useRef<HTMLElement | null>(null);
+  const visitedScreens = useRef(new Set<TransitionScreen>());
 
   const cancelScreenTransition = () => {
     if (screenTransitionTimer.current !== null) {
@@ -341,6 +349,14 @@ export function SettingsWindow() {
     if (next !== 'chat') restoreScreenMenuFocus.current = false;
 
     if (next !== 'chat') {
+      const reduceMotion = typeof window.matchMedia === 'function'
+        && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      const speed = reduceMotion
+        ? 'reduced'
+        : visitedScreens.current.has(next)
+          ? 'quick'
+          : 'cinematic';
+      visitedScreens.current.add(next);
       const rect = source?.getBoundingClientRect();
       const transformedSize = Math.max(rect?.width ?? 0, rect?.height ?? 0);
       const originSize = next === 'personality'
@@ -351,12 +367,17 @@ export function SettingsWindow() {
         originX: rect ? rect.left + rect.width / 2 : window.innerWidth / 2,
         originY: rect ? rect.top + rect.height / 2 : window.innerHeight / 2,
         originSize,
+        speed,
       };
       setScreenTransition(transition);
       screenTransitionTimer.current = window.setTimeout(() => {
         setScreenTransition(null);
         screenTransitionTimer.current = null;
-      }, SCREEN_TRANSITION_DURATION[next]);
+      }, speed === 'reduced'
+        ? 150
+        : speed === 'quick'
+          ? QUICK_SCREEN_TRANSITION_DURATION[next]
+          : SCREEN_TRANSITION_DURATION[next]);
     }
 
     setScreenArea(next);
@@ -388,6 +409,7 @@ export function SettingsWindow() {
       data-ui-style="conversation-first"
       data-screen={screenArea}
       data-transition={screenTransition?.target}
+      data-transition-speed={screenTransition?.speed}
       style={transitionStyle}
     >
       <section
@@ -412,8 +434,9 @@ export function SettingsWindow() {
           role="dialog"
           aria-modal="true"
           aria-label={`${activeScreenLabel}画面`}
+          data-transition-stage={screenTransition ? 'unified' : undefined}
           data-motion-shape={
-            screenArea === 'personality'
+            screenArea === 'settings' || screenArea === 'personality'
               ? 'diamond'
               : screenArea === 'conversation'
                 ? 'circle'
@@ -472,7 +495,7 @@ export function SettingsWindow() {
         </section>
       ) : null}
 
-      {screenTransition?.target === 'personality' || screenTransition?.target === 'conversation' ? (
+      {screenTransition ? (
         <div
           className={`screen-transition-rings screen-transition-rings--${screenTransition.target}`}
           aria-hidden="true"
@@ -481,7 +504,9 @@ export function SettingsWindow() {
             <span
               key={tone}
               className={`screen-transition-ring screen-transition-ring--${tone}`}
-              data-transition-ring={screenTransition.target === 'personality' ? 'diamond' : 'circle'}
+              data-transition-ring={
+                screenTransition.target === 'conversation' ? 'circle' : 'diamond'
+              }
             />
           ))}
         </div>

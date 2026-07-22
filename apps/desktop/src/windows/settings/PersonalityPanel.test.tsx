@@ -78,6 +78,15 @@ describe('PersonalityPanel', () => {
     expect(headings).toEqual(expect.arrayContaining(['この子について', '会話の傾向', 'ダーク傾向']));
     expect(screen.getByLabelText('名前')).toHaveValue('アリス');
     expect(screen.getByLabelText('興味')).toHaveValue('紅茶');
+    const identity = screen.getByRole('region', { name: '基本情報' });
+    const voice = screen.getByRole('region', { name: '話し方と嗜好' });
+    const story = screen.getByRole('region', { name: '背景と境界' });
+    expect(within(identity).getByLabelText('関係性')).toBeInTheDocument();
+    expect(within(voice).getByLabelText('話し方')).toBeInTheDocument();
+    expect(within(voice).getByLabelText('価値観')).toBeInTheDocument();
+    expect(within(story).getByLabelText('背景').tagName).toBe('TEXTAREA');
+    expect(within(story).getByLabelText('境界').tagName).toBe('TEXTAREA');
+    expect(within(story).getByLabelText('自由記述').tagName).toBe('TEXTAREA');
     expect(screen.getAllByRole('slider')).toHaveLength(10);
     expect(screen.getByLabelText('積極性')).toHaveValue('50');
     expect(screen.getByLabelText('サディズム')).toHaveValue('50');
