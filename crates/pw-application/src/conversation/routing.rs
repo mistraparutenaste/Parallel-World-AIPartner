@@ -481,12 +481,12 @@ impl ResponsePlanner for LexicalResponsePlanner {
                 "Do not invent facts or preferences",
             ),
             TurnKind::Tool => (
-                "Explain available tool-related next steps",
-                "Do not claim a tool was used unless its result is present",
+                "Answer the current request with only relevant tool actions",
+                "Do not claim a tool was used or executed unless its result is present",
             ),
             TurnKind::Proactive => (
-                "Offer a low-pressure relevant check-in",
-                "Keep the check-in optional and concise",
+                "Respond to concrete observed context with one concise, self-contained utterance",
+                "Do not append a generic menu or next-topic offer",
             ),
             TurnKind::Simple => return Err(PortError("simple turns must not be planned".into())),
         };
@@ -595,6 +595,32 @@ mod tests {
             relevant_facts: vec!["x".repeat(MAX_SURFACE_FACT_CHARS + 1)],
         };
         assert!(surface.validate().is_err());
+    }
+
+    #[test]
+    fn lexical_planner_keeps_tool_and_proactive_turns_concrete() {
+        let mut planner = LexicalResponsePlanner;
+        let context = MemoryContext::default();
+        let tool = planner
+            .plan(TurnKind::Tool, "search this", &context)
+            .expect("tool plan");
+        let proactive = planner
+            .plan(TurnKind::Proactive, "check in", &context)
+            .expect("proactive plan");
+        let tool_text = std::iter::once(tool.goal)
+            .chain(tool.directives)
+            .collect::<Vec<_>>()
+            .join(" ");
+        let proactive_text = std::iter::once(proactive.goal)
+            .chain(proactive.directives)
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        assert!(tool_text.contains("current request"));
+        assert!(!tool_text.contains("available tool-related next steps"));
+        assert!(proactive_text.contains("concrete observed context"));
+        assert!(proactive_text.contains("self-contained"));
+        assert!(!proactive_text.contains("Offer a low-pressure"));
     }
 
     struct CountingPlanner(usize);
