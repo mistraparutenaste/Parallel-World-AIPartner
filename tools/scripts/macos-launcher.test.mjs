@@ -15,12 +15,11 @@ const launcher = await readFile(
   'utf8',
 );
 
-test('macOS launcher resolves the repository and fails closed on missing prerequisites', () => {
+test('macOS launcher resolves the repository and delegates first-run preparation', () => {
   assert.match(launcher, /^#!\/bin\/bash/);
   assert.match(launcher, /SCRIPT_DIR=.*dirname -- "\$0"/);
   assert.match(launcher, /uname -s.*Darwin/);
-  assert.match(launcher, /command -v "\$command_name"/);
-  assert.match(launcher, /xcode-select -p/);
+  assert.match(launcher, /prepare-dev-environment\.sh/);
 });
 
 test('macOS launcher validates both stacks before starting Tauri', () => {
@@ -37,7 +36,10 @@ test('macOS launcher validates both stacks before starting Tauri', () => {
   assert.match(launcher, /exit "\$launcher_exit"/);
 });
 
-test('macOS launcher does not invoke the Windows-only managed Irodori bootstrap', () => {
+test('macOS launcher starts and cleans up the prepared managed Irodori server', () => {
   assert.doesNotMatch(launcher, /irodori-bootstrap\.ps1|powershell/i);
-  assert.match(launcher, /TTS servers are not managed by this macOS launcher/);
+  assert.match(launcher, /IRODORI_ROOT=.*Application Support/);
+  assert.match(launcher, /uv run --no-sync python -m irodori_openai_tts/);
+  assert.match(launcher, /trap cleanup EXIT INT TERM/);
+  assert.match(launcher, /http:\/\/127\.0\.0\.1:8088\/health/);
 });

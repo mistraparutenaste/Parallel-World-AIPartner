@@ -4,6 +4,32 @@
 
 # Parallel World
 
+## One-click setup on a new computer
+
+After cloning or copying this repository, use the platform launcher:
+
+- Windows: double-click `ParallelWorld_run.bat`.
+- macOS: double-click `ParallelWorld_run.command`. If Finder blocks it, run
+  `chmod +x ParallelWorld_run.command` once in Terminal.
+
+The launcher detects and installs missing development prerequisites, installs
+workspace dependencies, builds required packages, synchronizes available
+character assets, validates the frontend and Rust application, and starts
+Parallel World. It is safe to run again: completed steps and downloaded files
+are reused.
+
+Every large download presents an English `y/n` prompt before it starts. This
+includes compiler toolchains, JavaScript dependencies, the optional speech
+recognition models, and the managed Irodori TTS environment and base model.
+Declining an optional speech model still allows text chat. Declining a required
+compiler or runtime component stops setup with a clear message.
+
+On a new profile, accepting managed Irodori setup also selects Irodori at
+`http://127.0.0.1:8088` without overwriting an existing TTS configuration.
+The base model supports `voice_id: "none"`; reference voices can be added later.
+An LLM is still required for generated replies and can be configured in
+Settings after the app opens.
+
 Parallel Worldは、Live2Dまたは静止画のキャラクターとテキスト・音声で会話できる、ローカル優先のデスクトップAIコンパニオンです。
 会話、キャラクター、音声、履歴、記憶を一つのアプリにまとめ、外部サービスが停止した場合も、影響する機能だけを無効にして起動できます。
 

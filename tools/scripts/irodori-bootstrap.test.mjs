@@ -19,6 +19,7 @@ const manifestPath = path.join(
   "windows-x86_64.json",
 );
 const bootstrapEntryPath = path.join(scriptDirectory, "irodori-bootstrap.ps1");
+const configureIrodoriDefaultPath = path.join(scriptDirectory, "configure-irodori-default.ps1");
 const managedLauncherPath = path.join(repositoryRoot, "ParallelWorld_run.bat");
 const legacyLauncherPath = path.join(repositoryRoot, "ParallelWorld起動.bat");
 const directLauncherPath = path.join(repositoryRoot, "dev-up.bat");
@@ -42,7 +43,7 @@ function runBootstrapEntryHarness(mode, { useDefaults = false } = {}) {
       : `[pscustomobject]@{ app_exit_code = 7 }`;
   writeFileSync(
     module,
-    `function Invoke-IrodoriBootstrap { param($ManifestPath, $DataRoot) ${behavior} }\nExport-ModuleMember -Function Invoke-IrodoriBootstrap\n`,
+    `function Invoke-IrodoriBootstrap { param($ManifestPath, $DataRoot, $Adapters) ${behavior} }\nExport-ModuleMember -Function Invoke-IrodoriBootstrap\n`,
     "ascii",
   );
   try {
@@ -66,7 +67,7 @@ function runManagedLauncherHarness(powerShellExitCode, { corepackExitCode = 0, c
   writeFileSync(path.join(temp, "cargo.cmd"), `@exit /b ${cargoExitCode}\r\n`, "ascii");
   writeFileSync(
     path.join(temp, "powershell.cmd"),
-    `@exit /b ${powerShellExitCode}\r\n`,
+    `@echo off\r\nset "PW_ARGS=%*"\r\necho %PW_ARGS% | findstr /i /c:"prepare-dev-environment.ps1" >nul\r\nif not errorlevel 1 exit /b 0\r\nexit /b ${powerShellExitCode}\r\n`,
     "ascii",
   );
   try {
@@ -1766,6 +1767,39 @@ test("uses a LOCALAPPDATA-relative storage label without exposing the username",
   assert.doesNotMatch(result.prompt, /SensitiveUser-DoNotLeak|C:\\Users\\/i);
 });
 
+test("seeds Irodori settings only for a new profile and preserves existing settings", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "pw-irodori-settings-"));
+  try {
+    const env = {
+      ...process.env,
+      APPDATA: root,
+      PW_IRODORI_BOOTSTRAP_STATUS: "ready_without_voice",
+    };
+    const firstRun = spawnSync(
+      powerShell,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", configureIrodoriDefaultPath],
+      { encoding: "utf8", env, windowsHide: true },
+    );
+    assert.equal(firstRun.status, 0, firstRun.stderr || firstRun.stdout);
+    const settingsPath = path.join(root, "com.parallelworld.desktop", "config", "tts.json");
+    const first = JSON.parse(await readFile(settingsPath, "utf8"));
+    assert.equal(first.engine, "irodori");
+    assert.equal(first.base_url, "http://127.0.0.1:8088");
+    assert.equal(first.voice_id, "none");
+
+    await writeFile(settingsPath, JSON.stringify({ preserved: true }), "utf8");
+    const secondRun = spawnSync(
+      powerShell,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", configureIrodoriDefaultPath],
+      { encoding: "utf8", env, windowsHide: true },
+    );
+    assert.equal(secondRun.status, 0, secondRun.stderr || secondRun.stdout);
+    assert.deepEqual(JSON.parse(await readFile(settingsPath, "utf8")), { preserved: true });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("provisions after consent and starts managed Irodori with pinned offline settings", async () => {
   const { result, observations } = await runBootstrapHarness("accept_success");
   assert.equal(result.status, "ready");
@@ -2019,12 +2053,14 @@ test("only the managed launcher calls the Irodori bootstrap entry", async () => 
   assert.equal(legacyExists, false);
 });
 
-test("managed launcher documents its Irodori default with an ASCII comment", async () => {
+test("managed launcher documents one-click setup and Irodori with ASCII comments", async () => {
   const managed = await readFile(managedLauncherPath, "latin1");
   assert.match(
     managed,
-    /rem    2\. TTS engine \(Irodori default for this launcher\) startup check/,
+    /rem    1\. Install missing development prerequisites and assets/,
   );
+  assert.match(managed, /rem    3\. Prepare the managed Irodori TTS model when approved/);
+  assert.match(managed, /Large downloads always require y\/n consent/);
 });
 
 test(

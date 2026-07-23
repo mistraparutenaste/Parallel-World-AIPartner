@@ -18,7 +18,14 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
 Import-Module (Join-Path $PSScriptRoot 'irodori-bootstrap.psm1') -Force
 
 try {
-    $result = Invoke-IrodoriBootstrap -ManifestPath $ManifestPath -DataRoot $DataRoot
+    $adapters = @{
+        RunApp = {
+            & (Join-Path $PSScriptRoot 'configure-irodori-default.ps1')
+            & (Join-Path $PSScriptRoot 'dev-up.ps1')
+            return $LASTEXITCODE
+        }
+    }
+    $result = Invoke-IrodoriBootstrap -ManifestPath $ManifestPath -DataRoot $DataRoot -Adapters $adapters
     exit ([int] $result.app_exit_code)
 } catch [OperationCanceledException] {
     Write-Host 'Irodori setup was cancelled.' -ForegroundColor Yellow
