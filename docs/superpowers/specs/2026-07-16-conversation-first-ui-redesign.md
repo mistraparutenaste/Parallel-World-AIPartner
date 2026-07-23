@@ -845,7 +845,7 @@ proactive_snoozed_until: Option<i64>
 
 ## 18. 設計確定状況
 
-本書で扱う会話中心UI、足跡、下部ナビゲーション、設定カテゴリー、性格、会話設定、記憶境界、テーマ、狭幅表示、画面遷移の基本設計は確定した。今回の実装範囲は[会話中心UI刷新 Implementation Plan](../plans/2026-07-17-conversation-first-ui-redesign.md)、視覚検証はリポジトリルートの`design-qa.md`を再開点とする。
+本書で扱う会話中心UI、足跡、下部ナビゲーション、設定カテゴリー、性格、会話設定、記憶境界、テーマ、狭幅表示、画面遷移の基本設計は確定した。今回の実装範囲は[会話中心UI刷新 Implementation Plan](../plans/2026-07-17-conversation-first-ui-redesign.md)、視覚検証はリポジトリルートの`docs/development/design-qa.md`を再開点とする。
 
 ## 19. 実装済み境界と後続
 

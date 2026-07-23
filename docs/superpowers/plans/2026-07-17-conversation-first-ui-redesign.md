@@ -93,7 +93,7 @@
 - [x] `git diff --check`と変更範囲を確認する。
 - [x] 採用モックと同じ状態・viewportで実画面を撮影する。
 - [x] ライト、ダーク、ホバー、フォーカス、640px、320pxを比較する。
-- [x] ルートの`design-qa.md`へ比較履歴と`final result`を記録する。
+- [x] ルートの`docs/development/design-qa.md`へ比較履歴と`final result`を記録する。
 
 ## Task 7: 会話設定契約とUI
 
@@ -152,7 +152,7 @@
 - Rust: `cargo test --workspace`、`cargo check --workspace`、`cargo fmt --check` passed。
 - Playwright: 1486 × 1058、640 × 900、320 × 844で主要経路を操作し、`consoleErrors: []`、`pageErrors: []`。
 - インアプリBrowser: 1280 × 720、320 × 844で設定・性格・会話の共通「×」、下部ナビゲーション非表示、フォーカス復帰、横スクロールなし、error／warnログなしを確認。
-- 視覚比較: `output/playwright/conversation-first-ui/comparison-dark-final.png`と`comparison-dark-crown-final.png`。
+- 視覚比較: `docs/assets/design-qa/comparison-dark-final.png`と`comparison-dark-crown-final.png`。
 
 ---
 

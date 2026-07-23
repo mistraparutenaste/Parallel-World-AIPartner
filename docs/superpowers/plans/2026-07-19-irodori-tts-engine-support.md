@@ -104,7 +104,7 @@
 - `crates/pw-tts/tests/real_engine.rs` パターンで irodori 実サーバー `#[ignore]` E2E（voices 取得 → 合成 → RIFF 検証 → レイテンシ記録）。
 - 全品質ゲート（corepack pnpm typecheck / test、cargo fmt / clippy / test、bindings 差分なし）。
 - 実機確認: エンジン切替の即時反映（次応答から）、リップシンク（irodori の WAV サンプルレートでも RMS 算出が機能すること）、停止割り込み、サーバー停止時の縮退と `tts-state` 通知、旧 `tts.json` の後方互換読み込み。
-- 作業内容.md 更新。
+- docs/development/worklogs/2026-07.md 更新。
 
 ---
 

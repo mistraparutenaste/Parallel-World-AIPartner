@@ -2,7 +2,7 @@
 
 **Goal:** AivisSpeech API、話者選択、ユーザー辞書、TTSキュー、文章先読み、WAVキャッシュ、Web Audio再生、Live2Dリップシンク、発話割り込み。
 
-**完了条件（基本設計.md Phase 4）:**
+**完了条件（docs/product/基本設計.md Phase 4）:**
 - LLM応答を文章単位で順番に読み上げられる
 - 音声開始と口の動きが同期する
 - 停止操作で音声と口の動きが即座に停止する
@@ -47,4 +47,4 @@
 
 ### P4-T6: 受け入れ検証
 - 実AivisSpeech Engineに対する #[ignore] E2E（speakers取得→合成→WAV検証）。
-- 全品質ゲート、tauri build、作業内容.md、実機確認手順。
+- 全品質ゲート、tauri build、docs/development/worklogs/2026-07.md、実機確認手順。

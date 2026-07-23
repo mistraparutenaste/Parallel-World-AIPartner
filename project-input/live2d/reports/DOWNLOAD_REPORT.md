@@ -63,7 +63,7 @@
 | Hatsune Miku | 外部ライセンスキャラクター。Crypton Future Media社の個別ガイドライン準拠が必要で、汎用テスト素材として扱うと管理が複雑になるため |
 | Unity-chan | 外部ライセンスキャラクター。Unity Technologies Japan社の個別ライセンス準拠が必要なため |
 | Chitose / Koharu&Haruto / Tororo&Hijiki / Gantzert&Felixander / Izumi / Miara / Nito / Hibiki / Shizuku | Phase 4候補調査の結果、現行の検証範囲（最小セット・補助セット）に含まれないため自動ダウンロード対象外と判定。詳細は reports/OPTIONAL_MODELS.md |
-| CubismSdkMotionSyncPluginForNative-5-r.2.zip | サンプルデータ.mdが要求する「for Web」ではなく「for Native」のため未配置のまま。正しい「for Web」版で代替済み |
+| CubismSdkMotionSyncPluginForNative-5-r.2.zip | docs/research/サンプルデータ.mdが要求する「for Web」ではなく「for Native」のため未配置のまま。正しい「for Web」版で代替済み |
 
 ---
 

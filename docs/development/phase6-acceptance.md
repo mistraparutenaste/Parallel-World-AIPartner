@@ -23,7 +23,7 @@
 
 `missing_asset`、`invalid_manifest`、`invalid_image`、`selection_required`、`active_character_unavailable` は恒久設定エラーとして自動retryしない。`transient_asset_read`、WebGL/WebView renderer起動障害は有界retryする。いずれも通常chatを維持し、壊れたprofileから別identityへfallbackしない。
 
-Windows実機でのPNG/WebP、DPI 100/125/150%、クリック透過、再起動永続化、読み上げ・中断・停止、Live2D回帰、profile修復後の復帰は、自動テストとは別のmanual gateである。今回の実行環境で未観測の項目は [作業内容](../../作業内容.md) にPENDINGとして記録する。
+Windows実機でのPNG/WebP、DPI 100/125/150%、クリック透過、再起動永続化、読み上げ・中断・停止、Live2D回帰、profile修復後の復帰は、自動テストとは別のmanual gateである。今回の実行環境で未観測の項目は [作業内容](worklogs/2026-07.md) にPENDINGとして記録する。
 
 ## Soak
 

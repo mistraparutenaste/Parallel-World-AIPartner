@@ -2,7 +2,7 @@
 
 **Goal:** マイク入力 → 有界リングバッファ → 16kHz mono リサンプリング → Silero VAD → 発話終了判定 → ReazonSpeech STT → 誤認識フィルター → 認識結果表示、および STT 診断画面。
 
-**完了条件（基本設計.md Phase 2）:**
+**完了条件（docs/product/基本設計.md Phase 2）:**
 - 無音10分でLLM送信0件
 - 通常の短文を安定して認識できる
 - TTS再生中にSTTを停止できる

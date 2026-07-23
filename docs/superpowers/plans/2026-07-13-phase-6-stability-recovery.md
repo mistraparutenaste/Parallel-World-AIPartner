@@ -92,7 +92,7 @@
 
 ### Task 8: Phase 6受け入れ検証
 
-**Files:** acceptance tests、README、getting-started、handoff、作業内容.md。
+**Files:** acceptance tests、README、getting-started、handoff、docs/development/worklogs/2026-07.md。
 
 - [x] FAULT MATRIX: STT/LLM/TTS/Live2D個別停止、device disconnect、child crash cap、crash secret absenceをmock/ignored実環境テストで検証。
 - [x] SOAK: short CI相当とRootChild negative testをpass。実時間2時間版をユーザー実機で実行できる正確なコマンドと成果物パスを記録（2時間run自体は未実施）。

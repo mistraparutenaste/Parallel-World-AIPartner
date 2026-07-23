@@ -2,7 +2,7 @@
 
 **Goal:** OpenAI互換LLMクライアント、ストリーミング、会話状態機械、キャンセル、キャラクタープロンプト、制御JSON抽出、文章分割、テキスト入力。
 
-**完了条件（基本設計.md Phase 3）:**
+**完了条件（docs/product/基本設計.md Phase 3）:**
 - 音声またはテキストから応答を生成できる
 - 生成途中で停止できる
 - 古いLLM応答が次の会話へ混入しない
@@ -42,4 +42,4 @@
 
 ### P3-T5: UIと受け入れ
 - ChatWindow: 送信・停止の実配線、user/assistantメッセージ表示、状態表示。
-- Settings LLMパネル。frontend/Rust全ゲート、tauri build、作業内容.md、実機確認手順（llama-server等のOpenAI互換サーバー）。
+- Settings LLMパネル。frontend/Rust全ゲート、tauri build、docs/development/worklogs/2026-07.md、実機確認手順（llama-server等のOpenAI互換サーバー）。

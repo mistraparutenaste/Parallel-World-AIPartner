@@ -16,7 +16,7 @@
 - エクスポートはrusqlite Online Backup APIを使い、稼働中DBファイルを直接コピーしない。
 - 削除はトランザクションで行い、UIで確認ダイアログを必須とする。
 - APIキー、プロンプト中の秘密情報、生音声はDBへ保存しない。
-- 各TaskはTDDのRED→GREEN→REFACTORを行い、完了時に `作業内容.md` を更新する。
+- 各TaskはTDDのRED→GREEN→REFACTORを行い、完了時に `docs/development/worklogs/2026-07.md` を更新する。
 
 ---
 
@@ -29,7 +29,7 @@
 - Create: `crates/pw-storage/src/migrations.rs`
 - Create: `crates/pw-storage/migrations/0001_initial.sql`
 - Modify: `Cargo.toml`
-- Modify: `作業内容.md`
+- Modify: `docs/development/worklogs/2026-07.md`
 
 **Interfaces:**
 - Produces: `Database::open(path) -> Result<Database, StorageError>`、`Database::open_in_memory()`、`Database::connection()`。
@@ -120,7 +120,7 @@
 **Files:**
 - Modify: `docs/development/getting-started.md`
 - Modify: `docs/development/handoff-2026-07-13.md`
-- Modify: `作業内容.md`
+- Modify: `docs/development/worklogs/2026-07.md`
 
 - [ ] **Step 1: Add acceptance tests** — 一時app-dataで保存→process相当の再open→履歴取得→記憶注入→削除を通す結合テストを追加する。
 - [ ] **Step 2: Verify acceptance test RED where coverage is missing** — 不足する受け入れ条件で失敗を確認する。

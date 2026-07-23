@@ -590,7 +590,7 @@ git commit -m "feat(character): integrate common renderer lifecycle"
 - Create: `project-input/static-character/README.md`
 - Create: `project-input/static-character/example-character.json`
 - Modify: `README.md`
-- Modify: `作業内容.md`
+- Modify: `docs/development/worklogs/2026-07.md`
 - Modify: `docs/development/getting-started.md`
 - Modify: `docs/development/phase6-acceptance.md`
 
@@ -621,12 +621,12 @@ Expected: every command exits 0.
 
 - [ ] **Step 4: Record manual acceptance without claiming unperformed checks**
 
-Run the Windows app with one valid PNG profile and one valid WebP profile at 100%, 125%, and 150% DPI. Record each performed result in `作業内容.md`: default display, Settings/LLM expression switch, one hop for multi-sentence turn, interruption, stop, each timeout option including never, thinking past timeout, click-through, restart, Live2D regression, invalid-profile chat fallback, and recovery after repair. Mark checks requiring user-visible desktop interaction as pending if they cannot be observed in the execution environment.
+Run the Windows app with one valid PNG profile and one valid WebP profile at 100%, 125%, and 150% DPI. Record each performed result in `docs/development/worklogs/2026-07.md`: default display, Settings/LLM expression switch, one hop for multi-sentence turn, interruption, stop, each timeout option including never, thinking past timeout, click-through, restart, Live2D regression, invalid-profile chat fallback, and recovery after repair. Mark checks requiring user-visible desktop interaction as pending if they cannot be observed in the execution environment.
 
 - [ ] **Step 5: Commit docs and verification**
 
 ```powershell
-git add project-input/static-character README.md 作業内容.md docs/development
+git add project-input/static-character README.md docs/development/worklogs/2026-07.md docs/development
 git commit -m "docs(character): document static character profiles"
 ```
 

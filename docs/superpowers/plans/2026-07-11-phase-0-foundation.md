@@ -18,7 +18,7 @@
 - Character Windowへ設定書込、外部プロセス起動、任意ファイルアクセス権限を与えない。
 - CSPを無効化しない。
 - 生成されたTypeScript契約を手編集しない。
-- 各Task完了時に `作業内容.md` を更新し、対象テスト、全体テスト、差分レビューを行う。
+- 各Task完了時に `docs/development/worklogs/2026-07.md` を更新し、対象テスト、全体テスト、差分レビューを行う。
 
 ---
 
@@ -130,10 +130,10 @@ Expected: 2 tests passed、0 failed。
 
 - [ ] **Step 5: 記録してコミットする**
 
-`作業内容.md` にTask 1のRED/GREEN出力と作成ファイルを追記する。
+`docs/development/worklogs/2026-07.md` にTask 1のRED/GREEN出力と作成ファイルを追記する。
 
 ```powershell
-git add .gitignore Cargo.toml rust-toolchain.toml package.json pnpm-workspace.yaml crates/pw-domain 作業内容.md
+git add .gitignore Cargo.toml rust-toolchain.toml package.json pnpm-workspace.yaml crates/pw-domain docs/development/worklogs/2026-07.md
 git commit -m "feat: establish workspace and conversation domain"
 ```
 
@@ -211,10 +211,10 @@ Expected: exit 0。
 
 - [ ] **Step 5: 記録してコミットする**
 
-`作業内容.md` に契約schema version、生成コマンド、テスト結果を追記する。
+`docs/development/worklogs/2026-07.md` に契約schema version、生成コマンド、テスト結果を追記する。
 
 ```powershell
-git add Cargo.toml crates/pw-contracts packages/contracts 作業内容.md
+git add Cargo.toml crates/pw-contracts packages/contracts docs/development/worklogs/2026-07.md
 git commit -m "feat: generate typed ipc contracts"
 ```
 
@@ -301,10 +301,10 @@ Expected: `dist/character.html`, `dist/chat.html`, `dist/settings.html` が生�
 
 - [ ] **Step 5: 記録してコミットする**
 
-`作業内容.md` に3画面の責務、テスト、build結果を追記する。
+`docs/development/worklogs/2026-07.md` に3画面の責務、テスト、build結果を追記する。
 
 ```powershell
-git add apps/desktop packages/contracts package.json pnpm-lock.yaml 作業内容.md
+git add apps/desktop packages/contracts package.json pnpm-lock.yaml docs/development/worklogs/2026-07.md
 git commit -m "feat: add three-window frontend shell"
 ```
 
@@ -370,10 +370,10 @@ Expected: exit 0、debug executable生成。
 
 - [ ] **Step 5: 記録してコミットする**
 
-`作業内容.md` にwindow label、公開command、Capability拒否テスト、build結果を追記する。
+`docs/development/worklogs/2026-07.md` にwindow label、公開command、Capability拒否テスト、build結果を追記する。
 
 ```powershell
-git add apps/desktop/src-tauri apps/desktop/package.json Cargo.toml Cargo.lock 作業内容.md
+git add apps/desktop/src-tauri apps/desktop/package.json Cargo.toml Cargo.lock docs/development/worklogs/2026-07.md
 git commit -m "feat: secure tauri three-window shell"
 ```
 
@@ -461,10 +461,10 @@ Expected: exit 0、debug executable生成。
 
 - [ ] **Step 5: Phase 0を記録してコミットする**
 
-`作業内容.md` にPhase 0全要件、全verification command、件数、残る外部ゲート、次のPhase 1計画を追記する。
+`docs/development/worklogs/2026-07.md` にPhase 0全要件、全verification command、件数、残る外部ゲート、次のPhase 1計画を追記する。
 
 ```powershell
-git add crates/pw-platform apps/desktop/src-tauri .github README.md docs/development 作業内容.md Cargo.lock pnpm-lock.yaml
+git add crates/pw-platform apps/desktop/src-tauri .github README.md docs/development docs/development/worklogs/2026-07.md Cargo.lock pnpm-lock.yaml
 git commit -m "feat: complete phase 0 application foundation"
 ```
 

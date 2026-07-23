@@ -33,7 +33,7 @@
 - Modify `crates/pw-storage/src/database.rs`: register schema v7 and migration tests.
 - Modify `crates/pw-storage/src/memory.rs`: transactional lifecycle repository and FTS reranking inputs.
 - Modify `apps/desktop/src-tauri/src/chat/service.rs`: pass turn-aware enrichment jobs, create the memory classifier client, record recalls, and run bounded maintenance.
-- Modify `作業内容.md`: record implementation and validation evidence without changing frontend documentation.
+- Modify `docs/development/worklogs/2026-07.md`: record implementation and validation evidence without changing frontend documentation.
 
 ### Task 1: Pure lifecycle model and strength calculation
 
@@ -802,7 +802,7 @@ git commit -m "feat(memory): retrieve active memories and forget safely"
 ### Task 7: Acceptance, regression gates, and implementation record
 
 **Files:**
-- Modify: `作業内容.md`
+- Modify: `docs/development/worklogs/2026-07.md`
 - Test: `crates/pw-application/src/memory/lifecycle.rs`
 - Test: `crates/pw-application/src/memory/consolidation.rs`
 - Test: `crates/pw-storage/src/database.rs`
@@ -852,7 +852,7 @@ Expected: no output. `apps/desktop/src-tauri/src/chat/service.rs` is allowed bec
 
 - [ ] **Step 4: Record exact implementation evidence**
 
-Append a dated `2026-07-14 人間型記憶ライフサイクル` section to `作業内容.md` containing:
+Append a dated `2026-07-14 人間型記憶ライフサイクル` section to `docs/development/worklogs/2026-07.md` containing:
 
 - schema version 7 and migration grace behavior;
 - the strength formula and approved thresholds;
@@ -864,7 +864,7 @@ Append a dated `2026-07-14 人間型記憶ライフサイクル` section to `作
 - [ ] **Step 5: Commit the implementation record**
 
 ```powershell
-git add 作業内容.md
+git add docs/development/worklogs/2026-07.md
 git commit -m "docs: record memory lifecycle acceptance"
 ```
 

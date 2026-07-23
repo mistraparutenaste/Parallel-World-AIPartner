@@ -40,6 +40,10 @@ dist/
 .env
 *.log
 *.sqlite3
+/.agents/
+/.codex/
+/.codex-target/
+/.hermes/
 .superpowers/
 .worktrees/
 .pnpm-store/

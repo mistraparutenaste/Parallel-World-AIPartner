@@ -100,7 +100,7 @@
 - バージョンまたはタグ: haru_greeter_ja.zip（SHA-256: 3db5c9180fc8446f7d92eee13ea33f584e5d1308e101d7afa4fe3b037a0ed94e）
 - ライセンスページ: Free Material License Agreement（無償提供マテリアルの使用許諾契約書、ライセンスタイプ「Live2Dオリジナルキャラクター」）+ https://www.live2d.com/download/sample-data/
 - 個別条件: ReadMe.txtに個別の禁止事項の記載はなし（標準のLive2Dオリジナルキャラクター条件のみ）。用途は「デジタルサイネージ、受付・ガイド等」と例示。
-- 使用目的: サンプルデータ.md Phase 3では要求されていないが、ユーザー承認により追加取り込み（2026-07-11）。GitHub版Haruとは別バリエーションとしてUI/シナリオ検証等に利用可能。
+- 使用目的: docs/research/サンプルデータ.md Phase 3では要求されていないが、ユーザー承認により追加取り込み（2026-07-11）。GitHub版Haruとは別バリエーションとしてUI/シナリオ検証等に利用可能。
 - 保存先: project-input/live2d/downloads/models/haru-receptionist/haru_greeter_ja.zip（原本ZIP）, originals/models/haru-receptionist/（展開済み原本）, selected/haru-receptionist/（テスト用コピー）
 - 検証結果: haru_greeter_t05.model3.json読み込み可、.moc3/テクスチャ2枚/物理演算/ポーズ/表示補助/モーション27種、参照整合性OK（reports/FILE_VERIFICATION.md）
 

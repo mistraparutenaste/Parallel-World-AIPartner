@@ -1,14 +1,12 @@
 # 会話中心UI Design QA
 
-- source visual truth path: `E:\app\parallel-world\docs\superpowers\specs\assets\2026-07-17-conversation-first-ui-dark-theme-selected.png`
-- secondary source path: `E:\app\parallel-world\docs\superpowers\specs\assets\2026-07-16-conversation-first-ui-category-selector.png`
-- implementation screenshot path: `E:\app\parallel-world\output\playwright\conversation-first-ui\settings-dark-1486x1058-final.png`
-- full comparison path: `E:\app\parallel-world\output\playwright\conversation-first-ui\comparison-dark-final.png`
-- focused comparison path: `E:\app\parallel-world\output\playwright\conversation-first-ui\comparison-dark-crown-final.png`
-- approved close-flow mock path: `C:\Users\deele\.codex\visualizations\2026\07\16\019f6ab4-0a18-7b42-8f5b-68a45ee50dea\settings-close-flow.html`
-- focused-screen screenshot path: `C:\Users\deele\AppData\Local\Temp\parallel-world-settings-1280x720.png`
-- focused-screen mobile screenshot path: `C:\Users\deele\AppData\Local\Temp\parallel-world-settings-320x844.png`
-- focused-screen comparison path: `C:\Users\deele\AppData\Local\Temp\parallel-world-settings-comparison.png`
+- source visual truth path: `docs/superpowers/specs/assets/2026-07-17-conversation-first-ui-dark-theme-selected.png`
+- secondary source path: `docs/superpowers/specs/assets/2026-07-16-conversation-first-ui-category-selector.png`
+- implementation screenshot path: `docs/assets/design-qa/settings-dark-1486x1058-final.png`
+- full comparison path: `docs/assets/design-qa/comparison-dark-final.png`
+- focused comparison path: `docs/assets/design-qa/comparison-dark-crown-final.png`
+- approved close-flow mock: local-only artifact, not retained in the repository
+- focused-screen screenshots: local-only artifacts, not retained in the repository
 - target viewport: 1486 × 1058
 - additional target viewports: 640 × 900、320 × 844
 - target state: `設定 > 表示`、ライト／ダーク、カテゴリーの通常／ホバー／フォーカス／選択状態
