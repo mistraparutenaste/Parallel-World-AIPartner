@@ -55,7 +55,32 @@ describe('conversation-first motion styles', () => {
       /\.category-crown button::after,[\s\S]*?\.screen-tabs button::after \{[\s\S]*?top: 50%;[\s\S]*?left: 50%;[\s\S]*?transform-origin: center;/,
     );
     expect(css).toMatch(
-      /@keyframes glass-reflection \{[\s\S]*?translate\(-50%, -50%\) translateX\(180%\)[\s\S]*?translate\(-50%, -50%\) translateX\(-180%\)/,
+      /@keyframes glass-reflection \{[\s\S]*?translate\(-50%, -50%\) translateX\(220%\)[\s\S]*?translate\(-50%, -50%\) translateX\(-220%\)/,
+    );
+  });
+
+  it('moves the reflection band fully across each diamond before fading out', async () => {
+    const css = await readFile(stylesheet, 'utf8');
+    const bandWidthMatch = css.match(
+      /\.category-crown button::after,[\s\S]*?\.screen-tabs button::after \{[\s\S]*?width: (\d+)%;/,
+    );
+    const travelMatch = css.match(
+      /@keyframes glass-reflection \{[\s\S]*?translateX\((\d+)%\)[\s\S]*?translateX\(-(\d+)%\)/,
+    );
+
+    expect(bandWidthMatch).not.toBeNull();
+    expect(travelMatch).not.toBeNull();
+
+    const bandWidth = Number(bandWidthMatch![1]) / 100;
+    const startTravel = Number(travelMatch![1]) / 100 * bandWidth;
+    const endTravel = Number(travelMatch![2]) / 100 * bandWidth;
+    const startLeftEdge = 0.5 - bandWidth / 2 + startTravel;
+    const endRightEdge = 0.5 + bandWidth / 2 - endTravel;
+
+    expect(startLeftEdge).toBeGreaterThanOrEqual(1);
+    expect(endRightEdge).toBeLessThanOrEqual(0);
+    expect(css).toMatch(
+      /@keyframes glass-reflection \{[\s\S]*?12% \{[\s\S]*?opacity: 1;[\s\S]*?translateX\(\d+%\)[\s\S]*?88% \{[\s\S]*?translateX\(-\d+%\)/,
     );
   });
 

@@ -2040,7 +2040,7 @@ body:not(.transparent) #root {
   filter: blur(2px) saturate(1.06);
   opacity: 0;
   pointer-events: none;
-  transform: translate(-50%, -50%) translateX(180%);
+  transform: translate(-50%, -50%) translateX(220%);
   transform-origin: center;
 }
 
@@ -2347,20 +2347,22 @@ body:not(.transparent) #root {
 @keyframes glass-reflection {
   0% {
     opacity: 0;
-    transform: translate(-50%, -50%) translateX(180%);
+    transform: translate(-50%, -50%) translateX(220%);
   }
 
-  18% {
+  12% {
     opacity: 1;
+    transform: translate(-50%, -50%) translateX(220%);
   }
 
-  82% {
+  88% {
     opacity: 0.94;
+    transform: translate(-50%, -50%) translateX(-220%);
   }
 
   100% {
     opacity: 0;
-    transform: translate(-50%, -50%) translateX(-180%);
+    transform: translate(-50%, -50%) translateX(-220%);
   }
 }
 
