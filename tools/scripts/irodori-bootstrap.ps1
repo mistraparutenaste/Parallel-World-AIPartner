@@ -1,11 +1,19 @@
 [CmdletBinding()]
 param(
-    [string] $ManifestPath = (Join-Path (Resolve-Path (Join-Path $PSScriptRoot '..\..')) 'content\runtime-manifests\irodori\windows-x86_64.json'),
-    [string] $DataRoot = (Join-Path $env:LOCALAPPDATA 'com.parallelworld.desktop\irodori')
+    [string] $ManifestPath,
+    [string] $DataRoot
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+if ([string]::IsNullOrWhiteSpace($ManifestPath)) {
+    $repositoryRoot = Resolve-Path (Join-Path $PSScriptRoot '..\..')
+    $ManifestPath = Join-Path $repositoryRoot 'content\runtime-manifests\irodori\windows-x86_64.json'
+}
+if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+    $DataRoot = Join-Path $env:LOCALAPPDATA 'com.parallelworld.desktop\irodori'
+}
 
 Import-Module (Join-Path $PSScriptRoot 'irodori-bootstrap.psm1') -Force
 

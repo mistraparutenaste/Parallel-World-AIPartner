@@ -30,7 +30,7 @@ function quotePowerShell(value) {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
-function runBootstrapEntryHarness(mode) {
+function runBootstrapEntryHarness(mode, { useDefaults = false } = {}) {
   const temp = mkdtempSync(path.join(os.tmpdir(), "pw-irodori-entry-"));
   const entry = path.join(temp, "irodori-bootstrap.ps1");
   const module = path.join(temp, "irodori-bootstrap.psm1");
@@ -46,9 +46,13 @@ function runBootstrapEntryHarness(mode) {
     "ascii",
   );
   try {
+    const arguments_ = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", entry];
+    if (!useDefaults) {
+      arguments_.push("-ManifestPath", "fixture-manifest", "-DataRoot", "fixture-root");
+    }
     return spawnSync(
       powerShell,
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", entry, "-ManifestPath", "fixture-manifest", "-DataRoot", "fixture-root"],
+      arguments_,
       { encoding: "utf8", timeout: 20_000, windowsHide: true },
     );
   } finally {
@@ -2056,6 +2060,11 @@ test(
 
 test("bootstrap entry returns the app exit code", () => {
   const result = runBootstrapEntryHarness("success");
+  assert.equal(result.status, 7, JSON.stringify({ status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }));
+});
+
+test("bootstrap entry resolves its defaults under Windows PowerShell", () => {
+  const result = runBootstrapEntryHarness("success", { useDefaults: true });
   assert.equal(result.status, 7, JSON.stringify({ status: result.status, signal: result.signal, error: result.error?.message, stdout: result.stdout, stderr: result.stderr }));
 });
 
