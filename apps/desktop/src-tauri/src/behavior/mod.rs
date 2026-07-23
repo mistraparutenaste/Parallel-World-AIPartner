@@ -4,6 +4,8 @@ mod activity;
 mod atomic_json;
 mod mode;
 mod personas;
+mod proactive_runtime;
+mod runtime;
 mod safety;
 mod settings;
 
@@ -19,6 +21,13 @@ pub(crate) use personas::{ResolvedPersonaPrompt, resolve_persona_prompt_with_pau
 pub use personas::{
     load_persona, load_persona_checked, migrate_legacy_character_prompt, save_persona,
     save_persona_settings,
+};
+pub use proactive_runtime::{
+    BehaviorRuntimeService, ProactiveDeliveryDecision, ProactiveDeliveryInput,
+    decide_proactive_delivery,
+};
+pub use runtime::{
+    BehaviorRuntimeSnapshot, RuntimeCollectionHealth, RuntimeMode, resolve_runtime_snapshot,
 };
 pub use safety::{
     DarkExpressionSafetyLoadError, DarkExpressionSafetyState, load_dark_expression_safety,

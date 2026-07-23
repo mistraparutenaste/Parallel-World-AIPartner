@@ -1,5 +1,6 @@
 //! IPC commands exposed to the webview windows.
 
+pub mod activity;
 pub mod app_status;
 pub mod audio;
 pub mod behavior;

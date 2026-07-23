@@ -31,6 +31,7 @@ tauri-plugin-dialog = { workspace = true }
 tauri-plugin-window-state = { workspace = true }
 tauri-plugin-updater = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }

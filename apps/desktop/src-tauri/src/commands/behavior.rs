@@ -61,6 +61,31 @@ pub fn set_behavior_settings<R: Runtime>(
     Ok(settings)
 }
 
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+/// Returns the latest mode resolved by the behavior worker.
+///
+/// # Errors
+///
+/// Returns an error while the background worker is still resolving its first
+/// mode snapshot.
+pub fn get_active_mode(
+    runtime: State<'_, crate::behavior::BehaviorRuntimeService>,
+) -> Result<pw_contracts::ActiveModeDto, String> {
+    runtime
+        .active_mode()
+        .ok_or_else(|| "behavior runtime is starting".to_owned())
+}
+
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+#[must_use]
+pub fn get_activity_collection_health(
+    runtime: State<'_, crate::behavior::BehaviorRuntimeService>,
+) -> pw_contracts::ActivityCollectionHealthEventDto {
+    runtime.collection_health()
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

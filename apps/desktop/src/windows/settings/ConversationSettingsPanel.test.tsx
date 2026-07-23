@@ -81,11 +81,43 @@ beforeEach(() => {
     if (command === 'set_behavior_settings') {
       return Promise.resolve(args?.settings);
     }
+    if (command === 'get_active_mode') {
+      return Promise.resolve({
+        schema_version: 2,
+        mode: 'normal',
+        source: 'default',
+        manual_override: null,
+      });
+    }
+    if (command === 'get_activity_collection_health') {
+      return Promise.resolve({
+        schema_version: 1,
+        status: 'disabled',
+        last_activity_at: null,
+        message: null,
+      });
+    }
+    if (command === 'list_activity_sessions') {
+      return Promise.resolve({
+        schema_version: 1,
+        sessions: [],
+        next_before_id: null,
+      });
+    }
     return Promise.resolve(null);
   });
 });
 
 describe('conversation settings', () => {
+  it('shows proactive runtime mode, collection health, and the activity empty state', async () => {
+    render(<ConversationSettingsPanel />);
+
+    expect(await screen.findByRole('heading', { name: '現在の動作状況' })).toBeInTheDocument();
+    expect(screen.getByText('通常モード')).toBeInTheDocument();
+    expect(screen.getByText('収集は停止中です')).toBeInTheDocument();
+    expect(screen.getByText('表示できるアクティビティはまだありません。')).toBeInTheDocument();
+  });
+
   it('loads fail-closed defaults and saves the proactive master switch immediately', async () => {
     render(<ConversationSettingsPanel />);
 

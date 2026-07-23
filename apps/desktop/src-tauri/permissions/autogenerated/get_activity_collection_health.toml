@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-activity-collection-health"
+description = "Enables the get_activity_collection_health command without any pre-configured scope."
+commands.allow = ["get_activity_collection_health"]
+
+[[permission]]
+identifier = "deny-get-activity-collection-health"
+description = "Denies the get_activity_collection_health command without any pre-configured scope."
+commands.deny = ["get_activity_collection_health"]

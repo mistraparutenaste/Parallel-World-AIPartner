@@ -237,6 +237,18 @@
           "markdownDescription": "Enables the export_user_data command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_active_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-active-mode",
+          "markdownDescription": "Enables the get_active_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_activity_collection_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-activity-collection-health",
+          "markdownDescription": "Enables the get_activity_collection_health command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_app_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-app-status",
@@ -343,6 +355,12 @@
           "type": "string",
           "const": "allow-install-update",
           "markdownDescription": "Enables the install_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the list_activity_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-activity-sessions",
+          "markdownDescription": "Enables the list_activity_sessions command without any pre-configured scope."
         },
         {
           "description": "Enables the list_conversation_history command without any pre-configured scope.",
@@ -615,6 +633,18 @@
           "markdownDescription": "Denies the export_user_data command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_active_mode command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-active-mode",
+          "markdownDescription": "Denies the get_active_mode command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_activity_collection_health command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-activity-collection-health",
+          "markdownDescription": "Denies the get_activity_collection_health command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_app_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-app-status",
@@ -721,6 +751,12 @@
           "type": "string",
           "const": "deny-install-update",
           "markdownDescription": "Denies the install_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the list_activity_sessions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-activity-sessions",
+          "markdownDescription": "Denies the list_activity_sessions command without any pre-configured scope."
         },
         {
           "description": "Denies the list_conversation_history command without any pre-configured scope.",

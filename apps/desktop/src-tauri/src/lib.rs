@@ -61,6 +61,9 @@ pub fn run() {
             commands::audio::get_stt_state,
             commands::behavior::get_behavior_settings,
             commands::behavior::set_behavior_settings,
+            commands::behavior::get_active_mode,
+            commands::behavior::get_activity_collection_health,
+            commands::activity::list_activity_sessions,
             commands::safety::get_dark_expression_safety_settings,
             commands::safety::set_safe_word,
             commands::safety::resume_dark_expression,
@@ -113,7 +116,13 @@ pub fn run() {
             app.state::<behavior::DarkExpressionSafetyState>()
                 .set_paused(safety.dark_expression_paused);
             let heartbeat_path = layout.logs.join("soak-heartbeat.json");
+            let behavior_runtime = behavior::BehaviorRuntimeService::start(
+                app.handle().clone(),
+                &layout,
+                app.state::<chat::ChatService>().interaction_gate(),
+            )?;
             app.manage(layout);
+            app.manage(behavior_runtime);
             app.manage(stability_heartbeat::StabilityHeartbeatService::start(
                 app.handle().clone(),
                 heartbeat_path,

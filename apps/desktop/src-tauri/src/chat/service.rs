@@ -12,7 +12,7 @@ use pw_application::PortError;
 use pw_application::behavior::proactive::InteractionGate;
 use pw_application::conversation::{
     ChatMessage, ChatRole, ConversationEvents, ConversationOrchestrator, ExistingContextRetriever,
-    FixedSurfaceRealizer, LexicalResponsePlanner, OrchestratorConfig, PlanningBudget,
+    FixedSurfaceRealizer, LexicalResponsePlanner, LlmClient, OrchestratorConfig, PlanningBudget,
     PromptBuilder, StateAwareRetriever, response_pipeline,
 };
 use pw_application::history::{ConversationHistory, MessageRole, StoredTurn};
@@ -37,7 +37,7 @@ use pw_contracts::{
     RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION,
 };
 use pw_domain::conversation::ConversationState;
-use pw_domain::reply::{ReplyControl, TurnId};
+use pw_domain::reply::{ReplyControl, ReplyEvent, ReplyParser, TurnId, strip_emoji};
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
 use pw_llm::{LlmClientConfig, OpenAiCompatClient};
 use pw_platform::paths::AppDataLayout;
@@ -1520,6 +1520,120 @@ impl ChatService {
     #[must_use]
     pub(crate) fn interaction_gate(&self) -> Arc<InteractionGate> {
         Arc::clone(&self.interaction_gate)
+    }
+
+    /// Generates a bounded proactive reply without creating a synthetic user
+    /// turn or emitting any UI/TTS events. The behavior runtime owns the final
+    /// privacy, frequency, persistence, and delivery gates.
+    #[allow(clippy::unused_self)]
+    pub(crate) fn generate_proactive_reply<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        cue: &str,
+    ) -> Result<String, String> {
+        let layout = app.state::<AppDataLayout>();
+        let settings = super::settings::load_llm_settings(&layout);
+        let context = resolve_worker_context(
+            &layout,
+            &app.state::<CharacterState>(),
+            &settings,
+            app.state::<crate::behavior::DarkExpressionSafetyState>()
+                .is_paused(),
+        );
+        let config = LlmClientConfig {
+            base_url: settings.base_url.clone(),
+            model: settings.model.clone(),
+            api_key: super::settings::load_llm_api_key(settings.provider)?,
+            allow_remote: settings.allow_remote,
+            timeout: ADAPTER_TIMEOUT,
+        };
+        let mut llm = OpenAiCompatClient::new(config).map_err(|error| error.to_string())?;
+        let database_path = layout.data.join("parallel-world.sqlite3");
+        let history = Database::open(&database_path)
+            .map(SqliteConversationHistory::new)
+            .ok()
+            .and_then(|history| {
+                load_recent_history(&history, DEFAULT_CONVERSATION_ID, MAX_HISTORY_MESSAGES).ok()
+            })
+            .unwrap_or_default();
+        let prompt = PromptBuilder {
+            system_rules: settings.system_prompt,
+            character_prompt: context.character_prompt,
+        };
+        let request = format!(
+            "This is a proactive check-in, not a user message. {cue} Respond with one brief, natural utterance. Do not claim to know hidden window titles or private content."
+        );
+        let messages = prompt.build(&history, &request);
+        let cancel = AtomicBool::new(false);
+        let mut parser = ReplyParser::new();
+        let mut speech = String::new();
+        llm.stream_chat(&messages, &cancel, &mut |delta| {
+            for event in parser.push(delta) {
+                if let ReplyEvent::Speech(chunk) = event {
+                    speech.push_str(&chunk);
+                    if speech.chars().count() > 2_000 {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        })
+        .map_err(|error| error.to_string())?;
+        for event in parser.finish() {
+            if let ReplyEvent::Speech(chunk) = event {
+                speech.push_str(&chunk);
+            }
+        }
+        let speech = if settings.strip_emoji {
+            strip_emoji(&speech)
+        } else {
+            speech
+        };
+        let speech = speech.trim();
+        if speech.is_empty() || speech.chars().count() > 500 {
+            return Err("proactive response was empty or too long".to_owned());
+        }
+        Ok(speech.to_owned())
+    }
+
+    #[allow(clippy::unused_self)]
+    pub(crate) fn evaluate_proactive_reply<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        cue: &str,
+        generated: &str,
+        endpoint: &str,
+        model: &str,
+    ) -> Result<bool, String> {
+        let layout = app.state::<AppDataLayout>();
+        let settings = super::settings::load_llm_settings(&layout);
+        let mut llm = OpenAiCompatClient::new(LlmClientConfig {
+            base_url: endpoint.to_owned(),
+            model: model.to_owned(),
+            api_key: super::settings::load_llm_api_key(settings.provider)?,
+            allow_remote: settings.allow_remote,
+            timeout: ADAPTER_TIMEOUT,
+        })
+        .map_err(|error| error.to_string())?;
+        let messages = vec![
+            ChatMessage::new(
+                ChatRole::System,
+                "Approve only a safe, relevant, low-pressure proactive check-in. Reply with exactly APPROVE or SKIP.",
+            ),
+            ChatMessage::new(
+                ChatRole::User,
+                format!("Context: {cue}\nCandidate: {generated}"),
+            ),
+        ];
+        let cancel = AtomicBool::new(false);
+        let mut result = String::new();
+        llm.stream_chat(&messages, &cancel, &mut |delta| {
+            result.push_str(delta);
+            if result.len() > 32 {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        })
+        .map_err(|error| error.to_string())?;
+        Ok(result.trim() == "APPROVE")
     }
     fn require_healthy(&self, lease: UserTurnLease) -> Result<UserTurnLease, String> {
         if self

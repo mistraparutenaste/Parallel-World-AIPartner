@@ -54,6 +54,7 @@ tauri-plugin-window-state = "2"
 tauri-plugin-updater = "=2.10.1"
 tiny_http = "0.12"
 thiserror = "2.0"
+time = { version = "0.3.53", features = ["local-offset"] }
 tokio = { version = "1.52.3", features = ["sync", "time"] }
 tracing = "0.1"
 tracing-appender = "0.2"
