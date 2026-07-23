@@ -150,4 +150,3 @@ Run `cargo test --workspace --no-default-features` and expect zero failures.
 - [ ] **Step 3: Audit the diff and prompt footprint**
 
 Run `git diff --check`, `git status --short --branch`, and inspect the branch diff to confirm only the plan plus the two Rust files changed, no frontend file changed, and the policy length test enforces the local-context bound.
-
