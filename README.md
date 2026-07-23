@@ -24,7 +24,25 @@ WindowsではVisual Studio Build ToolsのC++ワークロードとWebView2 Runtim
 
 ### 1. インストール
 
-リポジトリのルートで実行します。
+#### macOSでリポジトリからインストール
+
+先にNode.jsとRustをインストールしてから、Terminalで次を実行します。Xcode Command Line Toolsが未導入の場合は、最初のコマンドでインストール画面が開きます。
+
+```bash
+xcode-select --install
+git clone https://github.com/mistraparutenaste/Parallel-World-AIPartner.git
+cd Parallel-World-AIPartner
+corepack enable pnpm
+corepack pnpm install --frozen-lockfile
+corepack pnpm build
+chmod +x ParallelWorld_run.command
+```
+
+インストール後は、Finderでリポジトリを開き、`ParallelWorld_run.command`をダブルクリックすると起動できます。Terminalから起動する場合は、リポジトリのルートで`./ParallelWorld_run.command`を実行してください。
+
+#### 依存関係だけをインストール
+
+すでにリポジトリを取得している場合は、リポジトリのルートで実行します。
 
 ```powershell
 corepack enable pnpm
