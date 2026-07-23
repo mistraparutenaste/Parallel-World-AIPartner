@@ -8,6 +8,7 @@ pub mod bootstrap;
 pub mod character;
 pub mod chat;
 pub mod commands;
+pub mod desktop_controls;
 pub mod diagnostics;
 pub mod error;
 pub mod speech;
@@ -123,6 +124,7 @@ pub fn run() {
             )?;
             app.manage(layout);
             app.manage(behavior_runtime);
+            desktop_controls::setup_desktop_controls(app)?;
             app.manage(stability_heartbeat::StabilityHeartbeatService::start(
                 app.handle().clone(),
                 heartbeat_path,
