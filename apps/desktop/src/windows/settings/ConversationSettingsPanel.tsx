@@ -1,6 +1,9 @@
 import type {
   BehaviorSettingsChangedEventDto,
   BehaviorSettingsDto,
+  ActiveModeDto,
+  ActivityCollectionHealthEventDto,
+  ActivitySessionPageDto,
   FrequencyPolicyDto,
   QuietHoursRuleDto,
 } from '@parallel-world/contracts';
@@ -209,6 +212,9 @@ function selectOptions(current: number, options: number[], suffix = '分') {
 
 export function ConversationSettingsPanel() {
   const [settings, setSettings] = useState<BehaviorSettingsDto | null>(null);
+  const [activeMode, setActiveMode] = useState<ActiveModeDto | null>(null);
+  const [collectionHealth, setCollectionHealth] = useState<ActivityCollectionHealthEventDto | null>(null);
+  const [activityPage, setActivityPage] = useState<ActivitySessionPageDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
@@ -247,6 +253,37 @@ export function ConversationSettingsPanel() {
     return () => {
       cancelled = true;
       unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      void Promise.all([
+        invoke<ActiveModeDto>('get_active_mode'),
+        invoke<ActivityCollectionHealthEventDto>('get_activity_collection_health'),
+        invoke<ActivitySessionPageDto>('list_activity_sessions', { limit: 5, beforeId: null }),
+      ]).then(([mode, health, activity]) => {
+        if (cancelled) return;
+        setActiveMode(mode);
+        setCollectionHealth(health);
+        setActivityPage(activity);
+      }).catch(() => {
+        if (!cancelled) {
+          setCollectionHealth({
+            schema_version: 1,
+            status: 'degraded',
+            last_activity_at: null,
+            message: null,
+          });
+        }
+      });
+    };
+    refresh();
+    const refreshTimer = window.setInterval(refresh, 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
     };
   }, []);
 
@@ -472,6 +509,66 @@ export function ConversationSettingsPanel() {
 
       {feedback?.kind === 'error' ? <p className="conversation-feedback" role="alert">{feedback.text}</p> : null}
       {feedback?.kind === 'status' ? <p className="conversation-feedback" role="status">{feedback.text}</p> : null}
+
+      <SettingsSection id="conversation-runtime-title" title="現在の動作状況">
+        <div className="conversation-runtime-status" aria-live="polite">
+          <div>
+            <strong>
+              {activeMode?.mode === 'focus'
+                ? '集中モード'
+                : activeMode?.mode === 'night'
+                  ? '夜間モード'
+                  : '通常モード'}
+            </strong>
+            <p>
+              {collectionHealth?.status === 'healthy'
+                ? '作業状況を安全に収集中です'
+                : collectionHealth?.status === 'degraded'
+                  ? '収集状態を確認できません'
+                  : '収集は停止中です'}
+            </p>
+          </div>
+          <label>
+            <span>動作モード</span>
+            <select
+              aria-label="動作モード"
+              disabled={saving}
+              value={settings.manual_mode_override ?? 'automatic'}
+              onChange={(event) => {
+                const value = event.target.value;
+                void persist({
+                  ...settings,
+                  manual_mode_override: value === 'automatic'
+                    ? null
+                    : value as BehaviorSettingsDto['manual_mode_override'],
+                });
+              }}
+            >
+              <option value="automatic">自動</option>
+              <option value="normal">通常</option>
+              <option value="focus">集中</option>
+              <option value="night">夜間</option>
+            </select>
+          </label>
+        </div>
+        <div className="conversation-activity-review">
+          {activityPage?.sessions?.length ? (
+            <ul aria-label="最近のアクティビティ">
+              {activityPage.sessions.map((session) => (
+                <li key={session.id}>
+                  <span>{session.category}</span>
+                  <strong>{session.display_app}</strong>
+                  <small>{session.display_title}</small>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="conversation-settings-note">
+              表示できるアクティビティはまだありません。
+            </p>
+          )}
+        </div>
+      </SettingsSection>
 
       <SettingsSection id="conversation-proactive-title" title="向こうから話しかけてもらう">
         <div className="conversation-setting-row">

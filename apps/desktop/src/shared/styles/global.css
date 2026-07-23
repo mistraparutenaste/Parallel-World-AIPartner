@@ -2901,6 +2901,69 @@ body:not(.transparent) #root {
   line-height: 1.75;
 }
 
+.control-center[data-ui-style='conversation-first'] .conversation-runtime-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px);
+  gap: 28px;
+  align-items: end;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-runtime-status strong {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 400;
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-runtime-status p,
+.control-center[data-ui-style='conversation-first'] .conversation-runtime-status label > span {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-runtime-status label {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-activity-review ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-activity-review li {
+  display: grid;
+  grid-template-columns: minmax(70px, 0.35fr) minmax(110px, 0.7fr) minmax(0, 1.6fr);
+  gap: 14px;
+  align-items: baseline;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-activity-review li > span,
+.control-center[data-ui-style='conversation-first'] .conversation-activity-review li > small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.control-center[data-ui-style='conversation-first'] .conversation-activity-review li > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .control-center[data-ui-style='conversation-first'] .conversation-frequency {
   max-width: 690px;
 }
@@ -3339,6 +3402,12 @@ body:not(.transparent) #root {
   .control-center[data-ui-style='conversation-first'] .conversation-setting-row {
     grid-template-columns: 1fr;
     gap: 12px;
+  }
+
+  .control-center[data-ui-style='conversation-first'] .conversation-runtime-status,
+  .control-center[data-ui-style='conversation-first'] .conversation-activity-review li {
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .control-center[data-ui-style='conversation-first'] .conversation-setting-row .conversation-switch {
