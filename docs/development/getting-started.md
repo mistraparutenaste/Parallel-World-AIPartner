@@ -106,7 +106,9 @@ Vite dev server（ポート5173）が起動し、character / chat / settings の
 
 ## 品質ゲート
 
-コミット前に以下がすべて成功すること。CIも同一のゲートをWindows / macOSで実行する。
+コミット前に以下がすべて成功すること。これが唯一の常設ゲートで、pushでは何も自動実行されない。
+
+GitHub Actionsの `CI` ワークフローは同じゲートをWindows / macOSで回すが、手動実行専用にしてある。Windowsで再現できないmacOS側を確認したいとき（リリース前など）に、GitHubのActionsタブから `Run workflow` で起動する。
 
 ```powershell
 cargo fmt --all --check

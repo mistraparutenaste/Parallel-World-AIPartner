@@ -1,9 +1,15 @@
 name: CI
 
+# 日常のゲートは docs/development/getting-started.md のローカル実行が担う。
+# ここはローカルで再現できないOSを確認したいときだけ手動で回す。
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      os:
+        description: 検証するOS
+        type: choice
+        default: macos
+        options: [macos, windows, both]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -14,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: ${{ fromJSON(inputs.os == 'both' && '["windows-latest", "macos-latest"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
