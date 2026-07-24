@@ -2077,8 +2077,16 @@ test("managed launcher documents one-click setup and Irodori with ASCII comments
     managed,
     /rem    1\. Install missing development prerequisites and assets/,
   );
-  assert.match(managed, /rem    3\. Prepare the managed Irodori TTS model when approved/);
+  assert.match(managed, /rem    3\. Start AivisSpeech by default; prepare the managed Irodori/);
   assert.match(managed, /Large downloads always require y\/n consent/);
+});
+
+test("managed launcher defaults to AivisSpeech while honoring a caller-supplied engine", async () => {
+  const managed = await readFile(managedLauncherPath, "latin1");
+  assert.match(
+    managed,
+    /if not defined PW_TTS_ENGINE set "PW_TTS_ENGINE=aivis"/,
+  );
 });
 
 test(

@@ -90,17 +90,17 @@ corepack pnpm --filter @parallel-world/desktop tauri dev
 | 起動方法 | 用途 |
 | --- | --- |
 | `powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1` | AivisSpeech、LLM、開発用アセットを確認して起動 |
-| `ParallelWorld_run.bat` | Irodori-TTSのmanaged環境を準備して起動 |
+| `ParallelWorld_run.bat` | 既定でAivisSpeechを起動（`PW_TTS_ENGINE=irodori`を指定するとIrodori-TTSのmanaged環境を準備して起動） |
 
-Irodori-TTSは初回に大きなダウンロードが発生します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
+Irodori-TTSを使う場合は初回に大きなダウンロードが発生します。詳細は[Irodori-TTSセットアップ](docs/setup/irodori-tts.md)を参照してください。
 
 ### 5. AIと音声を設定
 
 起動後、設定画面で利用する接続先を選択します。
 
 - LLM: 既定値は`http://127.0.0.1:8080/v1`
-- AivisSpeech: 既定値は`http://127.0.0.1:10101`
-- Irodori-TTS: `ParallelWorld_run.bat`から起動する場合の既定ポートは`8088`
+- AivisSpeech: 既定値は`http://127.0.0.1:10101`（`ParallelWorld_run.bat`は既定でこちらを起動）
+- Irodori-TTS: `ParallelWorld_run.bat`実行前に`set PW_TTS_ENGINE=irodori`を指定した場合の既定ポートは`8088`
 
 設定画面の「AI」では、ローカル / LAN、OpenAI、Google Gemini、OpenCode Zen、カスタム接続を選択できます。
 `dev-up.ps1`が確認するLLMの既定ポートは`1234`です。LM Studioなどを別ポートで使う場合は、アプリ側にも実際の接続先を保存してください。

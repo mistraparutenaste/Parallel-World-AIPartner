@@ -6,7 +6,7 @@ Irodori-TTS-500M-v3は日本語専用です。参照音声による音声クロ�
 
 ## A. `ParallelWorld_run.bat`によるmanaged setup
 
-Windows x86_64でリポジトリルートの`ParallelWorld_run.bat`を実行すると、既定でIrodoriを選択します。ただし、起動前から`PW_TTS_ENGINE`が設定されている場合はその値を維持します。従来の`dev-up.bat` / `dev-up.ps1`の既定はAivisSpeechのままです。
+Windows x86_64でリポジトリルートの`ParallelWorld_run.bat`を実行すると、既定でAivisSpeechを起動します。起動前に`set PW_TTS_ENGINE=irodori`を指定した場合だけ、managed Irodori環境の確認・download・起動を行います。起動前から`PW_TTS_ENGINE`が設定されている場合はその値を維持します。従来の`dev-up.bat` / `dev-up.ps1`の既定もAivisSpeechのままです。
 
 managed環境がない、壊れている、またはbackendが変わった場合は、ネットワーク接続前に次の情報を表示して`Y` / `N`を確認します。
 
@@ -98,7 +98,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 
 外部環境の準備はupstreamの説明に従い、動作確認済みserver commit `1fc3e100ed8e14ff30f6bfa6cb711a948960f8ce`、Python 3.10、`uv sync --extra cu128`または`uv sync --extra cpu`を使用してください。`cu128`と`cpu`は同時指定しません。参照音声は外部serverの`IRODORI_VOICES_DIR`へ配置します。
 
-`PW_TTS_ENGINE=aivis`などIrodori以外を明示して`ParallelWorld_run.bat`を起動した場合、managed Irodoriの確認・download・起動は行いません。
+`ParallelWorld_run.bat`は既定（`PW_TTS_ENGINE`未設定、または`PW_TTS_ENGINE=aivis`などIrodori以外を明示した場合）ではmanaged Irodoriの確認・download・起動は行いません。
 
 ## Dynamic LoRAの注意
 

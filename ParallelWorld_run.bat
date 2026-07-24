@@ -1,9 +1,12 @@
 @echo off
+setlocal
 rem ============================================================
 rem  Parallel World one-click launcher
 rem    1. Install missing development prerequisites and assets
 rem    2. Validate the frontend and Rust application
-rem    3. Prepare the managed Irodori TTS model when approved
+rem    3. Start AivisSpeech by default; prepare the managed Irodori
+rem       TTS model instead when PW_TTS_ENGINE=irodori is set and
+rem       approved
 rem    4. Start the desktop application
 rem
 rem  Double-click this file. Large downloads always require y/n consent.
@@ -28,6 +31,8 @@ if errorlevel 1 goto :build_error
 
 echo.
 echo ===== [4/4] Prepare TTS and start Parallel World =====
+rem AivisSpeech starts by default; set PW_TTS_ENGINE=irodori before launching to use the managed Irodori path instead.
+if not defined PW_TTS_ENGINE set "PW_TTS_ENGINE=aivis"
 call powershell -NoProfile -ExecutionPolicy Bypass -File "tools\scripts\irodori-bootstrap.ps1"
 set "PW_LAUNCH_EXIT=%ERRORLEVEL%"
 echo.
