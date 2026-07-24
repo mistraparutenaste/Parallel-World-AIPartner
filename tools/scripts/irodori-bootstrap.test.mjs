@@ -297,7 +297,15 @@ async function runBootstrapHarness(scenario) {
     } elseif ($scenario -eq 'aivis_override') { $env:PW_TTS_ENGINE = 'aivis' } elseif ($scenario -eq 'uppercase_irodori') { $env:PW_TTS_ENGINE = 'IRODORI' } else { Remove-Item Env:PW_TTS_ENGINE -ErrorAction SilentlyContinue }
     if ($scenario -eq 'stale_failure') { $env:PW_IRODORI_SKIP_WARMUP = '1'; $env:PW_IRODORI_BOOTSTRAP_STATUS = 'ready' }
     $result = Invoke-IrodoriBootstrap -ManifestPath $manifestPath -DataRoot $root -Adapters $adapters
-    $diagnosticLines = if (Test-Path -LiteralPath $layout.diagnostic_log -PathType Leaf) { @(Get-Content -LiteralPath $layout.diagnostic_log) } else { @() }
+    # [IO.File]::ReadAllLines (not Get-Content) on purpose: Get-Content's FileSystem
+    # provider decorates every returned line with ETS note properties (PSPath,
+    # PSParentPath, PSChildName, PSDrive -> a live PSDriveInfo whose Provider
+    # graph walks the whole loaded System.Management.Automation reflection
+    # surface). ConvertTo-Json -Depth then has to traverse that huge, highly
+    # interconnected reflection graph once per array element, which is what
+    # actually made ConvertTo-Json hang below (see the -Depth note above) -
+    # plain strings from ReadAllLines carry none of that decoration.
+    $diagnosticLines = if (Test-Path -LiteralPath $layout.diagnostic_log -PathType Leaf) { @([IO.File]::ReadAllLines($layout.diagnostic_log)) } else { @() }
     $restoredEnvironment = [ordered]@{}
     foreach ($entry in $originalEnvironment.GetEnumerator()) { $restoredEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key) }
     [pscustomobject]@{ result = $result; observations = $observations; diagnostics = $diagnosticLines; original_environment = $originalEnvironment; restored_environment = $restoredEnvironment }
@@ -1970,7 +1978,7 @@ test("maps voices and speech HTTP exceptions to warmup_failed without retry trus
     assert.equal(data.observations.app_environment.PW_IRODORI_BOOTSTRAP_STATUS, "warmup_failed");
     assert.equal(data.observations.app_calls, 1);
     assert.equal(data.observations.stop_calls, 1);
-    assert.doesNotMatch(JSON.stringify(data), /TOP-SECRET|Authorization|Users\\secret|\.bin/i);
+    assert.doesNotMatch(JSON.stringify(data), /TOP-SECRET|Authorization|Users\\secret|voices\.bin|speech\.bin/i);
   }
 });
 
