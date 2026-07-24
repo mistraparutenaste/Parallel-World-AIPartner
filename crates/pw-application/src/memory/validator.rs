@@ -84,6 +84,9 @@ pub enum ValidationError {
     UnsafePersistentContent,
 }
 
+/// # Errors
+/// Returns an error under the same conditions as
+/// [`validate_candidate_for_source`].
 pub fn validate_candidate(
     candidate: &TypedCandidate,
     expected_source_id: &str,
@@ -96,6 +99,10 @@ pub fn validate_candidate(
 /// Validates a typed candidate against one accepted source identity. Callers that
 /// construct observations must use this entry point so source spans cannot cross
 /// turn boundaries.
+///
+/// # Errors
+/// Returns a [`ValidationError`] describing the first bounds, normalization,
+/// marker-preservation, or target-lifecycle violation found.
 pub fn validate_candidate_for_source(
     candidate: &TypedCandidate,
     expected_source_id: &str,
@@ -200,7 +207,7 @@ fn validate_normalization(candidate: &TypedCandidate, source: &str) -> Result<()
     let mut output = String::new();
     for span in &candidate.atom.source_spans {
         let mut cursor = span.start;
-        while edit_index < edits.len() && edits[edit_index].end <= span.start {
+        if edit_index < edits.len() && edits[edit_index].end <= span.start {
             return Err(ValidationError::NormalizationTraceDoesNotCoverChangedBytes);
         }
         while edit_index < edits.len() && edits[edit_index].start < span.end {
@@ -254,6 +261,7 @@ fn validate_markers(candidate: &TypedCandidate, source: &str) -> Result<(), Vali
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn validate_target(
     candidate: &TypedCandidate,
     targets: &[MemoryCandidate],
@@ -274,9 +282,9 @@ fn validate_target(
         });
     }
     let action_target = match candidate.proposed_action {
-        ProposedAction::Reinforce { memory_id } => Some(memory_id),
         ProposedAction::Supersede { old_memory_id, .. } => Some(old_memory_id),
-        ProposedAction::Pin {
+        ProposedAction::Reinforce { memory_id }
+        | ProposedAction::Pin {
             memory_id: Some(memory_id),
             ..
         } => Some(memory_id),
@@ -310,7 +318,7 @@ fn validate_target(
             action_target_memory_id,
             candidate_target_memory_id: candidate.target_memory_id,
         });
-    };
+    }
     let target_memory_id = action_target_memory_id;
     let target = targets
         .iter()

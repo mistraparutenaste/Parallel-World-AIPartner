@@ -16,8 +16,9 @@ const CONVERSATION: &str = "default";
 fn epoch_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |value| {
+            i64::try_from(value.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 fn path(layout: &AppDataLayout) -> PathBuf {
     layout.data.join("parallel-world.sqlite3")

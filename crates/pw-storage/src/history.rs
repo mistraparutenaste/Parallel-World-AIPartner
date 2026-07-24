@@ -15,8 +15,9 @@ const MAX_PROACTIVE_ASSISTANT_CONTENT_BYTES: usize = 65_536;
 fn epoch_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |value| {
+            i64::try_from(value.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 pub struct SqliteConversationHistory {
@@ -627,6 +628,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn deleting_history_tombstones_claims_preserves_supported_or_pinned_memory_and_keeps_fts_valid()
     {
         let nonce = SystemTime::now()

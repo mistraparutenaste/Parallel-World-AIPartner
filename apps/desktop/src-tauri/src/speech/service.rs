@@ -257,6 +257,10 @@ impl SttModelPaths {
 
 struct RunningPipeline {
     active_device_id: Arc<Mutex<String>>,
+    // The outer `Option` distinguishes "no pending request" from a request;
+    // the inner one distinguishes "switch to the default device" (`None`)
+    // from "switch to this device id" (`Some`).
+    #[allow(clippy::option_option)]
     requested_device: Arc<Mutex<Option<Option<String>>>>,
     cancel: Arc<AtomicBool>,
     capture_enabled: Arc<AtomicBool>,
@@ -831,14 +835,14 @@ impl SpeechService {
     pub fn set_input_device(&self, device_id: Option<String>) {
         let _lifecycle = self.lock_lifecycle();
         let running = self.lock();
-        if let Some(running) = running.as_ref() {
-            if !running.cancel.load(Ordering::Acquire) {
-                *running
-                    .requested_device
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(device_id);
-                return;
-            }
+        if let Some(running) = running.as_ref()
+            && !running.cancel.load(Ordering::Acquire)
+        {
+            *running
+                .requested_device
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(device_id);
+            return;
         }
         drop(running);
         if let Some(pending) = self.lock_pending_start().as_mut() {
@@ -1012,6 +1016,8 @@ struct PipelineWorker<R: Runtime> {
     app: AppHandle<R>,
     paths: SttModelPaths,
     device_id: Option<String>,
+    // See `RunningPipeline::requested_device` for the two-level meaning.
+    #[allow(clippy::option_option)]
     requested_device: Arc<Mutex<Option<Option<String>>>>,
     cancel: Arc<AtomicBool>,
     startup_timed_out: Arc<AtomicBool>,
@@ -1059,6 +1065,7 @@ const fn worker_interruption(
 }
 
 impl<R: Runtime> PipelineWorker<R> {
+    #[allow(clippy::too_many_lines)]
     fn run(self) {
         if self.is_stale() {
             return;
@@ -1229,6 +1236,7 @@ impl<R: Runtime> PipelineWorker<R> {
         self.current_generation.load(Ordering::Acquire) != self.generation
     }
 
+    #[allow(clippy::option_option)]
     fn take_device_request(&self) -> Option<Option<String>> {
         self.requested_device
             .lock()
@@ -1267,6 +1275,7 @@ impl<R: Runtime> PipelineWorker<R> {
         true
     }
 
+    #[allow(clippy::too_many_lines)]
     fn build_and_run<F>(
         &self,
         models: &mut LoadedModels,

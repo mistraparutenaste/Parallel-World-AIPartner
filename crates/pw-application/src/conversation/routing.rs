@@ -166,6 +166,9 @@ pub struct BoundedStateContext {
 }
 
 impl BoundedStateContext {
+    /// # Errors
+    /// Returns an error for an out-of-range relationship score, an unbounded
+    /// optional field, or too many/unbounded open commitments.
     pub fn validate(&self) -> Result<(), PortError> {
         if self
             .relationship_score
@@ -215,6 +218,8 @@ impl BoundedStateContext {
 /// Provider used by a response retriever; implementations must return
 /// metadata only and never a transcript.
 pub trait PlannedStateContextProvider: Send {
+    /// # Errors
+    /// Returns an error when bounded companion state cannot be retrieved.
     fn retrieve_state(&mut self, plan: &ResponsePlan) -> Result<BoundedStateContext, PortError>;
 }
 
@@ -278,6 +283,8 @@ fn is_bounded_text(value: &str, maximum: usize) -> bool {
 /// Optional planning port. Implementations may use a local model, but must
 /// not stream user-visible output.
 pub trait ResponsePlanner: Send {
+    /// # Errors
+    /// Returns an error when a bounded response plan cannot be produced.
     fn plan(
         &mut self,
         kind: TurnKind,
@@ -299,6 +306,8 @@ impl<T: ResponsePlanner + ?Sized> ResponsePlanner for Box<T> {
 
 /// Optional context retrieval port for planned turns only.
 pub trait ResponseContextRetriever: Send {
+    /// # Errors
+    /// Returns an error when planned-turn context cannot be retrieved.
     fn retrieve(
         &mut self,
         plan: &ResponsePlan,
@@ -320,6 +329,8 @@ impl<T: ResponseContextRetriever + ?Sized> ResponseContextRetriever for Box<T> {
 /// rather than direct assistant text so the existing streaming path remains
 /// the sole source of reply/TTS events.
 pub trait SurfaceRealizer: Send {
+    /// # Errors
+    /// Returns an error when a bounded surface context cannot be realized.
     fn realize(&mut self, plan: &ResponsePlan) -> Result<SurfaceContext, PortError>;
 }
 
@@ -350,12 +361,15 @@ pub struct PreparedResponse {
     pub surface: SurfaceContext,
 }
 
+/// Ports plus outcome returned by one background planned-preparation attempt.
+type PendingPreparation<P, R, S> = (P, R, S, Option<PreparedResponse>);
+
 /// A failure-isolated planned preparation pipeline.
 pub struct ResponsePipeline<P, R, S> {
     planner: Option<P>,
     retriever: Option<R>,
     realizer: Option<S>,
-    pending: Option<Receiver<(P, R, S, Option<PreparedResponse>)>>,
+    pending: Option<Receiver<PendingPreparation<P, R, S>>>,
     budget: PlanningBudget,
 }
 

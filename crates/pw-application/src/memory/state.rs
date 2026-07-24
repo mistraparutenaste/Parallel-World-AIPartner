@@ -35,6 +35,8 @@ impl MemoryDomain {
         }
     }
 
+    /// # Errors
+    /// Returns an error when `value` does not name a known memory domain.
     pub fn parse(value: &str) -> Result<Self, PortError> {
         match value {
             "working" => Ok(Self::Working),
@@ -67,6 +69,8 @@ impl DomainConsent {
         }
     }
 
+    /// # Errors
+    /// Returns an error when `value` does not name a known domain consent.
     pub fn parse(value: &str) -> Result<Self, PortError> {
         match value {
             "allowed" => Ok(Self::Allowed),
@@ -87,6 +91,8 @@ pub struct DomainControl {
 }
 
 impl DomainControl {
+    /// # Errors
+    /// Returns an error for a negative revision or a non-positive retention.
     pub fn validate(&self) -> Result<(), PortError> {
         if self.revision < 0 || self.retention_seconds.is_some_and(|value| value <= 0) {
             return Err(PortError("invalid domain control".into()));
@@ -165,6 +171,8 @@ impl MemoryLinkRelation {
         }
     }
 
+    /// # Errors
+    /// Returns an error when `value` does not name a known link relation.
     pub fn parse(value: &str) -> Result<Self, PortError> {
         match value {
             "supports" => Ok(Self::Supports),
@@ -212,6 +220,8 @@ impl CommitmentStatus {
         }
     }
 
+    /// # Errors
+    /// Returns an error when `value` does not name a known commitment status.
     pub fn parse(value: &str) -> Result<Self, PortError> {
         match value {
             "open" => Ok(Self::Open),
@@ -272,6 +282,11 @@ pub struct DialogueSignals {
 }
 
 impl DialogueSignals {
+    /// # Errors
+    /// Returns an error for unbounded conversation identifiers, out-of-range
+    /// timestamps or relationship delta, unbounded optional fields, or a
+    /// commitment signal that disagrees with this record's conversation or
+    /// exceeds its bounded content length.
     pub fn validate(&self) -> Result<(), PortError> {
         if self.conversation_id.trim().is_empty()
             || self.conversation_id.chars().count() > 96
@@ -291,18 +306,21 @@ impl DialogueSignals {
         {
             return Err(PortError("invalid bounded dialogue signals".into()));
         }
-        if let Some(commitment) = &self.commitment {
-            if commitment.conversation_id != self.conversation_id
-                || commitment.content.chars().count() > 160
-            {
-                return Err(PortError("invalid bounded commitment signal".into()));
-            }
+        if let Some(commitment) = &self.commitment
+            && (commitment.conversation_id != self.conversation_id
+                || commitment.content.chars().count() > 160)
+        {
+            return Err(PortError("invalid bounded commitment signal".into()));
         }
         Ok(())
     }
 }
 
 impl DialogueState {
+    /// # Errors
+    /// Returns an error for an unbounded conversation identifier, a
+    /// non-positive expiry, a negative revision, an out-of-range relationship
+    /// score, or an optional field exceeding its bounded length.
     pub fn validate(&self) -> Result<(), PortError> {
         if self.conversation_id.trim().is_empty()
             || self.expires_at <= 0
@@ -334,6 +352,7 @@ pub enum CasOutcome {
     Rejected,
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub trait CompanionStateStore {
     fn get_domain_control(&self, domain: MemoryDomain) -> Result<DomainControl, PortError>;
     fn compare_and_set_domain_control(
@@ -388,7 +407,7 @@ pub trait CompanionStateStore {
 }
 
 /// A bounded write request.  The UI/turn path is allowed to drop it: it must
-/// never wait for SQLite or make a reply fail because background state failed.
+/// never wait for `SQLite` or make a reply fail because background state failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AsyncStateWrite {
     DomainControl(DomainControl),
@@ -405,7 +424,7 @@ pub trait AsyncStateWriter {
 impl AsyncStateWriter for SyncSender<AsyncStateWrite> {
     fn try_enqueue(&self, write: AsyncStateWrite) -> bool {
         match self.try_send(write) {
-            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+            Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
                 // Full and disconnected are intentionally fail-open.  The next
                 // turn may reconstruct bounded state from durable memory.
                 true

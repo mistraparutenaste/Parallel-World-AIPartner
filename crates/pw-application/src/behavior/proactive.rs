@@ -421,6 +421,7 @@ pub fn eligible_to_evaluate<H: FrequencyHistory>(
 /// Inputs shared by the desktop behavior settings and the application gate.
 /// Any unavailable/unsafe state is represented as `false` and fails closed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ProactiveGatePolicy {
     pub master_enabled: bool,
     pub profile_enabled: bool,

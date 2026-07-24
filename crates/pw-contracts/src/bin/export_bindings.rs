@@ -32,6 +32,7 @@ use pw_contracts::{
 };
 use ts_rs::{Config, TS};
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     let out_dir = Path::new("packages/contracts/src/generated");
     fs::create_dir_all(out_dir).expect("create bindings output directory");

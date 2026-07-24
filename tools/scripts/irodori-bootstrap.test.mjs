@@ -169,7 +169,17 @@ async function invokePowerShell(expression) {
   const command = [
     `$ErrorActionPreference = 'Stop'`,
     `Import-Module ${quotePowerShell(modulePath)} -Force`,
-    `& { ${expression} } | ConvertTo-Json -Compress -Depth 10`,
+    // NOTE: -Depth must stay low. Windows PowerShell 5.1's ConvertTo-Json has
+    // catastrophic (non-linear) time growth per extra -Depth level once the
+    // object graph contains a few nested Hashtable/OrderedDictionary/array
+    // levels (which every harness result here does). Depth 6 was measured at
+    // ~1-3s for the largest fixture payloads in this file; Depth 7 measured
+    // in excess of 15s and Depth 10 (the previous value) never returned,
+    // which left the spawned powershell.exe process (and its stdio pipes)
+    // alive forever and hung `node --test` even after every test had
+    // reported pass. Keep this at the lowest value that still reaches every
+    // field asserted on below (max real nesting here is ~4 levels).
+    `& { ${expression} } | ConvertTo-Json -Compress -Depth 6`,
   ].join("; ");
 
   return new Promise((resolve, reject) => {

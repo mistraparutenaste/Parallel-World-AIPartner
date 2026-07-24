@@ -34,6 +34,7 @@ pub struct PromotionResult {
     pub already_applied: bool,
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub trait MemoryPromoter {
     fn promote(
         &mut self,

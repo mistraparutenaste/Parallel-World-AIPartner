@@ -5,8 +5,10 @@ use pw_contracts::{BehaviorSettingsDto, CompanionModeDto};
 
 #[test]
 fn runtime_snapshot_uses_manual_mode_and_preserves_collector_health() {
-    let mut settings = BehaviorSettingsDto::default();
-    settings.manual_mode_override = Some(CompanionModeDto::Focus);
+    let settings = BehaviorSettingsDto {
+        manual_mode_override: Some(CompanionModeDto::Focus),
+        ..Default::default()
+    };
 
     let snapshot = resolve_runtime_snapshot(
         &settings,

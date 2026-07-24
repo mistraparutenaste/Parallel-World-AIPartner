@@ -67,6 +67,11 @@ impl PromptBuilder {
 
     /// Adds an already validated, bounded response surface to a planned turn.
     /// Invalid data intentionally uses the ordinary prompt path.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if `build_with_context` did not append the current
+    /// utterance as its final message, which its implementation always does.
     #[must_use]
     pub fn build_with_context_and_surface(
         &self,

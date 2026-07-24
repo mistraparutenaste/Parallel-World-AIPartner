@@ -67,6 +67,11 @@ impl Database {
 
     /// Opens the durable database with a bounded lock wait.  Event paths use
     /// this fail-open variant so a competing writer never delays chat start.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `SQLite` cannot open/configure the database, a
+    /// migration fails, or the bundled `SQLite` is too old for safe WAL use.
     pub fn open_with_busy_timeout(
         path: impl AsRef<Path>,
         busy_timeout: Duration,

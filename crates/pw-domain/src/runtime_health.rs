@@ -296,6 +296,10 @@ fn is_labeled_credential_value(value: &str) -> bool {
 }
 
 /// Diagnostic-only redaction additionally bounds emitted text.
+///
+/// # Panics
+///
+/// Panics only if a compile-time constant regular expression is invalid.
 #[must_use]
 pub fn redact_diagnostic(input: &str) -> String {
     use std::sync::OnceLock;

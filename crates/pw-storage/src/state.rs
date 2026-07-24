@@ -8,7 +8,7 @@ use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::Database;
 
-/// SQLite backing for bounded companion state.  It is intentionally separate
+/// `SQLite` backing for bounded companion state.  It is intentionally separate
 /// from the synchronous chat service; callers access it through a bounded
 /// `AsyncStateWriter` and may drop a write without affecting a reply.
 pub struct SqliteCompanionStateStore {
@@ -42,7 +42,7 @@ impl SqliteCompanionStateStore {
     }
 
     /// Reads temporary status, controls, dialogue state, and commitments from
-    /// one SQLite snapshot. `IMMEDIATE` linearizes this read against the
+    /// one `SQLite` snapshot. `IMMEDIATE` linearizes this read against the
     /// temporary/privacy writers; callers can fail open on a busy timeout.
     pub(crate) fn planned_state_snapshot(
         &mut self,
@@ -440,7 +440,7 @@ impl CompanionStateStore for SqliteCompanionStateStore {
     }
 }
 
-/// A conditional write failed.  While its transaction holds the SQLite writer
+/// A conditional write failed.  While its transaction holds the `SQLite` writer
 /// lock, this read cannot be invalidated by a concurrent temporary switch, so
 /// callers get a stable distinction between privacy rejection and ordinary
 /// optimistic-concurrency conflict.
@@ -462,6 +462,9 @@ fn temporary_write_outcome(
     })
 }
 
+// Taking the error by value lets every call site pass this as a bare
+// `map_err(state_error)` function pointer instead of a closure.
+#[allow(clippy::needless_pass_by_value)]
 fn state_error(error: rusqlite::Error) -> PortError {
     PortError(error.to_string())
 }
@@ -637,6 +640,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn temporary_switch_fences_two_connection_commitment_and_dialogue_writes() {
         let path = std::env::temp_dir().join(format!(
             "pw-temporary-state-fence-{}.sqlite3",

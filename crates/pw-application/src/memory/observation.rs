@@ -213,6 +213,7 @@ fn digest<const N: usize>(fields: [&[u8]; N]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+#[allow(clippy::missing_errors_doc)]
 pub trait ObservationStore {
     fn insert_observation(&mut self, input: NewObservation) -> Result<i64, PortError>;
     fn finalize_observation_outcome(

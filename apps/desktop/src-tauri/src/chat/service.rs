@@ -110,13 +110,12 @@ fn load_memory_context<M: MemoryStore>(
             None
         }
     });
-    let context = MemoryContext {
+    MemoryContext {
         user_settings: None,
         memories: candidates.iter().map(|item| item.content.clone()).collect(),
         summary,
     }
-    .bounded();
-    context
+    .bounded()
 }
 
 const SUMMARY_RECENT_MESSAGES: usize = MAX_HISTORY_MESSAGES;
@@ -129,7 +128,7 @@ const ENRICHMENT_FOLLOWUP_DELAY: std::time::Duration = std::time::Duration::from
 const ENRICHMENT_JOBS_PER_SLICE: usize = 4;
 const OBSERVATION_WRITE_QUEUE_CAPACITY: usize = 64;
 /// Ordinary chat must fail open quickly when a maintenance/promotion writer
-/// owns SQLite.  The durable worker will retry its own work later.
+/// owns `SQLite`.  The durable worker will retry its own work later.
 const OBSERVATION_EVENT_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(25);
 
 enum ObservationWrite {
@@ -146,7 +145,7 @@ enum ObservationWrite {
 }
 
 /// Bounded, long-lived writer for the observation ledger.  Chat event
-/// delivery only enqueues a command, so opening/configuring SQLite and WAL
+/// delivery only enqueues a command, so opening/configuring `SQLite` and WAL
 /// contention can never sit in front of the ordinary user echo or LLM start.
 #[derive(Clone)]
 struct ObservationWriter {
@@ -181,21 +180,21 @@ impl ObservationWriter {
 }
 
 fn run_observation_writer(
-    database_path: PathBuf,
-    rx: Receiver<ObservationWrite>,
-    enrichment: Option<EnrichmentSender>,
+    database_path: &PathBuf,
+    rx: &Receiver<ObservationWrite>,
+    enrichment: Option<&EnrichmentSender>,
 ) {
     // Opening and migration are intentionally owned by this worker.  The
     // connection stays alive for the worker lifetime instead of being opened
     // once per user event.
     let mut memory =
-        Database::open_with_busy_timeout(&database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
+        Database::open_with_busy_timeout(database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
             .map(SqliteMemoryStore::new)
             .map_err(|error| error.to_string());
     while let Ok(command) = rx.recv() {
         if memory.is_err() {
             memory =
-                Database::open_with_busy_timeout(&database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
+                Database::open_with_busy_timeout(database_path, OBSERVATION_EVENT_BUSY_TIMEOUT)
                     .map(SqliteMemoryStore::new)
                     .map_err(|error| error.to_string());
         }
@@ -217,7 +216,7 @@ fn run_observation_writer(
                 )) {
                     Ok(_) => {
                         // The wake follows the committed INSERT and carries no user content.
-                        if enrichment.as_ref().is_some_and(|sender| {
+                        if enrichment.is_some_and(|sender| {
                             sender.replace_latest(EnrichmentJob::wake(turn_id)).is_err()
                         }) {
                             tracing::warn!(
@@ -226,7 +225,7 @@ fn run_observation_writer(
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(%error, "memory observation persistence failed; conversation remains available")
+                        tracing::warn!(%error, "memory observation persistence failed; conversation remains available");
                     }
                 }
             }
@@ -260,8 +259,9 @@ fn process_enrichment_actions<C: MemoryClassifier>(
     Ok(())
 }
 
-/// SQLite is the sole enrichment queue.  The in-process wake only asks this
+/// `SQLite` is the sole enrichment queue.  The in-process wake only asks this
 /// function to drain one eligible record; it never supplies memory content.
+#[allow(clippy::too_many_lines)]
 fn process_next_durable_observation<C: MemoryClassifier>(
     memory: &mut SqliteMemoryStore,
     consolidator: &mut HybridConsolidator<C>,
@@ -481,7 +481,7 @@ fn process_next_durable_observation<C: MemoryClassifier>(
     Ok(true)
 }
 
-/// Converts SQLite's durable epoch-second eligibility timestamp into the
+/// Converts `SQLite`'s durable epoch-second eligibility timestamp into the
 /// worker's monotonic deadline.  The database remains the source of truth;
 /// this only prevents an in-process retry wake from being dropped early.
 fn observation_follow_up_deadline(database_path: &Path) -> Option<std::time::Instant> {
@@ -497,7 +497,7 @@ fn observation_follow_up_deadline(database_path: &Path) -> Option<std::time::Ins
         .ok()
         .flatten()?;
     let delay_seconds = due_at.saturating_sub(now);
-    Some(std::time::Instant::now() + std::time::Duration::from_secs(delay_seconds as u64))
+    Some(std::time::Instant::now() + std::time::Duration::from_secs(delay_seconds.cast_unsigned()))
 }
 
 fn retry_observation(
@@ -772,7 +772,7 @@ fn run_enrichment(
     );
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 fn run_enrichment_until_cancelled(
     database_path: &Path,
     rx: Receiver<()>,
@@ -792,7 +792,7 @@ fn run_enrichment_until_cancelled(
             }
         }
         Err(error) => {
-            tracing::warn!(%error, "observation startup database unavailable; worker remains available")
+            tracing::warn!(%error, "observation startup database unavailable; worker remains available");
         }
     }
     // Bootstrap a drain after restart.  This marker contains no user data and
@@ -854,17 +854,18 @@ fn run_enrichment_until_cancelled(
         };
         let mut durable_processed = false;
         let mut retry_scheduled = false;
-        for _job in jobs {
+        #[cfg_attr(not(test), allow(unused_variables))]
+        for job in jobs {
             metrics.dequeued();
             #[cfg(test)]
-            if !_job.user_text.is_empty() {
+            if !job.user_text.is_empty() {
                 // Test-only compatibility shim: production wake markers never
                 // carry text; fixtures can still model a committed ledger.
                 if let Ok(mut store) = Database::open(database_path).map(SqliteMemoryStore::new) {
                     let _ = store.insert_observation(NewObservation::new(
                         DEFAULT_CONVERSATION_ID,
-                        _job.turn_id,
-                        &_job.user_text,
+                        job.turn_id,
+                        &job.user_text,
                         unix_timestamp(),
                     ));
                 }
@@ -1160,7 +1161,7 @@ impl<E, H> PersistentConversationEvents<E, H> {
 
     /// Returns true only after the durable queue record committed.  The caller
     /// may then send a lossy wake; it must never wake a worker for data that
-    /// failed to reach SQLite.
+    /// failed to reach `SQLite`.
     fn record_observation(&self, turn: TurnId, text: &str) -> bool {
         let Some(writer) = &self.observation_writer else {
             return false;
@@ -1355,6 +1356,7 @@ fn enqueue_submit(
         })
 }
 
+#[allow(clippy::struct_field_names)]
 struct Worker {
     tx: SyncSender<Command>,
     settings_fingerprint: String,
@@ -1874,10 +1876,10 @@ impl ChatService {
                 let writer_enrichment = enrichment_tx.clone();
                 move || {
                     run_observation_writer(
-                        observation_writer_path,
-                        observation_rx,
-                        Some(writer_enrichment),
-                    )
+                        &observation_writer_path,
+                        &observation_rx,
+                        Some(&writer_enrichment),
+                    );
                 }
             })
             .map_err(|error| format!("failed to spawn observation writer: {error}"))?;
@@ -3991,7 +3993,7 @@ mod tests {
         let observation_path = path.clone();
         let observation_thread = std::thread::spawn({
             let writer_sender = sender.clone();
-            move || run_observation_writer(observation_path, observation_rx, Some(writer_sender))
+            move || run_observation_writer(&observation_path, &observation_rx, Some(&writer_sender))
         });
         let worker_wake = wake;
         let history = SqliteConversationHistory::new(Database::open(&path).unwrap());
@@ -4119,7 +4121,7 @@ mod tests {
         let (observation_tx, observation_rx) = sync_channel(OBSERVATION_WRITE_QUEUE_CAPACITY);
         let observation_path = path.clone();
         let observation_thread = std::thread::spawn(move || {
-            run_observation_writer(observation_path, observation_rx, None)
+            run_observation_writer(&observation_path, &observation_rx, None);
         });
         let events = PersistentConversationEvents::new_with_enrichment(
             NoopEvents::default(),

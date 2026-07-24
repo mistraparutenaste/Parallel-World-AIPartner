@@ -69,7 +69,7 @@ pub fn derive_dialogue_signals(
         observed_at: now,
         expires_at: now.saturating_add(SIGNAL_TTL_SECONDS),
     };
-    signals.validate().ok().map(|_| signals)
+    signals.validate().ok().map(|()| signals)
 }
 
 /// Conservative commitment detector. Only explicit promise/remember intent
@@ -154,14 +154,16 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn stable_cursor(value: &str) -> String {
+    use std::fmt::Write;
+
     let mut hasher = Sha256::new();
     hasher.update(b"parallel-world/reflection/v1\0");
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
-    digest[..8]
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    digest[..8].iter().fold(String::new(), |mut output, byte| {
+        write!(output, "{byte:02x}").unwrap();
+        output
+    })
 }
 
 #[cfg(test)]

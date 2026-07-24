@@ -28,6 +28,10 @@ pub fn validate_idle_timeout(timeout_seconds: Option<u32>) -> Result<(), String>
 }
 
 /// Validates the character window scale percentage.
+///
+/// # Errors
+///
+/// Returns an error when `size_percent` is outside 50 through 200 percent.
 pub fn validate_character_size(size_percent: u16) -> Result<(), String> {
     if (50..=200).contains(&size_percent) {
         Ok(())
@@ -161,6 +165,10 @@ pub fn with_expression_idle_timeout(
 }
 
 /// Replaces only the character window scale while preserving all other settings.
+///
+/// # Errors
+///
+/// Returns an error when `size_percent` is outside the supported range.
 pub fn with_character_size(
     mut settings: CharacterSettingsDto,
     size_percent: u16,

@@ -1,6 +1,6 @@
 //! Bounded asynchronous companion-state writer.
 //!
-//! The conversation path only performs a non-blocking `try_send`.  SQLite
+//! The conversation path only performs a non-blocking `try_send`.  `SQLite`
 //! contention, malformed signals, and worker failures are deliberately
 //! isolated from the reply/TTS path.
 
@@ -56,7 +56,7 @@ impl PlannedStateContextProvider for SqlitePlannedStateContext {
     }
 }
 
-/// Owns a bounded queue and one long-lived SQLite writer.
+/// Owns a bounded queue and one long-lived `SQLite` writer.
 pub struct CompanionStateWorker {
     tx: SyncSender<AsyncStateWrite>,
     thread: Option<JoinHandle<()>>,
@@ -65,13 +65,16 @@ pub struct CompanionStateWorker {
 impl CompanionStateWorker {
     /// Starts a worker.  The database is opened on the worker thread so a
     /// startup failure cannot block a chat turn.
+    ///
+    /// # Errors
+    /// Returns an error message when the worker thread cannot be spawned.
     pub fn start(path: impl Into<PathBuf>, capacity: usize) -> Result<Self, String> {
         let capacity = capacity.clamp(1, 256);
         let (tx, rx) = sync_channel(capacity);
         let path = path.into();
         let thread = thread::Builder::new()
             .name("pw-companion-state".into())
-            .spawn(move || run_worker(path, rx))
+            .spawn(move || run_worker(&path, &rx))
             .map_err(|error| error.to_string())?;
         Ok(Self {
             tx,
@@ -85,12 +88,21 @@ impl CompanionStateWorker {
     }
 
     /// Enqueues without waiting.  Full/disconnected queues are fail-open.
+    #[must_use]
     pub fn try_enqueue(&self, write: AsyncStateWrite) -> bool {
         match self.tx.try_send(write) {
-            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => true,
+            Ok(()) | Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => true,
         }
     }
 
+    /// Drops the sender and joins the worker thread.
+    ///
+    /// # Panics
+    /// Panics only if called after an earlier `shutdown` already took the
+    /// worker thread, which the owning `Self` type cannot express twice.
+    ///
+    /// # Errors
+    /// Returns an error message when the worker thread panicked.
     pub fn shutdown(mut self) -> Result<(), String> {
         drop(self.tx);
         self.thread
@@ -107,8 +119,8 @@ impl AsyncStateWriter for CompanionStateWorker {
     }
 }
 
-fn run_worker(path: PathBuf, rx: Receiver<AsyncStateWrite>) {
-    let Ok(database) = Database::open(&path) else {
+fn run_worker(path: &PathBuf, rx: &Receiver<AsyncStateWrite>) {
+    let Ok(database) = Database::open(path) else {
         tracing::warn!(path = %path.display(), "companion state worker database unavailable");
         return;
     };
@@ -121,6 +133,9 @@ fn run_worker(path: PathBuf, rx: Receiver<AsyncStateWrite>) {
 }
 
 /// Applies one queue item.  Kept public for deterministic focused tests.
+///
+/// # Errors
+/// Returns an error when validation fails or the store cannot be updated.
 pub fn apply_async_state_write(
     store: &mut impl CompanionStateStore,
     write: AsyncStateWrite,
@@ -251,13 +266,13 @@ fn apply_signals(
         };
         let _ = store.compare_and_set_dialogue_state(state, existing.revision, now)?;
     }
-    if let Some(commitment) = signals.commitment {
-        if matches!(
+    if let Some(commitment) = signals.commitment
+        && matches!(
             store.get_domain_control(MemoryDomain::Commitment)?.consent,
             DomainConsent::Allowed
-        ) {
-            let _ = store.save_commitment(commitment, None, now)?;
-        }
+        )
+    {
+        let _ = store.save_commitment(commitment, None, now)?;
     }
     store.expire_commitments(now)?;
     Ok(())

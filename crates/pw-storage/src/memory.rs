@@ -40,10 +40,14 @@ impl SqliteMemoryStore {
         }
     }
 
+    /// # Errors
+    /// Returns an error when the observation cannot be inserted.
     pub fn insert_observation(&mut self, input: NewObservation) -> Result<i64, PortError> {
         <Self as ObservationStore>::insert_observation(self, input)
     }
 
+    /// # Errors
+    /// Returns an error when the next eligible observation cannot be claimed.
     pub fn claim_next_observation(
         &mut self,
         owner: &str,
@@ -56,6 +60,9 @@ impl SqliteMemoryStore {
     /// Returns the earliest durable observation eligibility timestamp.  The
     /// enrichment worker uses this to keep a content-free wake alive across a
     /// retry backoff; it must not rely on a later chat event to resume work.
+    ///
+    /// # Errors
+    /// Returns an error for a failed `SQLite` query.
     pub fn next_observation_due_at(&self, now: i64) -> Result<Option<i64>, PortError> {
         self.database
             .connection()
@@ -67,6 +74,9 @@ impl SqliteMemoryStore {
             .map_err(memory_error)
     }
 
+    /// # Errors
+    /// Returns an error when the turn's observation cannot be found or
+    /// finalized.
     pub fn finalize_observation_by_turn(
         &mut self,
         conversation_id: &str,
@@ -89,6 +99,8 @@ impl SqliteMemoryStore {
         <Self as ObservationStore>::finalize_observation_outcome(self, observation_id, outcome, now)
     }
 
+    /// # Errors
+    /// Returns an error when the change set cannot be promoted.
     pub fn promote(
         &mut self,
         change_set: &ProvisionalMemoryChangeSet,
@@ -99,6 +111,9 @@ impl SqliteMemoryStore {
 
     /// Deletes one user-visible memory with a durable generation fence, so a
     /// worker holding an older observation lease cannot restore it later.
+    ///
+    /// # Errors
+    /// Returns an error for a failed `SQLite` transaction.
     pub fn delete_memory_fenced(&mut self, id: i64) -> Result<(), PortError> {
         let transaction = self
             .database
@@ -394,6 +409,7 @@ impl ObservationStore for SqliteMemoryStore {
         ).map_err(|error| PortError(error.to_string()))
     }
 
+    #[allow(clippy::type_complexity)]
     fn persist_candidate(
         &mut self,
         candidate: PersistedCandidate,
@@ -610,6 +626,9 @@ fn safe_diagnostic_reason(value: &str) -> String {
 /// Deletes every long-lived memory using the same tombstone protocol as a
 /// single user delete.  Desktop data-erasure uses this rather than a raw SQL
 /// DELETE so queued promotions lose their generation fence atomically.
+///
+/// # Errors
+/// Returns an error for a failed `SQLite` transaction.
 pub fn delete_all_memories_fenced(database: &mut Database) -> Result<usize, PortError> {
     let transaction = database
         .connection_mut()
@@ -622,6 +641,9 @@ pub fn delete_all_memories_fenced(database: &mut Database) -> Result<usize, Port
 }
 
 /// Transaction form used by compound user-data erasure commands.
+///
+/// # Errors
+/// Returns an error for a failed `SQLite` statement.
 pub fn delete_all_memories_in_transaction(
     transaction: &Transaction<'_>,
     now: i64,
@@ -647,7 +669,7 @@ pub fn delete_all_memories_in_transaction(
         .map_err(memory_error)?;
     drop(statement);
     for id in &ids {
-        tombstone_and_delete_memory(&transaction, *id, now)?;
+        tombstone_and_delete_memory(transaction, *id, now)?;
     }
     Ok(ids.len())
 }
@@ -655,6 +677,9 @@ pub fn delete_all_memories_in_transaction(
 /// Applies the content-free deletion fence for rows whose history was already
 /// erased.  Kept crate-visible so both history deletion entry points preserve
 /// their existing retention semantics while also preventing late promotion.
+///
+/// # Errors
+/// Returns an error for a failed `SQLite` statement.
 pub fn tombstone_memories_for_deleted_observations(
     transaction: &Transaction<'_>,
     conversation_id: Option<&str>,
@@ -746,8 +771,9 @@ fn tombstone_memory_work(
 fn epoch_seconds() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |value| {
+            i64::try_from(value.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 fn memory_error(error: impl std::fmt::Display) -> PortError {
     PortError(error.to_string())
@@ -835,6 +861,7 @@ fn validator_targets(
 }
 
 impl MemoryPromoter for SqliteMemoryStore {
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
     fn promote(
         &mut self,
         change_set: &ProvisionalMemoryChangeSet,
@@ -1205,6 +1232,8 @@ fn action_target(action: &MemoryAction) -> Option<i64> {
 }
 
 fn promotion_fingerprint(change_set: &ProvisionalMemoryChangeSet) -> String {
+    use std::fmt::Write;
+
     let mut fields = format!(
         "run:{}|observation:{}|classifier:{}|schema:{}|input:{}",
         change_set.classification_run_id,
@@ -1214,10 +1243,11 @@ fn promotion_fingerprint(change_set: &ProvisionalMemoryChangeSet) -> String {
         change_set.input_hash
     );
     for (action, provenance) in change_set.actions.iter().zip(&change_set.provenance) {
-        fields.push_str(&format!(
+        let _ = write!(
+            fields,
             "|candidate:{}:{}:{:?}:{:?}",
             provenance.candidate_id, provenance.relation, action.action, action.expected_revision
-        ));
+        );
     }
     input_hash(&fields)
 }
@@ -1917,38 +1947,32 @@ fn apply_supersede_versioned(
             "cannot supersede already superseded memory {old_memory_id}"
         )));
     }
-    let replacement_id = match find_source_memory_excluding(
-        transaction,
-        content,
-        source,
-        old_memory_id,
-    )? {
-        Some(id) => {
-            transaction
-                .execute(
-                    "UPDATE memories SET revision=revision+1,state='active',pinned=CASE WHEN ?1 THEN 1 ELSE pinned END,state_changed_at=NULL,superseded_by=NULL,updated_at=MAX(updated_at,?2) WHERE id=?3 AND (state!='active' OR superseded_by IS NOT NULL OR (?1 AND pinned=0))",
-                    params![pin_replacement, now, id],
-                )
-                .map_err(|error| PortError(error.to_string()))?;
-            id
+    let replacement_id = if let Some(id) =
+        find_source_memory_excluding(transaction, content, source, old_memory_id)?
+    {
+        transaction
+            .execute(
+                "UPDATE memories SET revision=revision+1,state='active',pinned=CASE WHEN ?1 THEN 1 ELSE pinned END,state_changed_at=NULL,superseded_by=NULL,updated_at=MAX(updated_at,?2) WHERE id=?3 AND (state!='active' OR superseded_by IS NOT NULL OR (?1 AND pinned=0))",
+                params![pin_replacement, now, id],
+            )
+            .map_err(|error| PortError(error.to_string()))?;
+        id
+    } else {
+        let self_replacement = transaction
+            .query_row(
+                "SELECT 1 FROM memories WHERE id=?1 AND content=?2",
+                params![old_memory_id, content],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|error| PortError(error.to_string()))?
+            .is_some();
+        if self_replacement {
+            return Err(PortError(format!(
+                "cannot supersede memory {old_memory_id} with itself as the replacement"
+            )));
         }
-        None => {
-            let self_replacement = transaction
-                .query_row(
-                    "SELECT 1 FROM memories WHERE id=?1 AND content=?2",
-                    params![old_memory_id, content],
-                    |_| Ok(()),
-                )
-                .optional()
-                .map_err(|error| PortError(error.to_string()))?
-                .is_some();
-            if self_replacement {
-                return Err(PortError(format!(
-                    "cannot supersede memory {old_memory_id} with itself as the replacement"
-                )));
-            }
-            create_memory(transaction, content, pin_replacement, source, now)?
-        }
+        create_memory(transaction, content, pin_replacement, source, now)?
     };
     let changed = transaction
         .execute(
@@ -2583,6 +2607,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn temporary_switch_tombstones_and_removes_a_real_promoted_add() {
         let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
         let source_text = "I like green tea";
@@ -2697,6 +2722,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn promotion_policy_is_enforced_for_all_write_classes_and_domain_consents() {
         let cases = [
             (MemoryWriteClass::NormalExplicit, "normal_explicit"),
@@ -3555,6 +3581,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::float_cmp)]
     fn prompt_recall_evidence_never_changes_strength_or_dormancy() {
         let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
         let id = store

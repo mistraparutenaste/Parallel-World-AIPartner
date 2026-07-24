@@ -85,6 +85,7 @@ pub enum LlmProviderKind {
 
 /// Persisted LLM connection and prompt settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[allow(clippy::struct_excessive_bools)]
 #[ts(export_to = "LlmSettingsDto.ts")]
 pub struct LlmSettingsDto {
     pub schema_version: u16,

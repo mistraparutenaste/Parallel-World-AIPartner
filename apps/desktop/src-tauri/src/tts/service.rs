@@ -538,7 +538,8 @@ impl TtsService {
                             queue.push_sentence(turn, &text);
                             tracing::info!(
                                 turn_id = turn.value(),
-                                elapsed_ms = started.elapsed().as_millis() as u64,
+                                elapsed_ms = u64::try_from(started.elapsed().as_millis())
+                                    .unwrap_or(u64::MAX),
                                 "tts synthesis processed"
                             );
                         }

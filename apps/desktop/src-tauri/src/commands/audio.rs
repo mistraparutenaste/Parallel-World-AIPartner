@@ -48,6 +48,10 @@ pub fn start_listening<R: Runtime>(
 
 /// Requests a microphone switch while keeping the speech pipeline running.
 /// The worker replaces the capture session and retains the loaded STT models.
+///
+/// # Errors
+///
+/// Returns an error message when the worker cannot be spawned.
 #[tauri::command]
 pub async fn set_input_device<R: Runtime>(
     app: AppHandle<R>,

@@ -1,4 +1,4 @@
-//! Privacy-safe Memory Center IPC. All SQLite work stays in blocking workers;
+//! Privacy-safe Memory Center IPC. All `SQLite` work stays in blocking workers;
 //! the renderer only receives bounded summaries.
 
 use pw_application::memory::{MemoryDomain, is_safe_persistent_content, redact_persistent_content};
@@ -23,8 +23,9 @@ fn database_path(layout: &AppDataLayout) -> std::path::PathBuf {
 fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|value| i64::try_from(value.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |value| {
+            i64::try_from(value.as_secs()).unwrap_or(i64::MAX)
+        })
 }
 
 /// Redacts persistent secrets before normalising and bounding a renderer
@@ -53,6 +54,7 @@ fn bounded_optional_preview(value: Option<String>) -> Option<String> {
     value.map(|value| bounded_preview(&value))
 }
 
+#[allow(clippy::too_many_lines)]
 fn memory_center_at(path: &std::path::Path, now: i64) -> Result<MemoryCenterDto, String> {
     let database = Database::open(path).map_err(|error| error.to_string())?;
     let connection = database.connection();
@@ -158,6 +160,10 @@ fn memory_center_at(path: &std::path::Path, now: i64) -> Result<MemoryCenterDto,
     })
 }
 
+/// # Errors
+///
+/// Returns an error message when the database cannot be read or the worker
+/// cannot be spawned.
 #[tauri::command]
 pub async fn get_memory_center(
     layout: State<'_, AppDataLayout>,
@@ -207,6 +213,10 @@ fn set_domain_control_at(
         .map_err(|error| error.to_string())
 }
 
+/// # Errors
+///
+/// Returns an error message for an invalid domain/consent, a stale
+/// `expected_revision`, or a database/worker failure.
 #[tauri::command]
 pub async fn set_memory_domain_control(
     layout: State<'_, AppDataLayout>,
@@ -266,6 +276,10 @@ fn set_temporary_at(
     Ok(next)
 }
 
+/// # Errors
+///
+/// Returns an error message for a stale `expected_revision` or a
+/// database/worker failure.
 #[tauri::command]
 pub async fn set_temporary_conversation(
     layout: State<'_, AppDataLayout>,
@@ -294,6 +308,11 @@ fn delete_memory_at(path: &std::path::Path, memory_id: i64) -> Result<(), String
 
 /// Deletes one durable memory behind the same reset and tombstone fences as
 /// the existing "delete all" command.
+///
+/// # Errors
+///
+/// Returns an error message for an invalid memory id or a database/worker
+/// failure.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub async fn delete_memory<R: Runtime>(
