@@ -1,4 +1,5 @@
 import type { AudioDeviceDto, RuntimeHealthEventDto, SttStateEventDto } from '@parallel-world/contracts';
+import { RUNTIME_HEALTH_EVENT } from '@parallel-world/contracts';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MicrophonePanel } from './MicrophonePanel';
@@ -139,7 +140,7 @@ describe('MicrophonePanel', () => {
           message: '音声認識の起動がタイムアウトしました。停止後に再試行してください。',
         } satisfies SttStateEventDto,
       });
-      listenHandlers.get('runtime-health')?.({
+      listenHandlers.get(RUNTIME_HEALTH_EVENT)?.({
         payload: {
           schema_version: 1,
           feature: 'audio_input',
@@ -185,7 +186,7 @@ describe('MicrophonePanel', () => {
       changed_at_ms: 1,
     };
 
-    act(() => listenHandlers.get('runtime-health')?.({ payload }));
+    act(() => listenHandlers.get(RUNTIME_HEALTH_EVENT)?.({ payload }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent('マイクを再接続しています');
     expect(invokeMock.mock.calls.filter(([name]) => name === 'list_microphones')).toHaveLength(2);
@@ -210,7 +211,7 @@ describe('MicrophonePanel', () => {
       },
     }));
     await act(async () => { await Promise.resolve(); });
-    act(() => listenHandlers.get('runtime-health')?.({
+    act(() => listenHandlers.get(RUNTIME_HEALTH_EVENT)?.({
       payload: {
         schema_version: 1, feature: 'audio_input', status: 'healthy',
         failure_class: null, last_error: null, attempts: 0,

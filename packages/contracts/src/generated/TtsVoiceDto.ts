@@ -3,11 +3,11 @@
 /**
  * One selectable voice, normalized for the settings dropdown.
  */
-export type TtsVoiceDto = {
+export type TtsVoiceDto = { 
 /**
  * Engine-specific voice identifier.
  */
-id: string,
+id: string, 
 /**
  * Human-readable voice label.
  */

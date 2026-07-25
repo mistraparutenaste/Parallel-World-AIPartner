@@ -4,6 +4,7 @@
 //! the contract is generated into `packages/contracts/src/generated`
 //! and must never be edited by hand.
 
+pub mod bindings;
 pub mod dto;
 
 pub use dto::{

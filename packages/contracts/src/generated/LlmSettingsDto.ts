@@ -8,7 +8,7 @@ export type LlmSettingsDto = { schema_version: number,
 /**
  * Provider preset. Missing legacy values remain local.
  */
-provider: LlmProviderKind,
+provider: LlmProviderKind, 
 /**
  * OpenAI-compatible base URL, e.g. `http://127.0.0.1:8080/v1`.
  */
@@ -17,15 +17,15 @@ base_url: string, model: string,
  * A replacement API key supplied by the UI. It is never persisted or
  * returned by the backend.
  */
-api_key?: string,
+api_key?: string, 
 /**
  * Whether a key is currently stored in the operating-system credential store.
  */
-api_key_configured: boolean,
+api_key_configured: boolean, 
 /**
  * Requests deletion of the stored key. This command-only flag is not persisted.
  */
-clear_api_key?: boolean,
+clear_api_key?: boolean, 
 /**
  * Permit non-loopback endpoints.
  */

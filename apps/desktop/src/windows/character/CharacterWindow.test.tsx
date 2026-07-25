@@ -2,6 +2,10 @@ import type {
   CharacterManifestDto,
   CharacterSettingsDto,
 } from '@parallel-world/contracts';
+import {
+  CHARACTER_SETTINGS_CHANGED_EVENT,
+  RUNTIME_HEALTH_EVENT,
+} from '@parallel-world/contracts';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -176,7 +180,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     h.publish('speech-stop', { schema_version: 1, turn_id: 7 });
     expect(h.player.stop).toHaveBeenCalledOnce();
     expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
-    h.publish('character-settings-changed', { schema_version: 2, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
+    h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, { schema_version: 2, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
     expect(h.idle.setTimeoutSeconds).toHaveBeenLastCalledWith(null);
   });
 
@@ -186,7 +190,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     const h = harness({ settings });
     render(<CharacterWindow dependencies={h.dependencies} />);
     await waitFor(() => expect(h.invokeMock).toHaveBeenCalledWith('get_character_settings'));
-    h.publish('character-settings-changed', {
+    h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
       schema_version: 2,
       settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
     });
@@ -217,7 +221,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     const manifestLoadsBeforeEvents = h.invokeMock.mock.calls
       .filter(([command]) => command === 'get_character_manifest').length;
 
-    h.publish('character-settings-changed', {
+    h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
       schema_version: 2,
       settings: { ...SETTINGS, expression_idle_timeout_seconds: null },
     });
@@ -227,7 +231,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
       manifestLoadsBeforeEvents,
     );
 
-    h.publish('character-settings-changed', {
+    h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
       schema_version: 2,
       settings: {
         ...SETTINGS,
@@ -257,7 +261,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
       return undefined;
     });
     await act(async () => {
-      h.publish('character-settings-changed', {
+      h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
         schema_version: 2,
         settings: { ...SETTINGS, active_character_id: LIVE2D_MANIFEST.id },
       });
@@ -286,7 +290,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     };
 
     await act(async () => {
-      h.publish('character-settings-changed', {
+      h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
         schema_version: 2,
         settings: replacementSettings,
       });
@@ -297,7 +301,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     ).toHaveLength(2));
 
     await act(async () => {
-      h.publish('character-settings-changed', {
+      h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
         schema_version: 2,
         settings: replacementSettings,
       });
@@ -383,7 +387,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
       if (command === 'get_character_settings') return SETTINGS;
       return undefined;
     });
-    h.publish('character-settings-changed', {
+    h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, {
       schema_version: 2,
       settings: SETTINGS,
     });
@@ -408,7 +412,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     render(<CharacterWindow dependencies={h.dependencies} />);
     await waitFor(() => expect(h.dependencies.createRenderer).toHaveBeenCalledOnce());
 
-    h.publish('runtime-health', {
+    h.publish(RUNTIME_HEALTH_EVENT, {
       schema_version: 1,
       feature: 'character_renderer',
       status: 'starting',

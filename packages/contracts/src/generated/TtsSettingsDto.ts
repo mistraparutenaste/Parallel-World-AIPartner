@@ -17,16 +17,16 @@ base_url: string,
 /**
  * Selected TTS engine. Missing legacy values default to `aivis`.
  */
-engine: TtsEngineKind,
+engine: TtsEngineKind, 
 /**
  * Engine-specific selected voice identifier. Missing legacy values are empty.
  */
-voice_id: string,
+voice_id: string, 
 /**
  * Irodori server-side dynamic PEFT `LoRA` adapter directory. Empty uses
  * the base model and remains backward-compatible with existing settings.
  */
-irodori_lora_adapter: string,
+irodori_lora_adapter: string, 
 /**
  * Selected style id (`/speakers` の styles[].id).
  */
