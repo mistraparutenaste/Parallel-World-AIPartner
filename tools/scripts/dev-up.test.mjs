@@ -22,10 +22,28 @@ function quotePowerShell(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+// Windows PowerShell 5.1 encodes its redirected stdout/stderr with the console's
+// output codepage (CP932 on a Japanese Windows), but Node decodes as UTF-8, so the
+// Japanese log lines these tests assert on come back as mojibake. Pinning
+// [Console]::OutputEncoding in the child makes the pipe UTF-8 regardless of the
+// host codepage. Because stdout is redirected here, .NET skips SetConsoleOutputCP,
+// so the developer's own console codepage is left untouched and dev-up.ps1 keeps
+// rendering natively when run by hand. UTF8Encoding $false suppresses the BOM that
+// would otherwise corrupt the JSON some helpers parse out of stdout.
+const forceUtf8Output =
+  "[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false";
+
 function runPowerShell(source, options = {}) {
   return spawnSync(
     "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", source],
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `${forceUtf8Output}; ${source}`,
+    ],
     { encoding: "utf8", timeout: 20_000, ...options },
   );
 }
@@ -139,10 +157,19 @@ async function createCorepackHarness(exitCode = 0) {
   };
 }
 
+// -File takes no prologue, so dot-less-invoke the script from -Command instead and
+// forward its exit code by hand: the tests assert on the native tauri exit code.
 function runDevUp(env) {
   return spawnSync(
     "powershell.exe",
-    ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      `${forceUtf8Output}; $global:LASTEXITCODE = 0; & ${quotePowerShell(scriptPath)}; exit $LASTEXITCODE`,
+    ],
     {
       cwd: repositoryRoot,
       env,
