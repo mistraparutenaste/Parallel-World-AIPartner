@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use pw_contracts::{SCHEMA_VERSION, TtsEngineKind, TtsSettingsDto};
+use pw_platform::config_io::{JsonFormat, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "tts.json";
@@ -86,11 +87,7 @@ pub fn save_tts_settings(layout: &AppDataLayout, settings: &TtsSettingsDto) -> R
             .parse::<u32>()
             .map_err(|_| "Aivis voice_id must be a numeric style ID".to_owned())?;
     }
-    let json = serde_json::to_string_pretty(&normalized)
-        .map_err(|error| format!("failed to serialize settings: {error}"))?;
-    std::fs::create_dir_all(&layout.config)
-        .map_err(|error| format!("failed to create config dir: {error}"))?;
-    std::fs::write(settings_path(layout), json)
+    write_atomic_json(&layout.config, FILE_NAME, &normalized, JsonFormat::Pretty)
         .map_err(|error| format!("failed to write tts.json: {error}"))
 }
 

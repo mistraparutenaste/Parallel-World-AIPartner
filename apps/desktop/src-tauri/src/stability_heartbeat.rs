@@ -6,7 +6,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use pw_platform::{diagnostics::atomic_replace, paths::AppDataLayout};
+use pw_platform::{
+    config_io::{JsonFormat, write_atomic_json_at},
+    paths::AppDataLayout,
+};
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
@@ -160,9 +163,7 @@ fn file_stats(path: &Path) -> (u64, u64) {
 }
 
 fn write_atomic(path: &Path, heartbeat: &StabilityHeartbeat) -> io::Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec(heartbeat)?)?;
-    atomic_replace(&temporary, path)
+    write_atomic_json_at(path, heartbeat, JsonFormat::Compact)
 }
 
 #[cfg(test)]

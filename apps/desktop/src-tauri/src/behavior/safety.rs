@@ -4,12 +4,11 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pw_contracts::DarkExpressionSafetySettingsDto;
+use pw_platform::config_io::{JsonFormat, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
 use unicode_normalization::UnicodeNormalization;
-
-use super::atomic_json::write_atomic_json;
 
 const FILE_NAME: &str = "dark-expression-safety.json";
 
@@ -95,7 +94,13 @@ pub fn save_dark_expression_safety(
     settings: &DarkExpressionSafetySettingsDto,
 ) -> Result<(), String> {
     settings.validate()?;
-    write_atomic_json(&layout.config, FILE_NAME, settings)
+    write_atomic_json(
+        &layout.config,
+        FILE_NAME,
+        settings,
+        JsonFormat::PrettyWithTrailingNewline,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Trims an entered phrase while preserving its user-visible spelling.

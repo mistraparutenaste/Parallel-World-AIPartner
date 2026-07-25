@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use pw_contracts::{LlmProviderKind, LlmSettingsDto, SCHEMA_VERSION};
+use pw_platform::config_io::{JsonFormat, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "llm.json";
@@ -115,11 +116,7 @@ pub fn save_llm_settings(layout: &AppDataLayout, settings: &LlmSettingsDto) -> R
     persisted.api_key.clear();
     persisted.api_key_configured = api_key_configured;
     persisted.clear_api_key = false;
-    let json = serde_json::to_string_pretty(&persisted)
-        .map_err(|error| format!("failed to serialize settings: {error}"))?;
-    std::fs::create_dir_all(&layout.config)
-        .map_err(|error| format!("failed to create config dir: {error}"))?;
-    std::fs::write(settings_path(layout), json)
+    write_atomic_json(&layout.config, FILE_NAME, &persisted, JsonFormat::Pretty)
         .map_err(|error| format!("failed to write llm.json: {error}"))
 }
 

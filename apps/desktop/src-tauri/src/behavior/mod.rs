@@ -1,7 +1,6 @@
 //! Context-aware companion settings persistence.
 
 mod activity;
-mod atomic_json;
 mod mode;
 mod personas;
 mod proactive_runtime;
