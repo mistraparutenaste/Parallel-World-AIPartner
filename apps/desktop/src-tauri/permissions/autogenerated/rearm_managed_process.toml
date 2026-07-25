@@ -1,9 +1,0 @@
-[[permission]]
-identifier = "allow-rearm-managed-process"
-description = "Enables the rearm_managed_process command without any pre-configured scope."
-commands.allow = ["rearm_managed_process"]
-
-[[permission]]
-identifier = "deny-rearm-managed-process"
-description = "Denies the rearm_managed_process command without any pre-configured scope."
-commands.deny = ["rearm_managed_process"]

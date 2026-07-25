@@ -405,12 +405,6 @@
           "markdownDescription": "Enables the read_technical_log command without any pre-configured scope."
         },
         {
-          "description": "Enables the rearm_managed_process command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-rearm-managed-process",
-          "markdownDescription": "Enables the rearm_managed_process command without any pre-configured scope."
-        },
-        {
           "description": "Enables the rearm_runtime_feature command without any pre-configured scope.",
           "type": "string",
           "const": "allow-rearm-runtime-feature",
@@ -799,12 +793,6 @@
           "type": "string",
           "const": "deny-read-technical-log",
           "markdownDescription": "Denies the read_technical_log command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the rearm_managed_process command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-rearm-managed-process",
-          "markdownDescription": "Denies the rearm_managed_process command without any pre-configured scope."
         },
         {
           "description": "Denies the rearm_runtime_feature command without any pre-configured scope.",
