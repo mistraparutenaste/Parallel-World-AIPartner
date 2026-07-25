@@ -3,6 +3,10 @@ import type {
   ThemePreferenceDto,
   UiPreferencesDto,
 } from '@parallel-world/contracts';
+import {
+  CONTROL_CENTER_NAVIGATE_EVENT,
+  UI_PREFERENCES_CHANGED_EVENT,
+} from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
@@ -293,11 +297,11 @@ export function SettingsWindow() {
       .catch(() => {
         if (mounted) setError('設定を読み込めません。診断を確認してください。');
       });
-    const unsubscribe = subscribeEvent<UiPreferencesDto>('ui-preferences-changed', (value) => {
+    const unsubscribe = subscribeEvent<UiPreferencesDto>(UI_PREFERENCES_CHANGED_EVENT, (value) => {
       setPreferences(value);
       applyThemePreference(value.theme);
     });
-    const stopNavigation = subscribeEvent<string>('control-center-navigate', (value) => {
+    const stopNavigation = subscribeEvent<string>(CONTROL_CENTER_NAVIGATE_EVENT, (value) => {
       if (value === 'conversation') {
         cancelScreenTransition();
         setScreenArea('chat');

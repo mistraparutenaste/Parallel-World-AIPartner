@@ -20,7 +20,8 @@ mod update;
 pub use activity::{ACTIVITY_SESSION_SCHEMA_VERSION, ActivitySessionDto, ActivitySessionPageDto};
 pub use app_status::{AppStatusDto, ConversationStateDto, SCHEMA_VERSION};
 pub use audio::{
-    AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, DeviceFallbackEventDto, SttPhaseDto,
+    AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto, DeviceFallbackEventDto,
+    STT_DEVICE_FALLBACK_EVENT, STT_LEVEL_EVENT, STT_STATE_EVENT, STT_TRANSCRIPT_EVENT, SttPhaseDto,
     SttStateEventDto, TranscriptEventDto,
 };
 pub use behavior::{
@@ -33,15 +34,16 @@ pub use behavior::{
     ModeProfilesDto, QuietHoursRuleDto, ScheduleActivationRuleDto, ShortcutSettingsDto,
     TriggerPolicyDto, normalize_activity_app_id,
 };
-pub use character_cursor::CharacterCursorEventDto;
+pub use character_cursor::{CHARACTER_CURSOR_EVENT, CharacterCursorEventDto};
 pub use character_manifest::{
-    CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
-    CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto,
-    CharacterRendererDto, CharacterRendererKindDto, CharacterSettingsChangedEventDto,
-    CharacterSettingsDto, CharacterSetupDto, CharacterSourceStatusDto, MotionGroupDto,
-    StaticExpressionDto,
+    CHARACTER_EXPRESSION_EVENT, CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_MOTION_EVENT,
+    CHARACTER_SETTINGS_CHANGED_EVENT, CHARACTER_SETTINGS_SCHEMA_VERSION,
+    CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
+    CharacterRendererKindDto, CharacterSettingsChangedEventDto, CharacterSettingsDto,
+    CharacterSetupDto, CharacterSourceStatusDto, MotionGroupDto, StaticExpressionDto,
 };
 pub use chat::{
+    CHAT_MESSAGE_EVENT, CONVERSATION_HISTORY_DELETED_EVENT, CONVERSATION_STATE_EVENT,
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
     ConversationMessageDto, ConversationStateEventDto, LlmProviderKind, LlmSettingsDto,
 };
@@ -68,8 +70,11 @@ pub use safety::{
     SafewordTriggeredEventDto,
 };
 pub use tts::{
-    SpeechAudioEventDto, SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
-    TtsVoiceDto, UserDictWordDto,
+    SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, SpeechAudioEventDto, SpeechStopEventDto,
+    TTS_STATE_EVENT, TtsEngineKind, TtsSettingsDto, TtsStateEventDto, TtsVoiceDto, UserDictWordDto,
 };
-pub use ui::{ChatPlacementDto, ThemePreferenceDto, UiPreferencesDto};
-pub use update::{UpdateStateDto, UpdateStatusDto};
+pub use ui::{
+    CONTROL_CENTER_NAVIGATE_EVENT, ChatPlacementDto, ThemePreferenceDto,
+    UI_PREFERENCES_CHANGED_EVENT, UiPreferencesDto,
+};
+pub use update::{UPDATE_PROGRESS_EVENT, UpdateStateDto, UpdateStatusDto};

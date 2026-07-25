@@ -519,7 +519,7 @@ impl ActivityCollectorService {
     /// # Errors
     /// Returns a stable error if the dedicated activity database or worker fails.
     pub fn start(layout: &AppDataLayout) -> Result<Self, ActivityCollectorStartError> {
-        let repository = ActivityDatabase::open(layout.data.join("activity.sqlite3"))
+        let repository = ActivityDatabase::open(layout.activity_database())
             .map_err(|_| ActivityCollectorStartError::Database)?;
         let collector = ActivityCollector::new(
             FileActivitySettingsSource {

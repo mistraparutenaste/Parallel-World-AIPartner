@@ -10,8 +10,13 @@ import type {
   SpeechStopEventDto,
 } from '@parallel-world/contracts';
 import {
+  CHARACTER_CURSOR_EVENT,
+  CHARACTER_EXPRESSION_EVENT,
+  CHARACTER_MOTION_EVENT,
   CHARACTER_SETTINGS_CHANGED_EVENT,
   RUNTIME_HEALTH_EVENT,
+  SPEECH_AUDIO_EVENT,
+  SPEECH_STOP_EVENT,
 } from '@parallel-world/contracts';
 import {
   Live2DController,
@@ -178,14 +183,14 @@ export function CharacterWindow({
     });
     const audioPlayer = player;
     unlisteners.push(
-      dependencies.subscribeEvent<SpeechAudioEventDto>('speech-audio', (payload) => {
+      dependencies.subscribeEvent<SpeechAudioEventDto>(SPEECH_AUDIO_EVENT, (payload) => {
         audioPlayer.enqueue({
           turnId: payload.turn_id,
           seq: payload.seq,
           url: dependencies.convertFileSrc(payload.wav_path),
         });
       }),
-      dependencies.subscribeEvent<SpeechStopEventDto>('speech-stop', () => {
+      dependencies.subscribeEvent<SpeechStopEventDto>(SPEECH_STOP_EVENT, () => {
         audioPlayer.stop();
         renderer?.resetSpeechReaction();
         idle?.activity();
@@ -243,12 +248,12 @@ export function CharacterWindow({
       idle = dependencies.createIdleReset(resetExpression);
 
       unlisteners.push(
-        dependencies.subscribeEvent<string>('character-expression', (name) => {
+        dependencies.subscribeEvent<string>(CHARACTER_EXPRESSION_EVENT, (name) => {
           if (!names.has(name)) return;
           if (!loaded) pendingExpression = name;
           else if (renderer?.setExpression(name)) idle?.activity();
         }),
-        dependencies.subscribeEvent<string>('character-motion', (group) => {
+        dependencies.subscribeEvent<string>(CHARACTER_MOTION_EVENT, (group) => {
           if (loaded && renderer?.startMotion(group)) idle?.activity();
         }),
         dependencies.subscribeEvent<ConversationStateEventDto>(
@@ -258,7 +263,7 @@ export function CharacterWindow({
             if (conversationState === 'interrupting') renderer?.resetSpeechReaction();
           },
         ),
-        dependencies.subscribeEvent<CharacterCursorEventDto>('character-cursor', (payload) => {
+        dependencies.subscribeEvent<CharacterCursorEventDto>(CHARACTER_CURSOR_EVENT, (payload) => {
           const overCharacter = loaded ? (renderer?.hitTest(payload.x, payload.y) ?? false) : true;
           if (overCharacter === interactive) return;
           interactive = overCharacter;

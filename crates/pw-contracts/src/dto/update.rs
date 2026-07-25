@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const UPDATE_PROGRESS_EVENT: &str = "update-progress";
+
 /// Stable updater lifecycle exposed to the Settings window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]

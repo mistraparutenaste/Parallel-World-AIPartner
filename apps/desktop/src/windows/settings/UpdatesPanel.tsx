@@ -1,7 +1,8 @@
 import type { UpdateStateDto } from '@parallel-world/contracts';
+import { UPDATE_PROGRESS_EVENT } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
 
 const ACTIVE = new Set<UpdateStateDto['status']>(['checking', 'downloading', 'installing']);
 
@@ -14,14 +15,10 @@ export function UpdatesPanel() {
     void invoke<UpdateStateDto>('get_update_state').then((value) => {
       if (active) setState(value);
     }).catch((error) => { if (active) setRequestError(String(error)); });
-    let dispose: (() => void) | undefined;
-    void Promise.resolve()
-      .then(() => listen<UpdateStateDto>('update-progress', ({ payload }) => {
-        if (active) setState(payload);
-      }))
-      .then((unlisten) => { if (active) dispose = unlisten; else unlisten(); })
-      .catch(() => undefined);
-    return () => { active = false; dispose?.(); };
+    const dispose = subscribeEvent<UpdateStateDto>(UPDATE_PROGRESS_EVENT, (payload) => {
+      if (active) setState(payload);
+    });
+    return () => { active = false; dispose(); };
   }, []);
 
   const busy = state !== null && ACTIVE.has(state.status);

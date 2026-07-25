@@ -1,11 +1,8 @@
 //! Global character selection and behavior settings persistence.
 
-use std::fs;
-use std::io;
-
 use pw_contracts::{CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterSettingsDto};
 use pw_platform::{
-    config_io::{JsonFormat, write_atomic_json},
+    config_io::{JsonFormat, read_json_lenient, write_atomic_json},
     paths::AppDataLayout,
 };
 
@@ -81,27 +78,13 @@ fn migrate_settings(mut settings: CharacterSettingsDto) -> Result<CharacterSetti
 #[must_use]
 pub fn load_character_settings(layout: &AppDataLayout) -> CharacterSettingsDto {
     let path = layout.config.join(SETTINGS_FILE_NAME);
-    let raw = match fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            return CharacterSettingsDto::default();
-        }
-        Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "failed to read character settings; using defaults");
-            return CharacterSettingsDto::default();
-        }
+    let Some(settings) = read_json_lenient::<CharacterSettingsDto>(&path) else {
+        return CharacterSettingsDto::default();
     };
-
-    match serde_json::from_str::<CharacterSettingsDto>(&raw) {
-        Ok(settings) => match migrate_settings(settings) {
-            Ok(settings) => settings,
-            Err(error) => {
-                tracing::warn!(%error, path = %path.display(), "invalid character settings; using defaults");
-                CharacterSettingsDto::default()
-            }
-        },
+    match migrate_settings(settings) {
+        Ok(settings) => settings,
         Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "failed to parse character settings; using defaults");
+            tracing::warn!(%error, path = %path.display(), "invalid character settings; using defaults");
             CharacterSettingsDto::default()
         }
     }

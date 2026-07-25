@@ -3,13 +3,13 @@ import { act } from 'react';
 import { vi } from 'vitest';
 import { mergeHealthEvents, RuntimeHealthPanel } from './RuntimeHealthPanel';
 
-let listener: ((event: { payload: any }) => void) | undefined;
+let listener: ((payload: any) => void) | undefined;
 const { invokeMock } = vi.hoisted(() => ({
   invokeMock: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(async (_name, callback) => {
-    listener = callback;
+vi.mock('../../shared/ipc/event-bus', () => ({
+  subscribeEvent: vi.fn((_name: string, handler: (payload: any) => void) => {
+    listener = handler;
     return () => undefined;
   }),
 }));
@@ -17,7 +17,7 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
 
 async function publish(payload: any) {
   await waitFor(() => expect(listener).toBeDefined());
-  await act(async () => listener?.({ payload }));
+  await act(async () => listener?.(payload));
 }
 
 test('runtime health event renders ownership and retry state', async () => {

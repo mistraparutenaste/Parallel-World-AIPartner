@@ -6,7 +6,12 @@ import type {
   RuntimeHealthEventDto,
   SttStateEventDto,
 } from '@parallel-world/contracts';
-import { RUNTIME_HEALTH_EVENT } from '@parallel-world/contracts';
+import {
+  RUNTIME_HEALTH_EVENT,
+  STT_DEVICE_FALLBACK_EVENT,
+  STT_LEVEL_EVENT,
+  STT_STATE_EVENT,
+} from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
@@ -63,7 +68,7 @@ export function MicrophonePanel() {
       });
     void refreshDevices();
 
-    const stopState = subscribeEvent<SttStateEventDto>('stt-state', (payload) => {
+    const stopState = subscribeEvent<SttStateEventDto>(STT_STATE_EVENT, (payload) => {
       stateEventSeen = true;
       setPhase(payload.phase);
       setMessage(payload.message ?? null);
@@ -76,7 +81,7 @@ export function MicrophonePanel() {
         }
       })
       .catch(() => {});
-    const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
+    const stopLevel = subscribeEvent<AudioLevelEventDto>(STT_LEVEL_EVENT, (payload) => {
       setLevel(payload.rms);
     });
     const stopHealth = subscribeEvent<RuntimeHealthEventDto>(RUNTIME_HEALTH_EVENT, (payload) => {
@@ -92,7 +97,7 @@ export function MicrophonePanel() {
         setMessage(null);
       }
     });
-    const stopFallback = subscribeEvent<DeviceFallbackEventDto>('stt-device-fallback', (payload) => {
+    const stopFallback = subscribeEvent<DeviceFallbackEventDto>(STT_DEVICE_FALLBACK_EVENT, (payload) => {
       setFallbackMessage(`選択したマイクが見つからないため、既定のマイク（${payload.active_device_id ?? '自動選択'}）を使用しています。`);
       void refreshDevices();
     });

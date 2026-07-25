@@ -96,13 +96,16 @@ pub struct DialogueClassifier;
 impl DialogueClassifier {
     #[must_use]
     pub fn classify(&self, current_utterance: &str, history: &[ChatMessage]) -> TurnStyleContract {
-        let recent_assistant_question_endings = history
-            .iter()
-            .rev()
-            .filter(|message| message.role == ChatRole::Assistant)
-            .take(3)
-            .filter(|message| assistant_ends_with_question(&message.content))
-            .count() as u8;
+        let recent_assistant_question_endings = u8::try_from(
+            history
+                .iter()
+                .rev()
+                .filter(|message| message.role == ChatRole::Assistant)
+                .take(3)
+                .filter(|message| assistant_ends_with_question(&message.content))
+                .count(),
+        )
+        .unwrap_or(u8::MAX);
         let normalized = current_utterance.trim().to_lowercase();
         let (turn_kind, question_policy, closing_preference) = if is_greeting(&normalized) {
             (
@@ -390,6 +393,9 @@ impl ResponsePlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SurfaceContext {
     pub response_mode: String,
+    /// Task goal for this turn. Kept separate from `tone_hint` so task
+    /// wording never masquerades as a tone instruction.
+    pub goal: Option<String>,
     pub tone_hint: Option<String>,
     pub relevant_facts: Vec<String>,
 }
@@ -499,6 +505,10 @@ impl SurfaceContext {
     /// Returns an error for unbounded or blank surface data.
     pub fn validate(&self) -> Result<(), PortError> {
         if !is_bounded_text(&self.response_mode, MAX_SURFACE_HINT_CHARS)
+            || self
+                .goal
+                .as_deref()
+                .is_some_and(|goal| !is_bounded_text(goal, MAX_SURFACE_HINT_CHARS))
             || self
                 .tone_hint
                 .as_deref()
@@ -775,7 +785,8 @@ impl SurfaceRealizer for FixedSurfaceRealizer {
     fn realize(&mut self, plan: &ResponsePlan) -> Result<SurfaceContext, PortError> {
         Ok(SurfaceContext {
             response_mode: plan.kind.surface_label().into(),
-            tone_hint: Some(plan.goal.clone()),
+            goal: Some(plan.goal.clone()),
+            tone_hint: None,
             relevant_facts: plan.directives.clone(),
         })
     }
@@ -829,7 +840,7 @@ mod tests {
             ChatMessage::new(ChatRole::Assistant, "newest question？"),
         ];
 
-        let contract = DialogueClassifier::default().classify("Explain the trade-off.", &history);
+        let contract = DialogueClassifier.classify("Explain the trade-off.", &history);
 
         assert_eq!(contract.recent_assistant_question_endings, 2);
         assert_eq!(contract.turn_kind, DialogueTurnKind::AnswerOrRequest);
@@ -844,7 +855,7 @@ mod tests {
     fn explicit_request_for_questions_can_override_cadence_preference() {
         let history = vec![ChatMessage::new(ChatRole::Assistant, "What is the goal?")];
 
-        let contract = DialogueClassifier::default().classify(
+        let contract = DialogueClassifier.classify(
             "Ask me one question at a time to clarify the plan.",
             &history,
         );
@@ -859,7 +870,7 @@ mod tests {
 
     #[test]
     fn japanese_greeting_avoids_a_question_ending() {
-        let contract = DialogueClassifier::default().classify("こんにちは", &[]);
+        let contract = DialogueClassifier.classify("こんにちは", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::Greeting);
         assert_eq!(
@@ -871,7 +882,7 @@ mod tests {
 
     #[test]
     fn japanese_compliment_avoids_a_question_ending() {
-        let contract = DialogueClassifier::default().classify("説明が分かりやすいです", &[]);
+        let contract = DialogueClassifier.classify("説明が分かりやすいです", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::Compliment);
         assert_eq!(
@@ -883,7 +894,7 @@ mod tests {
 
     #[test]
     fn casual_observation_allows_a_contentful_question_without_recent_questions() {
-        let contract = DialogueClassifier::default().classify("今日は雨です", &[]);
+        let contract = DialogueClassifier.classify("今日は雨です", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::CasualObservation);
         assert_eq!(
@@ -901,7 +912,7 @@ mod tests {
     fn casual_observation_avoids_a_question_after_a_recent_assistant_question() {
         let history = [ChatMessage::new(ChatRole::Assistant, "How are you?")];
 
-        let contract = DialogueClassifier::default().classify("今日は雨です", &history);
+        let contract = DialogueClassifier.classify("今日は雨です", &history);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::CasualObservation);
         assert_eq!(
@@ -915,7 +926,7 @@ mod tests {
     #[test]
     fn ordinary_questions_and_requests_do_not_request_questioning() {
         for utterance in ["どうすればいい？", "相談したい", "help me decide"] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -944,7 +955,7 @@ mod tests {
             "Ask me questions is a phrase we discussed.",
             "\"Ask me questions\" is a phrase we discussed.",
         ] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -966,7 +977,7 @@ mod tests {
 
     #[test]
     fn ordinary_command_with_an_appraisal_word_remains_answer_or_request() {
-        let contract = DialogueClassifier::default().classify("recommend nice restaurants", &[]);
+        let contract = DialogueClassifier.classify("recommend nice restaurants", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::AnswerOrRequest);
         assert_eq!(
@@ -978,7 +989,7 @@ mod tests {
 
     #[test]
     fn compliment_with_show_as_a_noun_remains_a_compliment() {
-        let contract = DialogueClassifier::default().classify("Great show today!", &[]);
+        let contract = DialogueClassifier.classify("Great show today!", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::Compliment);
         assert_eq!(
@@ -990,7 +1001,7 @@ mod tests {
 
     #[test]
     fn japanese_explicit_questioning_remains_requested() {
-        let contract = DialogueClassifier::default().classify("質問を一つずつして", &[]);
+        let contract = DialogueClassifier.classify("質問を一つずつして", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
         assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
@@ -1002,8 +1013,7 @@ mod tests {
 
     #[test]
     fn japanese_requested_questioning_with_follow_on_goal_is_requested() {
-        let contract =
-            DialogueClassifier::default().classify("質問を一つずつして、計画を整理して", &[]);
+        let contract = DialogueClassifier.classify("質問を一つずつして、計画を整理して", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
         assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
@@ -1021,7 +1031,7 @@ mod tests {
             "「質問を一つずつして、計画を整理して」は依頼文の例です",
             "質問を一つずつして、計画を整理してという例を説明して",
         ] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -1047,7 +1057,7 @@ mod tests {
             "ask me questions to discuss the weather",
             "ask me questions to discuss great ideas",
         ] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -1069,7 +1079,7 @@ mod tests {
 
     #[test]
     fn natural_japanese_polite_question_command_is_requested() {
-        let contract = DialogueClassifier::default().classify("質問してください", &[]);
+        let contract = DialogueClassifier.classify("質問してください", &[]);
 
         assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
         assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
@@ -1087,7 +1097,7 @@ mod tests {
             "「質問してください」は依頼文の例です",
             "質問してくださいという表現を説明して",
         ] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -1110,7 +1120,7 @@ mod tests {
     #[test]
     fn requests_with_compliment_or_observation_words_remain_answer_or_request() {
         for utterance in ["show weather forecast", "I need nice advice"] {
-            let contract = DialogueClassifier::default().classify(utterance, &[]);
+            let contract = DialogueClassifier.classify(utterance, &[]);
 
             assert_eq!(
                 contract.turn_kind,
@@ -1161,7 +1171,7 @@ mod tests {
                 assistant_ends_with_question(assistant_question),
                 "{assistant_question}"
             );
-            let contract = DialogueClassifier::default().classify(
+            let contract = DialogueClassifier.classify(
                 "今日は雨です",
                 &[ChatMessage::new(ChatRole::Assistant, assistant_question)],
             );
@@ -1210,6 +1220,7 @@ mod tests {
         assert!(plan.validate().is_err());
         let surface = SurfaceContext {
             response_mode: "memory".into(),
+            goal: None,
             tone_hint: None,
             relevant_facts: vec!["x".repeat(MAX_SURFACE_FACT_CHARS + 1)],
         };
@@ -1274,6 +1285,7 @@ mod tests {
         fn realize(&mut self, _plan: &ResponsePlan) -> Result<SurfaceContext, PortError> {
             Ok(SurfaceContext {
                 response_mode: "planned".into(),
+                goal: None,
                 tone_hint: None,
                 relevant_facts: Vec::new(),
             })
@@ -1475,6 +1487,7 @@ mod tests {
             self.0 += 1;
             Ok(SurfaceContext {
                 response_mode: "recovered-planned".into(),
+                goal: None,
                 tone_hint: None,
                 relevant_facts: Vec::new(),
             })

@@ -1,9 +1,7 @@
 //! Atomic persistence for `config/behavior.json`.
 
-use std::fs;
-
 use pw_contracts::BehaviorSettingsDto;
-use pw_platform::config_io::{JsonFormat, write_atomic_json};
+use pw_platform::config_io::{JsonFormat, ReadJsonError, read_json, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 use thiserror::Error;
 
@@ -20,14 +18,7 @@ pub enum BehaviorSettingsLoadError {
 /// Loads behavior settings, returning privacy-safe defaults for any invalid input.
 #[must_use]
 pub fn load_behavior_settings(layout: &AppDataLayout) -> BehaviorSettingsDto {
-    let path = layout.config.join(FILE_NAME);
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return BehaviorSettingsDto::default();
-    };
-    match serde_json::from_str::<BehaviorSettingsDto>(&raw) {
-        Ok(settings) if settings.validate().is_ok() => settings,
-        Ok(_) | Err(_) => BehaviorSettingsDto::default(),
-    }
+    load_behavior_settings_checked(layout).unwrap_or_default()
 }
 
 /// Loads behavior settings while distinguishing invalid/unreadable input from
@@ -38,16 +29,12 @@ pub fn load_behavior_settings(layout: &AppDataLayout) -> BehaviorSettingsDto {
 pub fn load_behavior_settings_checked(
     layout: &AppDataLayout,
 ) -> Result<BehaviorSettingsDto, BehaviorSettingsLoadError> {
-    let path = layout.config.join(FILE_NAME);
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(BehaviorSettingsDto::default());
-        }
-        Err(_) => return Err(BehaviorSettingsLoadError::Io),
+    let settings = match read_json::<BehaviorSettingsDto>(&layout.config.join(FILE_NAME)) {
+        Ok(None) => return Ok(BehaviorSettingsDto::default()),
+        Ok(Some(settings)) => settings,
+        Err(ReadJsonError::Io(_)) => return Err(BehaviorSettingsLoadError::Io),
+        Err(ReadJsonError::Parse(_)) => return Err(BehaviorSettingsLoadError::Invalid),
     };
-    let settings = serde_json::from_str::<BehaviorSettingsDto>(&raw)
-        .map_err(|_| BehaviorSettingsLoadError::Invalid)?;
     settings
         .validate()
         .map_err(|_| BehaviorSettingsLoadError::Invalid)?;

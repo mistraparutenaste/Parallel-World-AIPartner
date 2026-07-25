@@ -1,8 +1,8 @@
 import type { RuntimeDiagnosticsDto, RuntimeHealthEventDto } from '@parallel-world/contracts';
 import { RUNTIME_HEALTH_EVENT } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
+import { subscribeEvent } from '../../shared/ipc/event-bus';
 
 const LABELS: Record<RuntimeHealthEventDto['feature'], string> = {
   audio_input: 'マイク',
@@ -49,20 +49,16 @@ export function RuntimeHealthPanel() {
       .catch(() => undefined);
     refresh();
     const poll = window.setInterval(refresh, 5_000);
-    let dispose: (() => void) | undefined;
-    void Promise.resolve()
-      .then(() => listen<RuntimeHealthEventDto>(RUNTIME_HEALTH_EVENT, ({ payload }) => {
+    const dispose = subscribeEvent<RuntimeHealthEventDto>(
+      RUNTIME_HEALTH_EVENT,
+      (payload) => {
         if (active) setHealth((current) => mergeHealthEvents(current, [payload]));
-      }))
-      .then((unlisten) => {
-        if (active) dispose = unlisten;
-        else unlisten();
-      })
-      .catch(() => undefined);
+      },
+    );
     return () => {
       active = false;
       window.clearInterval(poll);
-      dispose?.();
+      dispose();
     };
   }, []);
 

@@ -75,6 +75,26 @@
     "expected_recent_question_endings": 0
   },
   {
+    "name": "quiet_multiline_japanese_persona_is_preserved_for_a_greeting",
+    "persona": "プロフィール:\n- 名前: 燈\n- 話し方: ぶっきらぼうで口数が少ない\n会話の傾向:\n- 返事はひとこと、ふたことのごく短いものにする",
+    "history": [],
+    "utterance": "こんにちは",
+    "expected_turn_kind": "greeting",
+    "expected_question_policy": "avoid_question_ending",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "talkative_multiline_japanese_persona_is_preserved_for_a_greeting",
+    "persona": "プロフィール:\n- 名前: ひまり\n- 話し方: 明るく饒舌で、感嘆詞が多い\n会話の傾向:\n- 話し好きで、具体例や余談も交えてたっぷり話す",
+    "history": [],
+    "utterance": "こんにちは",
+    "expected_turn_kind": "greeting",
+    "expected_question_policy": "avoid_question_ending",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 0
+  },
+  {
     "name": "japanese_explicit_questioning_is_permitted",
     "persona": "You are a calm office assistant who speaks plainly.",
     "history": ["What outcome matters most?"],

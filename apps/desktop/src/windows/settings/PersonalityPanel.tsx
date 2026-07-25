@@ -40,6 +40,7 @@ type NarrativeDraft = {
   user_address: string;
   relationship: string;
   speaking_style: string;
+  example_utterances: string;
   interests: string;
   dislikes: string;
   values: string;
@@ -78,6 +79,14 @@ function parseDraftList(value: string) {
     .filter((item) => item !== '');
 }
 
+/* Utterances may legitimately contain 読点, so only newlines separate them. */
+function parseUtterances(value: string) {
+  return value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter((item) => item !== '');
+}
+
 function narrativeFromProfile(profile: PersonaProfileDto): NarrativeDraft {
   return {
     name: profile.name,
@@ -86,6 +95,7 @@ function narrativeFromProfile(profile: PersonaProfileDto): NarrativeDraft {
     user_address: profile.user_address,
     relationship: profile.relationship,
     speaking_style: profile.speaking_style,
+    example_utterances: profile.example_utterances.join('\n'),
     interests: listToDraft(profile.interests),
     dislikes: listToDraft(profile.dislikes),
     values: listToDraft(profile.values),
@@ -107,6 +117,7 @@ function profileWithNarrative(
     user_address: draft.user_address,
     relationship: draft.relationship,
     speaking_style: draft.speaking_style,
+    example_utterances: parseUtterances(draft.example_utterances),
     interests: parseDraftList(draft.interests),
     dislikes: parseDraftList(draft.dislikes),
     values: parseDraftList(draft.values),
@@ -466,6 +477,7 @@ export function PersonalityPanel() {
                 </div>
                 <div className="personality-fields">
                   <NarrativeField label="話し方" value={narrative.speaking_style} full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, speaking_style: value })} />
+                  <NarrativeField label="口調の例（1行に1つ、最大10件）" value={narrative.example_utterances} multiline full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, example_utterances: value })} />
                   <NarrativeField label="興味" value={narrative.interests} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, interests: value })} />
                   <NarrativeField label="苦手なもの" value={narrative.dislikes} disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, dislikes: value })} />
                   <NarrativeField label="価値観" value={narrative.values} full disabled={savingProfile} onChange={(value) => setNarrative({ ...narrative, values: value })} />

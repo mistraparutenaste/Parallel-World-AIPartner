@@ -1,8 +1,11 @@
 name: CI
 
-# 日常のゲートは docs/development/getting-started.md のローカル実行が担う。
-# ここはローカルで再現できないOSを確認したいときだけ手動で回す。
+# push / pull_request では windows のみを回して常時ゲートとする。
+# ローカルで再現できないOSを追加で確認したいときは手動実行でOSを選ぶ。
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
     inputs:
       os:
@@ -20,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.os == 'both' && '["windows-latest", "macos-latest"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-latest"]') }}
+        os: ${{ fromJSON(github.event_name != 'workflow_dispatch' && '["windows-latest"]' || inputs.os == 'both' && '["windows-latest", "macos-latest"]' || inputs.os == 'windows' && '["windows-latest"]' || '["macos-latest"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -62,3 +65,11 @@ jobs:
 
       - name: Rust tests
         run: cargo test --workspace
+
+      # pw-contracts のテストは packages/contracts の生成物を再生成して
+      # コミット済みの内容と差分比較する。再生成忘れをここで落とす。
+      - name: Contract bindings drift
+        run: cargo test -p pw-contracts
+
+      - name: Distribution config
+        run: pnpm distribution:verify

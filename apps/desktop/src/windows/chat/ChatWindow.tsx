@@ -11,9 +11,14 @@ import type {
   UiPreferencesDto,
 } from '@parallel-world/contracts';
 import {
+  CHAT_MESSAGE_EVENT,
+  CONVERSATION_HISTORY_DELETED_EVENT,
+  CONVERSATION_STATE_EVENT,
   DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
   DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
   SAFEWORD_TRIGGERED_EVENT,
+  TTS_STATE_EVENT,
+  UI_PREFERENCES_CHANGED_EVENT,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
@@ -61,11 +66,11 @@ export function ChatWindow({ inactive = false }: { inactive?: boolean }) {
   useEffect(() => {
     let mounted = true;
     const stopPreferences = subscribeEvent<UiPreferencesDto>(
-      'ui-preferences-changed',
+      UI_PREFERENCES_CHANGED_EVENT,
       (preferences) => applyThemePreference(preferences.theme),
     );
     const stopMessages = subscribeEvent<ChatMessageEventDto>(
-      'chat-message',
+      CHAT_MESSAGE_EVENT,
       (payload) => {
         setWaiting(false);
         setMessages((current) => {
@@ -122,7 +127,7 @@ export function ChatWindow({ inactive = false }: { inactive?: boolean }) {
       .catch(() => {});
 
     const stopState = subscribeEvent<ConversationStateEventDto>(
-      'conversation-state',
+      CONVERSATION_STATE_EVENT,
       (payload) => {
         setWaiting(WAITING_STATES.has(payload.state));
         const failure = naturalFailure(payload.state);
@@ -133,13 +138,13 @@ export function ChatWindow({ inactive = false }: { inactive?: boolean }) {
       },
     );
 
-    const stopTts = subscribeEvent<TtsStateEventDto>('tts-state', (payload) => {
+    const stopTts = subscribeEvent<TtsStateEventDto>(TTS_STATE_EVENT, (payload) => {
       if (!payload.available) {
         setNotice('声がうまく出ないみたい。文字では話せるよ');
       }
     });
     const stopDeleted = subscribeEvent<ConversationHistoryDeletedEventDto>(
-      'conversation-history-deleted',
+      CONVERSATION_HISTORY_DELETED_EVENT,
       () => setMessages([]),
     );
     const stopSafetyChanged = subscribeEvent<DarkExpressionSafetyChangedEventDto>(

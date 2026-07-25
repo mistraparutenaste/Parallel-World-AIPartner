@@ -34,6 +34,17 @@ impl Drop for StreamWorkerGuard {
     }
 }
 
+/// Sampling controls forwarded to the endpoint. `None` omits the key
+/// entirely so the server default stays in effect.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct SamplingOptions {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub max_tokens: Option<u32>,
+    /// llama.cpp / LM Studio extension; strict `OpenAI` endpoints reject it.
+    pub repeat_penalty: Option<f64>,
+}
+
 /// Connection settings for one OpenAI-compatible server.
 #[derive(Debug, Clone)]
 pub struct LlmClientConfig {
@@ -46,6 +57,7 @@ pub struct LlmClientConfig {
     pub allow_remote: bool,
     /// Overall request timeout.
     pub timeout: Duration,
+    pub sampling: SamplingOptions,
 }
 
 impl Default for LlmClientConfig {
@@ -56,6 +68,7 @@ impl Default for LlmClientConfig {
             api_key: None,
             allow_remote: false,
             timeout: Duration::from_mins(2),
+            sampling: SamplingOptions::default(),
         }
     }
 }
@@ -95,6 +108,36 @@ fn role_str(role: ChatRole) -> &'static str {
     }
 }
 
+fn build_request_body(config: &LlmClientConfig, messages: &[ChatMessage]) -> serde_json::Value {
+    let mut body = json!({
+        "model": config.model,
+        "stream": true,
+        "messages": messages
+            .iter()
+            .map(|message| json!({
+                "role": role_str(message.role),
+                "content": message.content,
+            }))
+            .collect::<Vec<_>>(),
+    });
+    let object = body
+        .as_object_mut()
+        .expect("request body is always a json object");
+    if let Some(temperature) = config.sampling.temperature {
+        object.insert("temperature".into(), json!(temperature));
+    }
+    if let Some(top_p) = config.sampling.top_p {
+        object.insert("top_p".into(), json!(top_p));
+    }
+    if let Some(max_tokens) = config.sampling.max_tokens {
+        object.insert("max_tokens".into(), json!(max_tokens));
+    }
+    if let Some(repeat_penalty) = config.sampling.repeat_penalty {
+        object.insert("repeat_penalty".into(), json!(repeat_penalty));
+    }
+    body
+}
+
 #[derive(Deserialize)]
 struct StreamChunk {
     choices: Vec<StreamChoice>,
@@ -117,17 +160,7 @@ impl LlmClient for OpenAiCompatClient {
         cancel: &AtomicBool,
         on_delta: &mut dyn FnMut(&str),
     ) -> Result<(), PortError> {
-        let body = json!({
-            "model": self.config.model,
-            "stream": true,
-            "messages": messages
-                .iter()
-                .map(|message| json!({
-                    "role": role_str(message.role),
-                    "content": message.content,
-                }))
-                .collect::<Vec<_>>(),
-        });
+        let body = build_request_body(&self.config, messages);
 
         if cancel.load(Ordering::Relaxed) {
             return Ok(());
@@ -269,6 +302,37 @@ fn stream_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sampling_defaults_leave_the_request_body_untouched() {
+        let config = LlmClientConfig::default();
+        let body = build_request_body(&config, &[ChatMessage::new(ChatRole::User, "hi")]);
+        let keys: Vec<&str> = body
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["messages", "model", "stream"]);
+    }
+
+    #[test]
+    fn configured_sampling_values_are_forwarded() {
+        let config = LlmClientConfig {
+            sampling: SamplingOptions {
+                temperature: Some(1.3),
+                top_p: Some(0.9),
+                max_tokens: Some(256),
+                repeat_penalty: Some(1.1),
+            },
+            ..LlmClientConfig::default()
+        };
+        let body = build_request_body(&config, &[ChatMessage::new(ChatRole::User, "hi")]);
+        assert_eq!(body["temperature"], 1.3);
+        assert_eq!(body["top_p"], 0.9);
+        assert_eq!(body["max_tokens"], 256);
+        assert_eq!(body["repeat_penalty"], 1.1);
+    }
 
     #[test]
     fn cancellation_wins_over_an_already_received_delta_or_error() {

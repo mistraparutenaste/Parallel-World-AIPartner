@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 
 use crate::ui::{load_preferences, save_preferences};
 
-pub const UI_PREFERENCES_EVENT: &str = "ui-preferences-changed";
+pub const UI_PREFERENCES_EVENT: &str = pw_contracts::UI_PREFERENCES_CHANGED_EVENT;
 
 trait ChatPlacementWindows {
     fn show_chat(&mut self) -> Result<(), String>;

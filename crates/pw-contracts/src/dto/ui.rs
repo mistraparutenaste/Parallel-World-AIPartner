@@ -3,6 +3,9 @@ use ts_rs::TS;
 
 use super::SCHEMA_VERSION;
 
+pub const UI_PREFERENCES_CHANGED_EVENT: &str = "ui-preferences-changed";
+pub const CONTROL_CENTER_NAVIGATE_EVENT: &str = "control-center-navigate";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 #[ts(export_to = "ThemePreferenceDto.ts")]

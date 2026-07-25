@@ -68,7 +68,7 @@ pub fn list_activity_sessions(
     if !(1..=MAX_PAGE_SIZE).contains(&limit) {
         return Err("activity page size must be between 1 and 100".to_owned());
     }
-    let database = ActivityDatabase::open(layout.data.join("activity.sqlite3"))
+    let database = ActivityDatabase::open(layout.activity_database())
         .map_err(|_| "activity history is unavailable".to_owned())?;
     let page = database
         .page_sessions(limit, before_id)

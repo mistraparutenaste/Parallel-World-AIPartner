@@ -20,6 +20,10 @@ const SETTINGS: LlmSettingsDto = {
   system_prompt: '規則',
   character_prompt: 'キャラ',
   strip_emoji: true,
+  temperature: null,
+  top_p: null,
+  max_tokens: null,
+  repeat_penalty: null,
 };
 
 describe('LlmPanel', () => {
@@ -71,6 +75,26 @@ describe('LlmPanel', () => {
         allow_remote: true,
         api_key: 'gemini-secret',
       },
+    });
+  });
+
+  it('saves sampling parameters and clears them back to server defaults', async () => {
+    render(<LlmPanel />);
+    const temperature = await screen.findByLabelText('temperature（0〜2）');
+
+    fireEvent.change(temperature, { target: { value: '1.2' } });
+    fireEvent.change(screen.getByLabelText('最大トークン数'), {
+      target: { value: '256' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(invokeMock).toHaveBeenCalledWith('set_llm_settings', {
+      settings: { ...SETTINGS, temperature: 1.2, max_tokens: 256 },
+    });
+
+    fireEvent.change(temperature, { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(invokeMock).toHaveBeenLastCalledWith('set_llm_settings', {
+      settings: { ...SETTINGS, temperature: null, max_tokens: 256 },
     });
   });
 

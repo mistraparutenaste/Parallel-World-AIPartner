@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use pw_contracts::{SCHEMA_VERSION, UpdateStateDto, UpdateStatusDto};
 use thiserror::Error;
 
-pub const UPDATE_PROGRESS_EVENT: &str = "update-progress";
+pub const UPDATE_PROGRESS_EVENT: &str = pw_contracts::UPDATE_PROGRESS_EVENT;
 
 #[derive(Debug, Error)]
 pub enum UpdateError {

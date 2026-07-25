@@ -3,6 +3,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const CHARACTER_CURSOR_EVENT: &str = "character-cursor";
+
 /// Cursor position relative to the character window client area, in
 /// CSS pixels. Streamed by the Rust cursor watcher so the window can
 /// hit-test even while cursor events are ignored (click-through).

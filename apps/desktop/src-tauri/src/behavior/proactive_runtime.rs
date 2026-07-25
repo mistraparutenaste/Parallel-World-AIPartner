@@ -201,7 +201,7 @@ fn runtime_tick<R: Runtime>(
     .map_err(|error| error.to_string())?;
     publish_mode_if_changed(app, mode_state, &resolved.active_mode);
 
-    let database_path = layout.data.join("activity.sqlite3");
+    let database_path = layout.activity_database();
     let history = ActivityDatabase::open(&database_path).map_err(|error| error.to_string())?;
     let page = history
         .page_sessions(1, None)
@@ -221,7 +221,7 @@ fn runtime_tick<R: Runtime>(
     if !trigger_enabled(&settings, candidate.kind()) || in_quiet_hours(&settings, &local) {
         return Ok(());
     }
-    let temporary = Database::open(layout.data.join("parallel-world.sqlite3"))
+    let temporary = Database::open(layout.main_database())
         .ok()
         .map(SqliteCompanionStateStore::new)
         .and_then(|store| {
@@ -309,8 +309,8 @@ fn persist_and_deliver<R: Runtime>(
     settings: &BehaviorSettingsDto,
     tts_enabled: bool,
 ) -> Result<(), String> {
-    let mut activity = ActivityDatabase::open(layout.data.join("activity.sqlite3"))
-        .map_err(|error| error.to_string())?;
+    let mut activity =
+        ActivityDatabase::open(layout.activity_database()).map_err(|error| error.to_string())?;
     let frequency = frequency_policy(settings);
     let outcome = activity
         .record_final_speak(FinalSpeakDecisionRequest {
@@ -327,8 +327,7 @@ fn persist_and_deliver<R: Runtime>(
     if !matches!(outcome, FinalSpeakDecisionOutcome::Inserted { .. }) {
         return Ok(());
     }
-    let database = Database::open(layout.data.join("parallel-world.sqlite3"))
-        .map_err(|error| error.to_string())?;
+    let database = Database::open(layout.main_database()).map_err(|error| error.to_string())?;
     let mut history = SqliteConversationHistory::new(database);
     let persisted = history
         .append_proactive_assistant(&ProactiveAssistantMessage {

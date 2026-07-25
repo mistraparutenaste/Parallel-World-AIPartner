@@ -3,6 +3,10 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const SPEECH_AUDIO_EVENT: &str = "speech-audio";
+pub const SPEECH_STOP_EVENT: &str = "speech-stop";
+pub const TTS_STATE_EVENT: &str = "tts-state";
+
 /// Supported TTS engines.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "lowercase")]

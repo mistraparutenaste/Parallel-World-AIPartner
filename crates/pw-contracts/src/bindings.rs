@@ -23,19 +23,23 @@ use crate::{
     ActiveModeChangedEventDto, ActivityCollectionHealthEventDto, ActivitySessionPageDto,
     AppStatusDto, AudioDeviceDto, AudioDiagnosticsDto, AudioLevelEventDto,
     BEHAVIOR_SETTINGS_CHANGED_EVENT, BEHAVIOR_SETTINGS_SCHEMA_VERSION,
-    BehaviorSettingsChangedEventDto, CHARACTER_MANIFEST_SCHEMA_VERSION,
-    CHARACTER_SETTINGS_CHANGED_EVENT, CHARACTER_SETTINGS_SCHEMA_VERSION,
-    CHARACTER_SETUP_SCHEMA_VERSION, CharacterCursorEventDto, CharacterManifestDto,
-    CharacterSettingsChangedEventDto, CharacterSetupDto, ChatMessageEventDto,
-    ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationStateEventDto,
-    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
-    DARK_EXPRESSION_SAFETY_SCHEMA_VERSION, DarkExpressionSafetyChangedEventDto,
-    DataDeletionResultDto, DataUsageDto, DeviceFallbackEventDto, DiagnosticReportDto,
-    FrontendDiagnosticDto, LlmSettingsDto, MemoryCenterDto, PERSONA_SETTINGS_SCHEMA_VERSION,
-    PersonaSettingsDto, RUNTIME_HEALTH_EVENT, RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT,
-    SCHEMA_VERSION, SafewordTriggeredEventDto, SpeechAudioEventDto, SpeechStopEventDto,
-    SttStateEventDto, TechnicalLogChunkDto, TranscriptEventDto, TtsSettingsDto, TtsStateEventDto,
-    TtsVoiceDto, UiPreferencesDto, UpdateStateDto, UserDictWordDto,
+    BehaviorSettingsChangedEventDto, CHARACTER_CURSOR_EVENT, CHARACTER_EXPRESSION_EVENT,
+    CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_MOTION_EVENT, CHARACTER_SETTINGS_CHANGED_EVENT,
+    CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CHAT_MESSAGE_EVENT,
+    CONTROL_CENTER_NAVIGATE_EVENT, CONVERSATION_HISTORY_DELETED_EVENT, CONVERSATION_STATE_EVENT,
+    CharacterCursorEventDto, CharacterManifestDto, CharacterSettingsChangedEventDto,
+    CharacterSetupDto, ChatMessageEventDto, ConversationHistoryDeletedEventDto,
+    ConversationLogPageDto, ConversationStateEventDto, DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION,
+    DARK_EXPRESSION_SAFETY_CHANGED_EVENT, DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
+    DarkExpressionSafetyChangedEventDto, DataDeletionResultDto, DataUsageDto,
+    DeviceFallbackEventDto, DiagnosticReportDto, FrontendDiagnosticDto, LlmSettingsDto,
+    MemoryCenterDto, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaSettingsDto, RUNTIME_HEALTH_EVENT,
+    RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT, SCHEMA_VERSION, SPEECH_AUDIO_EVENT,
+    SPEECH_STOP_EVENT, STT_DEVICE_FALLBACK_EVENT, STT_LEVEL_EVENT, STT_STATE_EVENT,
+    STT_TRANSCRIPT_EVENT, SafewordTriggeredEventDto, SpeechAudioEventDto, SpeechStopEventDto,
+    SttStateEventDto, TTS_STATE_EVENT, TechnicalLogChunkDto, TranscriptEventDto, TtsSettingsDto,
+    TtsStateEventDto, TtsVoiceDto, UI_PREFERENCES_CHANGED_EVENT, UPDATE_PROGRESS_EVENT,
+    UiPreferencesDto, UpdateStateDto, UserDictWordDto,
 };
 
 /// One `pub const` re-exported into `packages/contracts/src/index.ts`.
@@ -119,6 +123,52 @@ const CONSTANTS: &[(&str, ConstValue)] = &[
     (
         "SAFEWORD_TRIGGERED_EVENT",
         ConstValue::Str(SAFEWORD_TRIGGERED_EVENT),
+    ),
+    ("CHAT_MESSAGE_EVENT", ConstValue::Str(CHAT_MESSAGE_EVENT)),
+    (
+        "CONVERSATION_STATE_EVENT",
+        ConstValue::Str(CONVERSATION_STATE_EVENT),
+    ),
+    (
+        "CONVERSATION_HISTORY_DELETED_EVENT",
+        ConstValue::Str(CONVERSATION_HISTORY_DELETED_EVENT),
+    ),
+    ("SPEECH_AUDIO_EVENT", ConstValue::Str(SPEECH_AUDIO_EVENT)),
+    ("SPEECH_STOP_EVENT", ConstValue::Str(SPEECH_STOP_EVENT)),
+    ("TTS_STATE_EVENT", ConstValue::Str(TTS_STATE_EVENT)),
+    (
+        "STT_TRANSCRIPT_EVENT",
+        ConstValue::Str(STT_TRANSCRIPT_EVENT),
+    ),
+    ("STT_LEVEL_EVENT", ConstValue::Str(STT_LEVEL_EVENT)),
+    ("STT_STATE_EVENT", ConstValue::Str(STT_STATE_EVENT)),
+    (
+        "STT_DEVICE_FALLBACK_EVENT",
+        ConstValue::Str(STT_DEVICE_FALLBACK_EVENT),
+    ),
+    (
+        "CHARACTER_EXPRESSION_EVENT",
+        ConstValue::Str(CHARACTER_EXPRESSION_EVENT),
+    ),
+    (
+        "CHARACTER_MOTION_EVENT",
+        ConstValue::Str(CHARACTER_MOTION_EVENT),
+    ),
+    (
+        "CHARACTER_CURSOR_EVENT",
+        ConstValue::Str(CHARACTER_CURSOR_EVENT),
+    ),
+    (
+        "UI_PREFERENCES_CHANGED_EVENT",
+        ConstValue::Str(UI_PREFERENCES_CHANGED_EVENT),
+    ),
+    (
+        "CONTROL_CENTER_NAVIGATE_EVENT",
+        ConstValue::Str(CONTROL_CENTER_NAVIGATE_EVENT),
+    ),
+    (
+        "UPDATE_PROGRESS_EVENT",
+        ConstValue::Str(UPDATE_PROGRESS_EVENT),
     ),
 ];
 

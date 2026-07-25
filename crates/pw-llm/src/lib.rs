@@ -3,7 +3,7 @@
 mod client;
 mod evaluator;
 
-pub use client::{LlmClientConfig, OpenAiCompatClient};
+pub use client::{LlmClientConfig, OpenAiCompatClient, SamplingOptions};
 pub use evaluator::{
     EVALUATOR_TIMEOUT, EvaluationDecision, EvaluatorConfig, EvaluatorContext, OpenAiCompatEvaluator,
 };

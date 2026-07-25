@@ -11,7 +11,7 @@ use pw_contracts::{CharacterCursorEventDto, SCHEMA_VERSION};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, PhysicalPosition, PhysicalSize, Runtime};
 
 /// Event carrying [`CharacterCursorEventDto`] payloads.
-pub const CURSOR_EVENT: &str = "character-cursor";
+pub const CURSOR_EVENT: &str = pw_contracts::CHARACTER_CURSOR_EVENT;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 

@@ -27,10 +27,10 @@ use pw_platform::paths::AppDataLayout;
 use pw_stt_sherpa::{ReazonSpeechRecognizer, RecognizerModelPaths, SherpaError, SileroVad};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
-pub const TRANSCRIPT_EVENT: &str = "stt-transcript";
-pub const LEVEL_EVENT: &str = "stt-level";
-pub const STATE_EVENT: &str = "stt-state";
-pub const DEVICE_FALLBACK_EVENT: &str = "stt-device-fallback";
+pub const TRANSCRIPT_EVENT: &str = pw_contracts::STT_TRANSCRIPT_EVENT;
+pub const LEVEL_EVENT: &str = pw_contracts::STT_LEVEL_EVENT;
+pub const STATE_EVENT: &str = pw_contracts::STT_STATE_EVENT;
+pub const DEVICE_FALLBACK_EVENT: &str = pw_contracts::STT_DEVICE_FALLBACK_EVENT;
 
 /// Emit a level event every N frames (~256 ms at 32 ms frames).
 const LEVEL_EVERY_N_FRAMES: u64 = 8;

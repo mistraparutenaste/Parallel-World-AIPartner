@@ -39,7 +39,7 @@ use pw_contracts::{
 use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, ReplyEvent, ReplyParser, TurnId, strip_emoji};
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature};
-use pw_llm::{LlmClientConfig, OpenAiCompatClient};
+use pw_llm::{LlmClientConfig, OpenAiCompatClient, SamplingOptions};
 use pw_platform::paths::AppDataLayout;
 use pw_storage::{
     CompanionStateWorker, DEFAULT_STATE_QUEUE_CAPACITY, Database, SqliteConversationHistory,
@@ -53,8 +53,8 @@ use crate::commands::character::{
 };
 use crate::diagnostics::QueueMetrics;
 
-pub const MESSAGE_EVENT: &str = "chat-message";
-pub const STATE_EVENT: &str = "conversation-state";
+pub const MESSAGE_EVENT: &str = pw_contracts::CHAT_MESSAGE_EVENT;
+pub const STATE_EVENT: &str = pw_contracts::CONVERSATION_STATE_EVENT;
 const CHARACTER_WEBVIEW: &str = "character";
 
 /// Kept messages of context (user + assistant combined).
@@ -1498,14 +1498,29 @@ fn resolve_worker_context(
     prepare_worker_context(persona, character)
 }
 
+fn sampling_options(settings: &LlmSettingsDto) -> SamplingOptions {
+    SamplingOptions {
+        temperature: settings.temperature,
+        top_p: settings.top_p,
+        max_tokens: settings.max_tokens,
+        repeat_penalty: settings.repeat_penalty,
+    }
+}
+
 fn worker_fingerprint(settings: &LlmSettingsDto, context: &ChatWorkerContext) -> String {
     serde_json::json!({
-        "version": 1,
+        "version": 2,
         "base_url": settings.base_url,
         "model": settings.model,
         "allow_remote": settings.allow_remote,
         "system_prompt": settings.system_prompt,
         "strip_emoji": settings.strip_emoji,
+        "sampling": {
+            "temperature": settings.temperature,
+            "top_p": settings.top_p,
+            "max_tokens": settings.max_tokens,
+            "repeat_penalty": settings.repeat_penalty,
+        },
         "persona": context.persona_fingerprint,
         "character_prompt": context.character_prompt,
         "character": context.character.as_ref().map(|character| serde_json::json!({
@@ -1548,9 +1563,10 @@ impl ChatService {
             api_key: super::settings::load_llm_api_key(settings.provider)?,
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
+            sampling: sampling_options(&settings),
         };
         let mut llm = OpenAiCompatClient::new(config).map_err(|error| error.to_string())?;
-        let database_path = layout.data.join("parallel-world.sqlite3");
+        let database_path = layout.main_database();
         let history = Database::open(&database_path)
             .map(SqliteConversationHistory::new)
             .ok()
@@ -1614,6 +1630,12 @@ impl ChatService {
             api_key: super::settings::load_llm_api_key(settings.provider)?,
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
+            // Deterministic APPROVE/SKIP judge; user sampling must not apply.
+            sampling: SamplingOptions {
+                temperature: Some(0.0),
+                max_tokens: Some(16),
+                ..SamplingOptions::default()
+            },
         })
         .map_err(|error| error.to_string())?;
         let messages = vec![
@@ -1789,7 +1811,7 @@ impl ChatService {
         let Some(worker) = guard.as_ref() else {
             return Err("conversation worker is not available".to_owned());
         };
-        let database_path = layout.data.join("parallel-world.sqlite3");
+        let database_path = layout.main_database();
         let turn_id = self.reserve_turn_id(&database_path);
         tracing::info!(turn_id, "chat turn accepted");
         enqueue_submit(&worker.tx, &self.submit_metrics, text, turn_id, lease)
@@ -1813,8 +1835,16 @@ impl ChatService {
             api_key: super::settings::load_llm_api_key(settings.provider)?,
             allow_remote: settings.allow_remote,
             timeout: ADAPTER_TIMEOUT,
+            sampling: sampling_options(settings),
         };
         let llm = OpenAiCompatClient::new(llm_config.clone()).map_err(|error| error.to_string())?;
+        // The memory classifier emits strict JSON; keep it deterministic
+        // regardless of the user's conversational sampling settings.
+        let mut classifier_config = llm_config;
+        classifier_config.sampling = SamplingOptions {
+            temperature: Some(0.0),
+            ..SamplingOptions::default()
+        };
 
         let config = OrchestratorConfig {
             prompt: PromptBuilder {
@@ -1838,10 +1868,7 @@ impl ChatService {
         };
         let (observation_tx, observation_rx) = sync_channel(OBSERVATION_WRITE_QUEUE_CAPACITY);
         let observation_writer = ObservationWriter { tx: observation_tx };
-        let database_path = app
-            .state::<AppDataLayout>()
-            .data
-            .join("parallel-world.sqlite3");
+        let database_path = app.state::<AppDataLayout>().main_database();
         let companion_state_worker =
             CompanionStateWorker::start(database_path.clone(), DEFAULT_STATE_QUEUE_CAPACITY)
                 .map_err(|error| format!("failed to spawn companion state worker: {error}"))?;
@@ -1927,7 +1954,7 @@ impl ChatService {
                 let worker_cancel = Arc::clone(&enrichment_cancel);
                 move || {
                     let enrichment_classifier: Box<dyn MemoryClassifier> =
-                        match OpenAiCompatClient::new(llm_config) {
+                        match OpenAiCompatClient::new(classifier_config) {
                             Ok(client) => Box::new(LlmMemoryClassifier::new_with_cancel(
                                 client,
                                 classifier_cancel,
@@ -2144,27 +2171,9 @@ impl<A: ConversationEventRuntime> TauriConversationEvents<A> {
     }
 
     fn emit_state(&self, state: ConversationState, message: Option<String>) {
-        let dto = match state {
-            ConversationState::Starting => pw_contracts::ConversationStateDto::Starting,
-            ConversationState::Idle => pw_contracts::ConversationStateDto::Idle,
-            ConversationState::Listening => pw_contracts::ConversationStateDto::Listening,
-            ConversationState::Transcribing => pw_contracts::ConversationStateDto::Transcribing,
-            ConversationState::Thinking => pw_contracts::ConversationStateDto::Thinking,
-            ConversationState::Speaking => pw_contracts::ConversationStateDto::Speaking,
-            ConversationState::Muted => pw_contracts::ConversationStateDto::Muted,
-            ConversationState::Interrupting => pw_contracts::ConversationStateDto::Interrupting,
-            ConversationState::Cancelled => pw_contracts::ConversationStateDto::Cancelled,
-            ConversationState::Recovering => pw_contracts::ConversationStateDto::Recovering,
-            ConversationState::SttUnavailable => pw_contracts::ConversationStateDto::SttUnavailable,
-            ConversationState::LlmUnavailable => pw_contracts::ConversationStateDto::LlmUnavailable,
-            ConversationState::TtsUnavailable => pw_contracts::ConversationStateDto::TtsUnavailable,
-            ConversationState::RendererUnavailable => {
-                pw_contracts::ConversationStateDto::RendererUnavailable
-            }
-        };
         let payload = ConversationStateEventDto {
             schema_version: SCHEMA_VERSION,
-            state: dto,
+            state: state.into(),
             message,
         };
         self.runtime.emit_conversation_state(payload);

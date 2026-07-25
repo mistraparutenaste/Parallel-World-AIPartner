@@ -167,6 +167,7 @@ where
         self.submit_user_text_for_turn(text, turn, context)
     }
 
+    #[allow(clippy::too_many_lines)]
     fn submit_user_text_for_turn(
         &mut self,
         text: &str,
@@ -340,7 +341,7 @@ mod tests {
     use crate::PortError;
     use crate::memory::MemoryContext;
 
-    const EXPECTED_CONVERSATIONAL_STYLE_POLICY: &str = "自然な話し言葉で、短く一度に一つの話題に答える。フィラーや相づちは必要な場合のみ使う。フィラーは控えめに使い、短い返答では一つまでとし、毎回同じ表現を繰り返さない。説明の羅列、箇条書き、メタ発言、定型的な書き出し、頼まれていない話題の提案、サービスメニューのような言い回しを避ける。必要なときだけ自然な確認質問を一つ添え、習慣的な締めの質問や「今日は何をしますか」のような定型質問を繰り返さない。不明な事実は推測と明示し、約束・実行・感情を偽らない。";
+    const EXPECTED_CONVERSATIONAL_STYLE_POLICY: &str = "自然な話し言葉で応答する。応答の長さ、口調、フィラーや相づちの量、話題の広げ方はキャラクター設定に従う。説明の羅列、箇条書き、メタ発言、定型的な書き出し、サービスメニューのような言い回しを避ける。習慣的な締めの質問や「今日は何をしますか」のような定型質問を繰り返さない。不明な事実は推測と明示し、約束・実行・感情を偽らない。";
 
     /// Emits scripted chunks, honouring the cancel flag.
     struct ScriptedLlm {

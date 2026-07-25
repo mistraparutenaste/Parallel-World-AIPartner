@@ -29,8 +29,6 @@ node_modules/
 dist/
 # ts-rs #[test] export artifacts (canonical bindings live in packages/contracts)
 /crates/pw-contracts/bindings/
-/artifacts/soak/
-/artifacts/phase7/
 /apps/desktop/src-tauri/generated/release.json
 
 # 署名秘密鍵（fixtureの署名生成に使用。public key/署名のみコミットする）
@@ -50,8 +48,8 @@ dist/
 .codex-remote-attachments/
 **/.playwright-cli/
 /.claude/
-/output/playwright/conversation-first-ui/*
-/output/real-device/*/
+# 実行成果物はoutput/以下へ。全体を非追跡にする(新種の出力の追跡漏れ防止)
+/output/
 
 # OneDrive同期の一時ファイル
 .tmp.driveupload/

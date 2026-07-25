@@ -7,6 +7,7 @@ use pw_application::conversation::{
     DialogueClassifier, DialogueTurnKind, LlmClient, OrchestratorConfig, PromptBuilder,
     QuestionPolicy, TurnStyleContract,
 };
+use pw_application::memory::MemoryContext;
 use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, TurnId};
 use serde::Deserialize;
@@ -214,6 +215,50 @@ fn history_assertion_rejects_a_duplicate_under_the_system_role() {
         &["Synthetic history.".into()],
         "system-role duplicate",
     );
+}
+
+/// Regression guard for the persona-effectiveness work: two contrasting
+/// personas must yield different prompts for the same input, while the
+/// app-owned turn-style contract stays identical.
+#[test]
+fn contrasting_personas_produce_different_prompts_with_identical_contracts() {
+    let classifier = DialogueClassifier;
+    let utterance = "今日は雨ですね";
+    let quiet_persona = "プロフィール:\n- 名前: 燈\n- 話し方: ぶっきらぼうで口数が少ない\n会話の傾向:\n- 返事はひとこと、ふたことのごく短いものにする";
+    let talkative_persona = "プロフィール:\n- 名前: ひまり\n- 話し方: 明るく饒舌で、感嘆詞が多い\n会話の傾向:\n- 話し好きで、具体例や余談も交えてたっぷり話す";
+    let contract = classifier.classify(utterance, &[]);
+
+    let build = |persona: &str| {
+        PromptBuilder {
+            system_rules: "Keep replies factual and concise.".into(),
+            character_prompt: persona.into(),
+        }
+        .build_with_context_and_turn_style(
+            &[],
+            utterance,
+            &MemoryContext::default(),
+            &contract,
+        )
+    };
+    let quiet_prompt = build(quiet_persona);
+    let talkative_prompt = build(talkative_persona);
+
+    assert_eq!(quiet_prompt.len(), talkative_prompt.len());
+    let differing: Vec<usize> = quiet_prompt
+        .iter()
+        .zip(&talkative_prompt)
+        .enumerate()
+        .filter(|(_, (quiet, talkative))| quiet != talkative)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        differing,
+        [1],
+        "exactly the persona system message must differ between the prompts"
+    );
+    assert_eq!(quiet_prompt[1].content, quiet_persona);
+    assert_eq!(talkative_prompt[1].content, talkative_persona);
+    assert_eq!(quiet_prompt[1].role, ChatRole::System);
 }
 
 #[test]

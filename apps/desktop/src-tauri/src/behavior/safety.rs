@@ -1,10 +1,9 @@
 //! Atomic user-wide dark-expression safety persistence and matching.
 
-use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pw_contracts::DarkExpressionSafetySettingsDto;
-use pw_platform::config_io::{JsonFormat, write_atomic_json};
+use pw_platform::config_io::{JsonFormat, ReadJsonError, read_json, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 use thiserror::Error;
 use unicode_casefold::UnicodeCaseFold;
@@ -68,16 +67,13 @@ pub fn load_dark_expression_safety(layout: &AppDataLayout) -> DarkExpressionSafe
 pub fn load_dark_expression_safety_checked(
     layout: &AppDataLayout,
 ) -> Result<DarkExpressionSafetySettingsDto, DarkExpressionSafetyLoadError> {
-    let path = layout.config.join(FILE_NAME);
-    let raw = match fs::read_to_string(path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(DarkExpressionSafetySettingsDto::default());
-        }
-        Err(_) => return Err(DarkExpressionSafetyLoadError::Io),
-    };
-    let settings = serde_json::from_str::<DarkExpressionSafetySettingsDto>(&raw)
-        .map_err(|_| DarkExpressionSafetyLoadError::Invalid)?;
+    let settings =
+        match read_json::<DarkExpressionSafetySettingsDto>(&layout.config.join(FILE_NAME)) {
+            Ok(None) => return Ok(DarkExpressionSafetySettingsDto::default()),
+            Ok(Some(settings)) => settings,
+            Err(ReadJsonError::Io(_)) => return Err(DarkExpressionSafetyLoadError::Io),
+            Err(ReadJsonError::Parse(_)) => return Err(DarkExpressionSafetyLoadError::Invalid),
+        };
     settings
         .validate()
         .map_err(|_| DarkExpressionSafetyLoadError::Invalid)?;

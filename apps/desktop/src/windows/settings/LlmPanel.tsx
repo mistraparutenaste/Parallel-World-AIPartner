@@ -4,6 +4,15 @@ import { useEffect, useState } from 'react';
 
 type Provider = LlmSettingsDto['provider'];
 
+/** Empty input means "use the server default" (null). */
+const parseOptionalNumber = (raw: string): number | null => {
+  if (raw.trim() === '') {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+};
+
 const PROVIDER_PRESETS: Record<
   Provider,
   { label: string; baseUrl?: string; remote: boolean }
@@ -186,17 +195,71 @@ export function LlmPanel() {
               応答から絵文字を除去する
             </label>
           </div>
+          <h3>生成パラメータ</h3>
+          <p>空欄のままにするとサーバー側の既定値が使われます。</p>
           <div>
-            <label htmlFor="llm-character-prompt">キャラクター設定</label>
-            <textarea
-              id="llm-character-prompt"
-              rows={3}
-              value={settings.character_prompt}
+            <label htmlFor="llm-temperature">temperature（0〜2）</label>
+            <input
+              id="llm-temperature"
+              type="number"
+              min={0}
+              max={2}
+              step={0.1}
+              value={settings.temperature ?? ''}
               onChange={(event) =>
-                update({ character_prompt: event.target.value })
+                update({ temperature: parseOptionalNumber(event.target.value) })
               }
             />
           </div>
+          <div>
+            <label htmlFor="llm-top-p">top_p（0〜1）</label>
+            <input
+              id="llm-top-p"
+              type="number"
+              min={0}
+              max={1}
+              step={0.05}
+              value={settings.top_p ?? ''}
+              onChange={(event) =>
+                update({ top_p: parseOptionalNumber(event.target.value) })
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="llm-max-tokens">最大トークン数</label>
+            <input
+              id="llm-max-tokens"
+              type="number"
+              min={1}
+              step={1}
+              value={settings.max_tokens ?? ''}
+              onChange={(event) =>
+                update({ max_tokens: parseOptionalNumber(event.target.value) })
+              }
+            />
+          </div>
+          <div>
+            <label htmlFor="llm-repeat-penalty">
+              繰り返しペナルティ（0.5〜4、llama.cpp / LM Studio向け）
+            </label>
+            <input
+              id="llm-repeat-penalty"
+              type="number"
+              min={0.5}
+              max={4}
+              step={0.05}
+              value={settings.repeat_penalty ?? ''}
+              onChange={(event) =>
+                update({
+                  repeat_penalty: parseOptionalNumber(event.target.value),
+                })
+              }
+            />
+          </div>
+          <p>
+            キャラクターの性格・口調は「性格」パネルで設定します。ここでの
+            キャラクター設定入力は廃止されました。
+          </p>
           <button type="button" onClick={save}>
             保存
           </button>

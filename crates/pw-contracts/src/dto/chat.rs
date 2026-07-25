@@ -5,6 +5,10 @@ use ts_rs::TS;
 
 use super::app_status::ConversationStateDto;
 
+pub const CHAT_MESSAGE_EVENT: &str = "chat-message";
+pub const CONVERSATION_STATE_EVENT: &str = "conversation-state";
+pub const CONVERSATION_HISTORY_DELETED_EVENT: &str = "conversation-history-deleted";
+
 /// Author of one chat message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -84,7 +88,7 @@ pub enum LlmProviderKind {
 }
 
 /// Persisted LLM connection and prompt settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[allow(clippy::struct_excessive_bools)]
 #[ts(export_to = "LlmSettingsDto.ts")]
 pub struct LlmSettingsDto {
@@ -113,6 +117,19 @@ pub struct LlmSettingsDto {
     #[serde(default = "default_strip_emoji")]
     #[ts(optional = false)]
     pub strip_emoji: bool,
+    /// Sampling temperature. `null` keeps the server default.
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    /// Nucleus sampling cap. `null` keeps the server default.
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    /// Reply token budget. `null` keeps the server default.
+    #[serde(default)]
+    pub max_tokens: Option<u32>,
+    /// Repetition penalty (llama.cpp / LM Studio extension).
+    /// `null` keeps the server default.
+    #[serde(default)]
+    pub repeat_penalty: Option<f64>,
 }
 
 fn default_strip_emoji() -> bool {

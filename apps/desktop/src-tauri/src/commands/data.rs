@@ -21,7 +21,7 @@ fn epoch_seconds() -> i64 {
         })
 }
 fn path(layout: &AppDataLayout) -> PathBuf {
-    layout.data.join("parallel-world.sqlite3")
+    layout.main_database()
 }
 
 fn tts_cache_path(layout: &AppDataLayout) -> PathBuf {
@@ -331,7 +331,7 @@ pub async fn delete_conversation_history<R: Runtime>(app: AppHandle<R>) -> Resul
             |operation| chat.with_exclusive_reset(operation),
             || delete_history_core(&database_path),
             |payload| {
-                app.emit("conversation-history-deleted", payload)
+                app.emit(pw_contracts::CONVERSATION_HISTORY_DELETED_EVENT, payload)
                     .map_err(|e| e.to_string())
             },
         )

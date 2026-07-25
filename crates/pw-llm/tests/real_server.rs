@@ -68,6 +68,7 @@ fn full_turn_against_the_real_server() {
         api_key: None,
         allow_remote: false,
         timeout: Duration::from_mins(3),
+        ..LlmClientConfig::default()
     })
     .unwrap();
 
@@ -127,6 +128,7 @@ fn build_dialogue_measurement_orchestrator(
         api_key: None,
         allow_remote: false,
         timeout: Duration::from_mins(3),
+        ..LlmClientConfig::default()
     })
     .expect("valid opted-in local OpenAI-compatible server configuration");
     let history = assistant_history

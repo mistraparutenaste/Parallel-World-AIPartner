@@ -26,7 +26,7 @@ const PROFILE: PersonaProfileDto = {
   background: '',
   boundaries: [],
   free_text: '',
-  preset: null,
+  example_utterances: [],
   initiative: 50,
   closeness: 50,
   humor: 50,

@@ -78,6 +78,7 @@ fn client_for(port: u16) -> OpenAiCompatClient {
         api_key: None,
         allow_remote: false,
         timeout: Duration::from_secs(5),
+        ..LlmClientConfig::default()
     })
     .unwrap()
 }
@@ -103,6 +104,7 @@ fn hung_server_is_bounded_by_the_production_client_timeout() {
         api_key: None,
         allow_remote: false,
         timeout: Duration::from_millis(100),
+        ..LlmClientConfig::default()
     })
     .unwrap();
     let started = std::time::Instant::now();
@@ -126,6 +128,7 @@ fn cancellation_interrupts_a_request_waiting_for_response_headers() {
         api_key: None,
         allow_remote: false,
         timeout: Duration::from_secs(30),
+        ..LlmClientConfig::default()
     })
     .unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -219,6 +222,7 @@ fn sends_a_bearer_token_when_configured() {
         api_key: Some("provider-secret".into()),
         allow_remote: false,
         timeout: Duration::from_secs(5),
+        ..LlmClientConfig::default()
     })
     .unwrap();
 

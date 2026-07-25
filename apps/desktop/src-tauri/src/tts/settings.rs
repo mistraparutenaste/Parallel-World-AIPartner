@@ -1,9 +1,9 @@
 //! TTS settings persisted as `config/tts.json`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use pw_contracts::{SCHEMA_VERSION, TtsEngineKind, TtsSettingsDto};
-use pw_platform::config_io::{JsonFormat, write_atomic_json};
+use pw_platform::config_io::{JsonFormat, read_json_lenient, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "tts.json";
@@ -41,23 +41,15 @@ fn settings_path(layout: &AppDataLayout) -> PathBuf {
 /// Loads settings, falling back to defaults when missing or invalid.
 #[must_use]
 pub fn load_tts_settings(layout: &AppDataLayout) -> TtsSettingsDto {
-    read_settings(&settings_path(layout)).unwrap_or_else(default_tts_settings)
-}
-
-fn read_settings(path: &Path) -> Option<TtsSettingsDto> {
-    let content = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str::<TtsSettingsDto>(&content) {
-        Ok(mut settings) => {
+    read_json_lenient::<TtsSettingsDto>(&settings_path(layout)).map_or_else(
+        default_tts_settings,
+        |mut settings| {
             if settings.voice_id.is_empty() {
                 settings.voice_id = settings.style_id.to_string();
             }
-            Some(settings)
-        }
-        Err(error) => {
-            tracing::warn!(%error, "invalid tts.json; using defaults");
-            None
-        }
-    }
+            settings
+        },
+    )
 }
 
 /// Persists settings after validating the endpoint (loopback only).

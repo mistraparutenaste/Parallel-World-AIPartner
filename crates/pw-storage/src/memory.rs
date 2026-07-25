@@ -1175,46 +1175,159 @@ fn encode_outcome(outcome: ObservationOutcome) -> &'static str {
     }
 }
 
-fn encode_candidate_operation(value: CandidateOperation) -> &'static str {
-    match value {
-        CandidateOperation::Add => "add",
-        CandidateOperation::Reinforce => "reinforce",
-        CandidateOperation::Supersede => "supersede",
-    }
-}
-fn encode_candidate_relation(value: CandidateProvenanceRelation) -> &'static str {
-    match value {
-        CandidateProvenanceRelation::Originated => "originated",
-        CandidateProvenanceRelation::Reasserted => "reasserted",
-        CandidateProvenanceRelation::Corrected => "corrected",
-        CandidateProvenanceRelation::ChangedStance => "changed_stance",
-        CandidateProvenanceRelation::Contradicted => "contradicted",
-    }
-}
 fn encode_memory_domain(value: MemoryDomain) -> &'static str {
     value.as_str()
 }
-fn encode_write_class(value: MemoryWriteClass) -> &'static str {
-    match value {
-        MemoryWriteClass::NormalExplicit => "normal_explicit",
-        MemoryWriteClass::Inferred => "inferred",
-        MemoryWriteClass::Personal => "personal",
-        MemoryWriteClass::Sensitive => "sensitive",
-        MemoryWriteClass::Secret => "secret",
-        MemoryWriteClass::NeverStore => "never_store",
-    }
+
+/// Generates the paired `encode_*`/`parse_*` functions for one stored enum
+/// from a single mapping, so the two directions can never drift apart.
+/// The literal strings are the on-disk `SQLite` values and must stay stable
+/// for rows written by earlier versions.
+macro_rules! string_enum_codec {
+    (
+        $encode:ident, $parse:ident, $type:ident, $label:literal,
+        { $($variant:ident => $text:literal),+ $(,)? }
+    ) => {
+        fn $encode(value: $type) -> &'static str {
+            match value { $($type::$variant => $text),+ }
+        }
+        fn $parse(value: &str) -> Result<$type, PortError> {
+            match value {
+                $($text => Ok($type::$variant),)+
+                value => Err(PortError(
+                    format!(concat!("unknown ", $label, ": {}"), value),
+                )),
+            }
+        }
+    };
 }
-fn parse_write_class(value: &str) -> Result<MemoryWriteClass, PortError> {
-    match value {
-        "normal_explicit" => Ok(MemoryWriteClass::NormalExplicit),
-        "inferred" => Ok(MemoryWriteClass::Inferred),
-        "personal" => Ok(MemoryWriteClass::Personal),
-        "sensitive" => Ok(MemoryWriteClass::Sensitive),
-        "secret" => Ok(MemoryWriteClass::Secret),
-        "never_store" => Ok(MemoryWriteClass::NeverStore),
-        _ => Err(PortError("unknown memory write class".into())),
+
+string_enum_codec!(
+    encode_write_class, parse_write_class, MemoryWriteClass, "memory write class",
+    {
+        NormalExplicit => "normal_explicit",
+        Inferred => "inferred",
+        Personal => "personal",
+        Sensitive => "sensitive",
+        Secret => "secret",
+        NeverStore => "never_store",
     }
-}
+);
+string_enum_codec!(
+    encode_candidate_operation, parse_candidate_operation, CandidateOperation,
+    "candidate operation",
+    {
+        Add => "add",
+        Reinforce => "reinforce",
+        Supersede => "supersede",
+    }
+);
+string_enum_codec!(
+    encode_candidate_relation, parse_candidate_relation, CandidateProvenanceRelation,
+    "candidate relation",
+    {
+        Originated => "originated",
+        Reasserted => "reasserted",
+        Corrected => "corrected",
+        ChangedStance => "changed_stance",
+        Contradicted => "contradicted",
+    }
+);
+string_enum_codec!(
+    encode_subject_scope, parse_subject_scope, SubjectScope, "subject scope",
+    {
+        UserSelf => "user_self",
+        ExternalWorld => "external_world",
+        OtherPerson => "other_person",
+        FictionalSubject => "fictional_subject",
+        LegacyUnknown => "legacy_unknown",
+    }
+);
+string_enum_codec!(
+    encode_epistemic_form, parse_epistemic_form, EpistemicForm, "epistemic form",
+    {
+        FactClaim => "fact_claim",
+        Belief => "belief",
+        Impression => "impression",
+        PredictionOrHunch => "prediction_or_hunch",
+        Metaphor => "metaphor",
+        Emotion => "emotion",
+        LegacyUntyped => "legacy_untyped",
+    }
+);
+string_enum_codec!(
+    encode_attribution, parse_attribution, Attribution, "attribution",
+    {
+        User => "user",
+        Assistant => "assistant",
+        NamedThirdParty => "named_third_party",
+        ExternalSource => "external_source",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_speech_act, parse_speech_act, SpeechAct, "speech act",
+    {
+        Asserted => "asserted",
+        Questioned => "questioned",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_source_mode, parse_source_mode, SourceMode, "source mode",
+    {
+        Direct => "direct",
+        Reported => "reported",
+        Quoted => "quoted",
+    }
+);
+string_enum_codec!(
+    encode_polarity, parse_polarity, Polarity, "polarity",
+    {
+        Affirmed => "affirmed",
+        Negated => "negated",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_conditionality, parse_conditionality, Conditionality, "conditionality",
+    {
+        Actual => "actual",
+        Hypothetical => "hypothetical",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_fictionality, parse_fictionality, Fictionality, "fictionality",
+    {
+        RealWorld => "real_world",
+        Fictional => "fictional",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_verification_status, parse_verification_status, VerificationStatus,
+    "verification status",
+    {
+        NotApplicable => "not_applicable",
+        UserReported => "user_reported",
+        UnverifiedExternalClaim => "unverified_external_claim",
+        ExternallyCorroborated => "externally_corroborated",
+        ExternallyContradicted => "externally_contradicted",
+        Disputed => "disputed",
+        Unknown => "unknown",
+    }
+);
+string_enum_codec!(
+    encode_temporal_scope, parse_temporal_scope, TemporalScope, "temporal scope",
+    {
+        Stable => "stable",
+        Current => "current",
+        Past => "past",
+        Future => "future",
+        Unknown => "unknown",
+    }
+);
 fn action_operation(action: &MemoryAction) -> &'static str {
     match action {
         MemoryAction::Add { .. } => "add",
@@ -1326,25 +1439,6 @@ fn typed_candidate_from_storage(
     })
 }
 
-fn parse_candidate_operation(value: &str) -> Result<CandidateOperation, PortError> {
-    match value {
-        "add" => Ok(CandidateOperation::Add),
-        "reinforce" => Ok(CandidateOperation::Reinforce),
-        "supersede" => Ok(CandidateOperation::Supersede),
-        _ => Err(PortError("unknown candidate operation".into())),
-    }
-}
-
-fn parse_candidate_relation(value: &str) -> Result<CandidateProvenanceRelation, PortError> {
-    match value {
-        "originated" => Ok(CandidateProvenanceRelation::Originated),
-        "reasserted" => Ok(CandidateProvenanceRelation::Reasserted),
-        "corrected" => Ok(CandidateProvenanceRelation::Corrected),
-        "changed_stance" => Ok(CandidateProvenanceRelation::ChangedStance),
-        "contradicted" => Ok(CandidateProvenanceRelation::Contradicted),
-        _ => Err(PortError("unknown candidate relation".into())),
-    }
-}
 fn action_matches_candidate_content(action: &MemoryAction, candidate_content: &str) -> bool {
     match action {
         MemoryAction::Add { content, .. } | MemoryAction::Supersede { content, .. } => {
@@ -1433,186 +1527,6 @@ fn parse_state(state: &str) -> Result<MemoryState, PortError> {
         "dormant" => Ok(MemoryState::Dormant),
         "superseded" => Ok(MemoryState::Superseded),
         value => Err(PortError(format!("unknown memory state: {value}"))),
-    }
-}
-
-fn parse_subject_scope(value: &str) -> Result<SubjectScope, PortError> {
-    match value {
-        "user_self" => Ok(SubjectScope::UserSelf),
-        "external_world" => Ok(SubjectScope::ExternalWorld),
-        "other_person" => Ok(SubjectScope::OtherPerson),
-        "fictional_subject" => Ok(SubjectScope::FictionalSubject),
-        "legacy_unknown" => Ok(SubjectScope::LegacyUnknown),
-        _ => Err(PortError(format!("unknown subject scope: {value}"))),
-    }
-}
-fn parse_epistemic_form(value: &str) -> Result<EpistemicForm, PortError> {
-    match value {
-        "fact_claim" => Ok(EpistemicForm::FactClaim),
-        "belief" => Ok(EpistemicForm::Belief),
-        "impression" => Ok(EpistemicForm::Impression),
-        "prediction_or_hunch" => Ok(EpistemicForm::PredictionOrHunch),
-        "metaphor" => Ok(EpistemicForm::Metaphor),
-        "emotion" => Ok(EpistemicForm::Emotion),
-        "legacy_untyped" => Ok(EpistemicForm::LegacyUntyped),
-        _ => Err(PortError(format!("unknown epistemic form: {value}"))),
-    }
-}
-fn parse_attribution(value: &str) -> Result<Attribution, PortError> {
-    match value {
-        "user" => Ok(Attribution::User),
-        "assistant" => Ok(Attribution::Assistant),
-        "named_third_party" => Ok(Attribution::NamedThirdParty),
-        "external_source" => Ok(Attribution::ExternalSource),
-        "unknown" => Ok(Attribution::Unknown),
-        _ => Err(PortError(format!("unknown attribution: {value}"))),
-    }
-}
-fn parse_speech_act(value: &str) -> Result<SpeechAct, PortError> {
-    match value {
-        "asserted" => Ok(SpeechAct::Asserted),
-        "questioned" => Ok(SpeechAct::Questioned),
-        "unknown" => Ok(SpeechAct::Unknown),
-        _ => Err(PortError(format!("unknown speech act: {value}"))),
-    }
-}
-fn parse_source_mode(value: &str) -> Result<SourceMode, PortError> {
-    match value {
-        "direct" => Ok(SourceMode::Direct),
-        "reported" => Ok(SourceMode::Reported),
-        "quoted" => Ok(SourceMode::Quoted),
-        _ => Err(PortError(format!("unknown source mode: {value}"))),
-    }
-}
-fn parse_polarity(value: &str) -> Result<Polarity, PortError> {
-    match value {
-        "affirmed" => Ok(Polarity::Affirmed),
-        "negated" => Ok(Polarity::Negated),
-        "unknown" => Ok(Polarity::Unknown),
-        _ => Err(PortError(format!("unknown polarity: {value}"))),
-    }
-}
-fn parse_conditionality(value: &str) -> Result<Conditionality, PortError> {
-    match value {
-        "actual" => Ok(Conditionality::Actual),
-        "hypothetical" => Ok(Conditionality::Hypothetical),
-        "unknown" => Ok(Conditionality::Unknown),
-        _ => Err(PortError(format!("unknown conditionality: {value}"))),
-    }
-}
-fn parse_fictionality(value: &str) -> Result<Fictionality, PortError> {
-    match value {
-        "real_world" => Ok(Fictionality::RealWorld),
-        "fictional" => Ok(Fictionality::Fictional),
-        "unknown" => Ok(Fictionality::Unknown),
-        _ => Err(PortError(format!("unknown fictionality: {value}"))),
-    }
-}
-fn parse_verification_status(value: &str) -> Result<VerificationStatus, PortError> {
-    match value {
-        "not_applicable" => Ok(VerificationStatus::NotApplicable),
-        "user_reported" => Ok(VerificationStatus::UserReported),
-        "unverified_external_claim" => Ok(VerificationStatus::UnverifiedExternalClaim),
-        "externally_corroborated" => Ok(VerificationStatus::ExternallyCorroborated),
-        "externally_contradicted" => Ok(VerificationStatus::ExternallyContradicted),
-        "disputed" => Ok(VerificationStatus::Disputed),
-        "unknown" => Ok(VerificationStatus::Unknown),
-        _ => Err(PortError(format!("unknown verification status: {value}"))),
-    }
-}
-fn parse_temporal_scope(value: &str) -> Result<TemporalScope, PortError> {
-    match value {
-        "stable" => Ok(TemporalScope::Stable),
-        "current" => Ok(TemporalScope::Current),
-        "past" => Ok(TemporalScope::Past),
-        "future" => Ok(TemporalScope::Future),
-        "unknown" => Ok(TemporalScope::Unknown),
-        _ => Err(PortError(format!("unknown temporal scope: {value}"))),
-    }
-}
-
-fn encode_subject_scope(value: SubjectScope) -> &'static str {
-    match value {
-        SubjectScope::UserSelf => "user_self",
-        SubjectScope::ExternalWorld => "external_world",
-        SubjectScope::OtherPerson => "other_person",
-        SubjectScope::FictionalSubject => "fictional_subject",
-        SubjectScope::LegacyUnknown => "legacy_unknown",
-    }
-}
-fn encode_epistemic_form(value: EpistemicForm) -> &'static str {
-    match value {
-        EpistemicForm::FactClaim => "fact_claim",
-        EpistemicForm::Belief => "belief",
-        EpistemicForm::Impression => "impression",
-        EpistemicForm::PredictionOrHunch => "prediction_or_hunch",
-        EpistemicForm::Metaphor => "metaphor",
-        EpistemicForm::Emotion => "emotion",
-        EpistemicForm::LegacyUntyped => "legacy_untyped",
-    }
-}
-fn encode_attribution(value: Attribution) -> &'static str {
-    match value {
-        Attribution::User => "user",
-        Attribution::Assistant => "assistant",
-        Attribution::NamedThirdParty => "named_third_party",
-        Attribution::ExternalSource => "external_source",
-        Attribution::Unknown => "unknown",
-    }
-}
-fn encode_speech_act(value: SpeechAct) -> &'static str {
-    match value {
-        SpeechAct::Asserted => "asserted",
-        SpeechAct::Questioned => "questioned",
-        SpeechAct::Unknown => "unknown",
-    }
-}
-fn encode_source_mode(value: SourceMode) -> &'static str {
-    match value {
-        SourceMode::Direct => "direct",
-        SourceMode::Reported => "reported",
-        SourceMode::Quoted => "quoted",
-    }
-}
-fn encode_polarity(value: Polarity) -> &'static str {
-    match value {
-        Polarity::Affirmed => "affirmed",
-        Polarity::Negated => "negated",
-        Polarity::Unknown => "unknown",
-    }
-}
-fn encode_conditionality(value: Conditionality) -> &'static str {
-    match value {
-        Conditionality::Actual => "actual",
-        Conditionality::Hypothetical => "hypothetical",
-        Conditionality::Unknown => "unknown",
-    }
-}
-fn encode_fictionality(value: Fictionality) -> &'static str {
-    match value {
-        Fictionality::RealWorld => "real_world",
-        Fictionality::Fictional => "fictional",
-        Fictionality::Unknown => "unknown",
-    }
-}
-fn encode_verification_status(value: VerificationStatus) -> &'static str {
-    match value {
-        VerificationStatus::NotApplicable => "not_applicable",
-        VerificationStatus::UserReported => "user_reported",
-        VerificationStatus::UnverifiedExternalClaim => "unverified_external_claim",
-        VerificationStatus::ExternallyCorroborated => "externally_corroborated",
-        VerificationStatus::ExternallyContradicted => "externally_contradicted",
-        VerificationStatus::Disputed => "disputed",
-        VerificationStatus::Unknown => "unknown",
-    }
-}
-fn encode_temporal_scope(value: TemporalScope) -> &'static str {
-    match value {
-        TemporalScope::Stable => "stable",
-        TemporalScope::Current => "current",
-        TemporalScope::Past => "past",
-        TemporalScope::Future => "future",
-        TemporalScope::Unknown => "unknown",
     }
 }
 
@@ -2437,6 +2351,140 @@ mod tests {
         SubjectScope, TemporalScope, VerificationStatus, VersionedMemoryAction, memory_strength,
         prompt_rank, should_become_dormant,
     };
+
+    /// Pins the exact on-disk enum strings. These values live in existing
+    /// `SQLite` rows, so any diff here is a data-compatibility break, not a
+    /// refactoring detail.
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn stored_enum_strings_roundtrip_and_never_change() {
+        use super::{
+            encode_attribution, encode_candidate_operation, encode_candidate_relation,
+            encode_conditionality, encode_epistemic_form, encode_fictionality, encode_polarity,
+            encode_source_mode, encode_speech_act, encode_subject_scope, encode_temporal_scope,
+            encode_verification_status, encode_write_class, parse_attribution,
+            parse_candidate_operation, parse_candidate_relation, parse_conditionality,
+            parse_epistemic_form, parse_fictionality, parse_polarity, parse_source_mode,
+            parse_speech_act, parse_subject_scope, parse_temporal_scope, parse_verification_status,
+            parse_write_class,
+        };
+
+        macro_rules! pin {
+            ($encode:ident, $parse:ident, [$($text:literal),+ $(,)?]) => {
+                for text in [$($text),+] {
+                    assert_eq!($encode($parse(text).expect(text)), text);
+                }
+                assert!($parse("__never_a_stored_value__").is_err());
+            };
+        }
+
+        pin!(
+            encode_write_class,
+            parse_write_class,
+            [
+                "normal_explicit",
+                "inferred",
+                "personal",
+                "sensitive",
+                "secret",
+                "never_store"
+            ]
+        );
+        pin!(
+            encode_candidate_operation,
+            parse_candidate_operation,
+            ["add", "reinforce", "supersede"]
+        );
+        pin!(
+            encode_candidate_relation,
+            parse_candidate_relation,
+            [
+                "originated",
+                "reasserted",
+                "corrected",
+                "changed_stance",
+                "contradicted"
+            ]
+        );
+        pin!(
+            encode_subject_scope,
+            parse_subject_scope,
+            [
+                "user_self",
+                "external_world",
+                "other_person",
+                "fictional_subject",
+                "legacy_unknown"
+            ]
+        );
+        pin!(
+            encode_epistemic_form,
+            parse_epistemic_form,
+            [
+                "fact_claim",
+                "belief",
+                "impression",
+                "prediction_or_hunch",
+                "metaphor",
+                "emotion",
+                "legacy_untyped"
+            ]
+        );
+        pin!(
+            encode_attribution,
+            parse_attribution,
+            [
+                "user",
+                "assistant",
+                "named_third_party",
+                "external_source",
+                "unknown"
+            ]
+        );
+        pin!(
+            encode_speech_act,
+            parse_speech_act,
+            ["asserted", "questioned", "unknown"]
+        );
+        pin!(
+            encode_source_mode,
+            parse_source_mode,
+            ["direct", "reported", "quoted"]
+        );
+        pin!(
+            encode_polarity,
+            parse_polarity,
+            ["affirmed", "negated", "unknown"]
+        );
+        pin!(
+            encode_conditionality,
+            parse_conditionality,
+            ["actual", "hypothetical", "unknown"]
+        );
+        pin!(
+            encode_fictionality,
+            parse_fictionality,
+            ["real_world", "fictional", "unknown"]
+        );
+        pin!(
+            encode_verification_status,
+            parse_verification_status,
+            [
+                "not_applicable",
+                "user_reported",
+                "unverified_external_claim",
+                "externally_corroborated",
+                "externally_contradicted",
+                "disputed",
+                "unknown"
+            ]
+        );
+        pin!(
+            encode_temporal_scope,
+            parse_temporal_scope,
+            ["stable", "current", "past", "future", "unknown"]
+        );
+    }
 
     #[test]
     fn summary_and_memory_survive_reopen_and_search_by_relevance() {

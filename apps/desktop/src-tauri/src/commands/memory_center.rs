@@ -17,7 +17,7 @@ const CONVERSATION: &str = "default";
 const PREVIEW_LIMIT: usize = 160;
 
 fn database_path(layout: &AppDataLayout) -> std::path::PathBuf {
-    layout.data.join("parallel-world.sqlite3")
+    layout.main_database()
 }
 
 fn now() -> i64 {

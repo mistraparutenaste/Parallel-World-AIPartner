@@ -69,6 +69,18 @@ impl AppDataLayout {
         }
         Ok(())
     }
+
+    /// Conversation history, memory, and companion state database.
+    #[must_use]
+    pub fn main_database(&self) -> PathBuf {
+        self.data.join("parallel-world.sqlite3")
+    }
+
+    /// Foreground activity collection database (separate write path).
+    #[must_use]
+    pub fn activity_database(&self) -> PathBuf {
+        self.data.join("activity.sqlite3")
+    }
 }
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::diagnostics::atomic_replace;
 
@@ -44,6 +45,55 @@ impl JsonFormat {
             bytes.push(b'\n');
         }
         Ok(bytes)
+    }
+}
+
+/// JSON設定ファイルの読み込みエラー。`_checked` 系の呼び出し元が
+/// I/O失敗とパース失敗を区別してマッピングできるように分離する。
+#[derive(Debug)]
+pub enum ReadJsonError {
+    Io(io::Error),
+    Parse(serde_json::Error),
+}
+
+impl std::fmt::Display for ReadJsonError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Parse(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ReadJsonError {}
+
+/// `path` をJSONとして読み込む。ファイルが存在しない場合は `Ok(None)`。
+///
+/// # Errors
+///
+/// 読み込みに失敗した場合は [`ReadJsonError::Io`]、JSONとして不正な場合は
+/// [`ReadJsonError::Parse`] を返す。
+pub fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ReadJsonError> {
+    let raw = match fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ReadJsonError::Io(error)),
+    };
+    serde_json::from_str(&raw)
+        .map(Some)
+        .map_err(ReadJsonError::Parse)
+}
+
+/// 「読めなければデフォルトへフォールバック」する呼び出し元向けの寛容版。
+/// ファイルの欠落は静かに、読解失敗は警告ログを残して `None` を返す。
+#[must_use]
+pub fn read_json_lenient<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    match read_json(path) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "invalid config file; using defaults");
+            None
+        }
     }
 }
 
@@ -119,7 +169,10 @@ fn temp_path(destination: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{JsonFormat, write_atomic_json, write_atomic_json_at};
+    use super::{
+        JsonFormat, ReadJsonError, read_json, read_json_lenient, write_atomic_json,
+        write_atomic_json_at,
+    };
     use serde_json::json;
 
     fn temp_root(name: &str) -> std::path::PathBuf {
@@ -127,6 +180,32 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn read_json_distinguishes_missing_invalid_and_valid_files() {
+        let root = temp_root("read-json");
+        let path = root.join("value.json");
+
+        assert!(matches!(read_json::<serde_json::Value>(&path), Ok(None)));
+
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(matches!(
+            read_json::<serde_json::Value>(&path),
+            Err(ReadJsonError::Parse(_))
+        ));
+        assert_eq!(read_json_lenient::<serde_json::Value>(&path), None);
+
+        std::fs::write(&path, r#"{"a":1}"#).unwrap();
+        assert_eq!(
+            read_json::<serde_json::Value>(&path).unwrap(),
+            Some(json!({"a": 1}))
+        );
+        assert_eq!(
+            read_json_lenient::<serde_json::Value>(&path),
+            Some(json!({"a": 1}))
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

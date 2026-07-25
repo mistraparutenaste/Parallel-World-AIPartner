@@ -3,6 +3,11 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+pub const STT_TRANSCRIPT_EVENT: &str = "stt-transcript";
+pub const STT_LEVEL_EVENT: &str = "stt-level";
+pub const STT_STATE_EVENT: &str = "stt-state";
+pub const STT_DEVICE_FALLBACK_EVENT: &str = "stt-device-fallback";
+
 /// One selectable microphone.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "AudioDeviceDto.ts")]

@@ -20,13 +20,16 @@ pub struct PersonaProfileDto {
     pub user_address: String,
     pub relationship: String,
     pub speaking_style: String,
+    /// Verbatim example lines the character would say; rendered into the
+    /// prompt as few-shot tone samples. Missing in files written before v3.1.
+    #[serde(default)]
+    pub example_utterances: Vec<String>,
     pub interests: Vec<String>,
     pub dislikes: Vec<String>,
     pub values: Vec<String>,
     pub background: String,
     pub boundaries: Vec<String>,
     pub free_text: String,
-    pub preset: Option<String>,
     pub initiative: u8,
     pub closeness: u8,
     pub humor: u8,
@@ -52,13 +55,13 @@ impl PersonaProfileDto {
             user_address: String::new(),
             relationship: String::new(),
             speaking_style: String::new(),
+            example_utterances: Vec::new(),
             interests: Vec::new(),
             dislikes: Vec::new(),
             values: Vec::new(),
             background: String::new(),
             boundaries: Vec::new(),
             free_text: String::new(),
-            preset: None,
             initiative: 50,
             closeness: 50,
             humor: 50,
@@ -82,6 +85,16 @@ impl PersonaProfileDto {
     pub fn validate(&self) -> Result<(), String> {
         if self.character_id.trim().is_empty() {
             return Err("character_id must not be empty".to_owned());
+        }
+        if self.example_utterances.len() > 10 {
+            return Err("example_utterances must contain at most 10 lines".to_owned());
+        }
+        if self
+            .example_utterances
+            .iter()
+            .any(|utterance| utterance.chars().count() > 200)
+        {
+            return Err("each example utterance must be 200 characters or fewer".to_owned());
         }
         for (name, value) in [
             ("initiative", self.initiative),

@@ -20,9 +20,9 @@ use crate::character::{
 };
 
 /// Event delivered to the character window when an expression is set.
-pub const EXPRESSION_EVENT: &str = "character-expression";
+pub const EXPRESSION_EVENT: &str = pw_contracts::CHARACTER_EXPRESSION_EVENT;
 /// Event delivered to the character window when a motion starts.
-pub const MOTION_EVENT: &str = "character-motion";
+pub const MOTION_EVENT: &str = pw_contracts::CHARACTER_MOTION_EVENT;
 
 /// Shared cache of the active character manifest.
 #[derive(Default)]
@@ -142,7 +142,7 @@ impl<R: Runtime> CharacterWindows for &AppHandle<R> {
         if label == "settings" {
             let _ = self.emit_to(
                 EventTarget::webview_window("settings"),
-                "control-center-navigate",
+                pw_contracts::CONTROL_CENTER_NAVIGATE_EVENT,
                 "conversation",
             );
         }

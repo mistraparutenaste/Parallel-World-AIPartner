@@ -1,9 +1,9 @@
 //! LLM settings persisted as `config/llm.json`.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use pw_contracts::{LlmProviderKind, LlmSettingsDto, SCHEMA_VERSION};
-use pw_platform::config_io::{JsonFormat, write_atomic_json};
+use pw_platform::config_io::{JsonFormat, read_json_lenient, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 
 const FILE_NAME: &str = "llm.json";
@@ -58,7 +58,30 @@ pub fn default_llm_settings() -> LlmSettingsDto {
 好奇心旺盛なパートナーです。"
             .to_owned(),
         strip_emoji: true,
+        temperature: None,
+        top_p: None,
+        max_tokens: None,
+        repeat_penalty: None,
     }
+}
+
+fn ensure_range(value: Option<f64>, min: f64, max: f64, name: &str) -> Result<(), String> {
+    if let Some(value) = value
+        && !(value.is_finite() && (min..=max).contains(&value))
+    {
+        return Err(format!("{name} must be between {min} and {max}"));
+    }
+    Ok(())
+}
+
+fn validate_sampling(settings: &LlmSettingsDto) -> Result<(), String> {
+    ensure_range(settings.temperature, 0.0, 2.0, "temperature")?;
+    ensure_range(settings.top_p, 0.0, 1.0, "top_p")?;
+    ensure_range(settings.repeat_penalty, 0.5, 4.0, "repeat_penalty")?;
+    if settings.max_tokens == Some(0) {
+        return Err("max_tokens must be greater than 0".to_owned());
+    }
+    Ok(())
 }
 
 fn settings_path(layout: &AppDataLayout) -> PathBuf {
@@ -68,24 +91,14 @@ fn settings_path(layout: &AppDataLayout) -> PathBuf {
 /// Loads settings, falling back to defaults when missing or invalid.
 #[must_use]
 pub fn load_llm_settings(layout: &AppDataLayout) -> LlmSettingsDto {
-    let mut settings = read_settings(&settings_path(layout)).unwrap_or_else(default_llm_settings);
+    let mut settings =
+        read_json_lenient(&settings_path(layout)).unwrap_or_else(default_llm_settings);
     settings.api_key.clear();
     settings.clear_api_key = false;
     if settings.provider != LlmProviderKind::Local {
         settings.api_key_configured = load_llm_api_key(settings.provider).ok().flatten().is_some();
     }
     settings
-}
-
-fn read_settings(path: &Path) -> Option<LlmSettingsDto> {
-    let content = std::fs::read_to_string(path).ok()?;
-    match serde_json::from_str(&content) {
-        Ok(settings) => Some(settings),
-        Err(error) => {
-            tracing::warn!(%error, "invalid llm.json; using defaults");
-            None
-        }
-    }
 }
 
 /// Persists settings after validating the endpoint.
@@ -97,6 +110,7 @@ fn read_settings(path: &Path) -> Option<LlmSettingsDto> {
 pub fn save_llm_settings(layout: &AppDataLayout, settings: &LlmSettingsDto) -> Result<(), String> {
     pw_llm::validate_base_url(&settings.base_url, settings.allow_remote)
         .map_err(|error| error.to_string())?;
+    validate_sampling(settings)?;
     let api_key_configured = if settings.clear_api_key {
         let entry = credential_entry(settings.provider)?;
         match entry.delete_credential() {
@@ -149,6 +163,29 @@ mod tests {
         settings.model = "qwen2.5".into();
         save_llm_settings(&layout, &settings).unwrap();
         assert_eq!(load_llm_settings(&layout).model, "qwen2.5");
+        std::fs::remove_dir_all(&layout.root).unwrap();
+    }
+
+    #[test]
+    fn sampling_values_round_trip_and_out_of_range_values_are_rejected() {
+        let layout = temp_layout("sampling");
+        let mut settings = default_llm_settings();
+        settings.temperature = Some(1.2);
+        settings.top_p = Some(0.9);
+        settings.max_tokens = Some(512);
+        settings.repeat_penalty = Some(1.1);
+        save_llm_settings(&layout, &settings).unwrap();
+        let loaded = load_llm_settings(&layout);
+        assert_eq!(loaded.temperature, Some(1.2));
+        assert_eq!(loaded.top_p, Some(0.9));
+        assert_eq!(loaded.max_tokens, Some(512));
+        assert_eq!(loaded.repeat_penalty, Some(1.1));
+
+        settings.temperature = Some(2.5);
+        assert!(save_llm_settings(&layout, &settings).is_err());
+        settings.temperature = None;
+        settings.max_tokens = Some(0);
+        assert!(save_llm_settings(&layout, &settings).is_err());
         std::fs::remove_dir_all(&layout.root).unwrap();
     }
 

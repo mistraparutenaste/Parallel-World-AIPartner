@@ -1,5 +1,5 @@
 use pw_contracts::{SCHEMA_VERSION, UiPreferencesDto};
-use pw_platform::config_io::{JsonFormat, write_atomic_json_at};
+use pw_platform::config_io::{JsonFormat, read_json_lenient, write_atomic_json_at};
 use pw_platform::paths::AppDataLayout;
 
 fn path(layout: &AppDataLayout) -> std::path::PathBuf {
@@ -8,9 +8,7 @@ fn path(layout: &AppDataLayout) -> std::path::PathBuf {
 
 #[must_use]
 pub fn load_preferences(layout: &AppDataLayout) -> UiPreferencesDto {
-    std::fs::read_to_string(path(layout))
-        .ok()
-        .and_then(|json| serde_json::from_str::<UiPreferencesDto>(&json).ok())
+    read_json_lenient::<UiPreferencesDto>(&path(layout))
         .filter(|value| value.schema_version == SCHEMA_VERSION)
         .unwrap_or_default()
 }

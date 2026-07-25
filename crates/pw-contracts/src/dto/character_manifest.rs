@@ -7,6 +7,8 @@ pub const CHARACTER_MANIFEST_SCHEMA_VERSION: u16 = 2;
 pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 3;
 pub const CHARACTER_SETUP_SCHEMA_VERSION: u16 = 1;
 pub const CHARACTER_SETTINGS_CHANGED_EVENT: &str = "character-settings-changed";
+pub const CHARACTER_EXPRESSION_EVENT: &str = "character-expression";
+pub const CHARACTER_MOTION_EVENT: &str = "character-motion";
 
 /// One motion group of a `Live2D` model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

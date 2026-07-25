@@ -26,11 +26,11 @@ use pw_tts::{
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Runtime};
 
 /// Sent to the character window only (single-window event).
-pub const AUDIO_EVENT: &str = "speech-audio";
+pub const AUDIO_EVENT: &str = pw_contracts::SPEECH_AUDIO_EVENT;
 /// Sent to the character window only (single-window event).
-pub const STOP_EVENT: &str = "speech-stop";
+pub const STOP_EVENT: &str = pw_contracts::SPEECH_STOP_EVENT;
 /// Diagnostics broadcast (degraded-state banner).
-pub const STATE_EVENT: &str = "tts-state";
+pub const STATE_EVENT: &str = pw_contracts::TTS_STATE_EVENT;
 
 const CHARACTER_WINDOW: &str = "character";
 const TTS_QUEUE_CAPACITY: usize = 8;

@@ -4,7 +4,9 @@ import { UpdatesPanel } from './UpdatesPanel';
 
 const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => undefined) }));
+vi.mock('../../shared/ipc/event-bus', () => ({
+  subscribeEvent: vi.fn(() => () => undefined),
+}));
 
 const available = {
   schema_version: 1,

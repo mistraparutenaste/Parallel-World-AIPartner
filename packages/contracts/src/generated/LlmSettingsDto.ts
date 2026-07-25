@@ -33,4 +33,21 @@ allow_remote: boolean, system_prompt: string, character_prompt: string,
 /**
  * Remove emoji from replies (display and TTS safety).
  */
-strip_emoji: boolean, };
+strip_emoji: boolean, 
+/**
+ * Sampling temperature. `null` keeps the server default.
+ */
+temperature: number | null, 
+/**
+ * Nucleus sampling cap. `null` keeps the server default.
+ */
+top_p: number | null, 
+/**
+ * Reply token budget. `null` keeps the server default.
+ */
+max_tokens: number | null, 
+/**
+ * Repetition penalty (llama.cpp / LM Studio extension).
+ * `null` keeps the server default.
+ */
+repeat_penalty: number | null, };
