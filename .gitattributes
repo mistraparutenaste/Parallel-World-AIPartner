@@ -6,3 +6,9 @@
 
 # Updater fixtures are signature-verified byte-for-byte; never normalize them
 tools/fixtures/updater/** -text
+
+# pw-contracts's export-bindings binary always writes LF. Pin these
+# generated files to LF so a checkout never disagrees with a fresh
+# `cargo run -p pw-contracts --bin export-bindings`, on any OS.
+packages/contracts/src/generated/** text eol=lf
+packages/contracts/src/index.ts text eol=lf

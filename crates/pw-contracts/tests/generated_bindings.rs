@@ -29,6 +29,17 @@ fn scratch_dir(label: &str) -> PathBuf {
     ))
 }
 
+/// Normalizes CRLF to LF so this test compares *content*, not line endings.
+/// `bindings::export_all` always writes LF; a checked-out copy can still be
+/// CRLF depending on the platform's line-ending settings and `.gitattributes`
+/// state (see `packages/contracts/src/generated/** text eol=lf`). Without
+/// this normalization, a clean checkout on a CRLF-converting platform would
+/// fail this test even though the two sides are identical byte-for-byte
+/// apart from line endings.
+fn normalize_line_endings(source: &str) -> String {
+    source.replace("\r\n", "\n")
+}
+
 fn list_ts_files(dir: &Path) -> BTreeSet<String> {
     fs::read_dir(dir)
         .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
@@ -62,7 +73,8 @@ fn generated_output_matches_committed_snapshot() {
         let fresh = fs::read_to_string(generated_dir.join(name))
             .unwrap_or_else(|error| panic!("read fresh {name}: {error}"));
         assert_eq!(
-            committed, fresh,
+            normalize_line_endings(&committed),
+            normalize_line_endings(&fresh),
             "packages/contracts/src/generated/{name} is out of date; run \
              `cargo run -p pw-contracts --bin export-bindings` and commit the diff"
         );
@@ -73,7 +85,8 @@ fn generated_output_matches_committed_snapshot() {
     let fresh_index_src = fs::read_to_string(scratch.join("index.ts"))
         .expect("bindings::export_all writes index.ts next to generated_dir");
     assert_eq!(
-        committed_index_src, fresh_index_src,
+        normalize_line_endings(&committed_index_src),
+        normalize_line_endings(&fresh_index_src),
         "packages/contracts/src/index.ts is out of date; run \
          `cargo run -p pw-contracts --bin export-bindings` and commit the diff"
     );
