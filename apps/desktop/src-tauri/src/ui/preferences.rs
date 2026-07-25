@@ -1,4 +1,5 @@
 use pw_contracts::{SCHEMA_VERSION, UiPreferencesDto};
+use pw_platform::config_io::{JsonFormat, write_atomic_json_at};
 use pw_platform::paths::AppDataLayout;
 
 fn path(layout: &AppDataLayout) -> std::path::PathBuf {
@@ -26,11 +27,8 @@ pub fn save_preferences(
     if preferences.schema_version != SCHEMA_VERSION {
         return Err("unsupported UI preferences schema".into());
     }
-    let destination = path(layout);
-    let temporary = destination.with_extension("json.tmp");
-    let json = serde_json::to_vec_pretty(preferences).map_err(|error| error.to_string())?;
-    std::fs::write(&temporary, json).map_err(|error| error.to_string())?;
-    std::fs::rename(&temporary, &destination).map_err(|error| error.to_string())
+    write_atomic_json_at(&path(layout), preferences, JsonFormat::Pretty)
+        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

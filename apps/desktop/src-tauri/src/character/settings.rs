@@ -1,14 +1,15 @@
 //! Global character selection and behavior settings persistence.
 
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::fs;
+use std::io;
 
 use pw_contracts::{CHARACTER_SETTINGS_SCHEMA_VERSION, CharacterSettingsDto};
-use pw_platform::{diagnostics::atomic_replace, paths::AppDataLayout};
+use pw_platform::{
+    config_io::{JsonFormat, write_atomic_json},
+    paths::AppDataLayout,
+};
 
 const SETTINGS_FILE_NAME: &str = "character-settings.json";
-static NEXT_TEMP_FILE: AtomicU64 = AtomicU64::new(0);
 
 /// Validates the optional expression idle timeout.
 ///
@@ -117,35 +118,13 @@ pub fn save_character_settings(
     settings: &CharacterSettingsDto,
 ) -> Result<(), String> {
     validate_settings(settings)?;
-    fs::create_dir_all(&layout.config).map_err(|error| error.to_string())?;
-
-    let destination = layout.config.join(SETTINGS_FILE_NAME);
-    let sequence = NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed);
-    let temporary = layout.config.join(format!(
-        ".{SETTINGS_FILE_NAME}.{}.{sequence}.tmp",
-        std::process::id()
-    ));
-    let serialized = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
-
-    let write_result = (|| -> Result<(), String> {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| error.to_string())?;
-        file.write_all(&serialized)
-            .map_err(|error| error.to_string())?;
-        file.write_all(b"\n").map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())?;
-        drop(file);
-        atomic_replace(&temporary, &destination).map_err(|error| error.to_string())?;
-        Ok(())
-    })();
-
-    if write_result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    write_result
+    write_atomic_json(
+        &layout.config,
+        SETTINGS_FILE_NAME,
+        settings,
+        JsonFormat::PrettyWithTrailingNewline,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Replaces only the idle timeout while preserving character

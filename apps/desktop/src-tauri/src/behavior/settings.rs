@@ -3,10 +3,9 @@
 use std::fs;
 
 use pw_contracts::BehaviorSettingsDto;
+use pw_platform::config_io::{JsonFormat, write_atomic_json};
 use pw_platform::paths::AppDataLayout;
 use thiserror::Error;
-
-use super::atomic_json::write_atomic_json;
 
 const FILE_NAME: &str = "behavior.json";
 
@@ -65,5 +64,11 @@ pub fn save_behavior_settings(
     settings: &BehaviorSettingsDto,
 ) -> Result<(), String> {
     settings.validate()?;
-    write_atomic_json(&layout.config, FILE_NAME, settings)
+    write_atomic_json(
+        &layout.config,
+        FILE_NAME,
+        settings,
+        JsonFormat::PrettyWithTrailingNewline,
+    )
+    .map_err(|error| error.to_string())
 }
