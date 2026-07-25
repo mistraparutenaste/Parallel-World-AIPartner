@@ -455,24 +455,6 @@ impl Drop for ManagedProcesses {
     }
 }
 
-#[tauri::command]
-#[allow(clippy::needless_pass_by_value)]
-/// Rearms a managed feature from the Settings window.
-///
-/// # Errors
-/// Returns a safe reason when the feature cannot be rearmed.
-pub fn rearm_managed_process(
-    feature: pw_contracts::RuntimeFeatureDto,
-    processes: tauri::State<'_, ManagedProcesses>,
-) -> Result<(), String> {
-    let feature = match feature {
-        pw_contracts::RuntimeFeatureDto::LanguageModel => RuntimeFeature::LanguageModel,
-        pw_contracts::RuntimeFeatureDto::TextToSpeech => RuntimeFeature::TextToSpeech,
-        _ => return Err("feature is not managed by the process supervisor".into()),
-    };
-    processes.rearm(feature).map_err(str::to_owned)
-}
-
 /// Rust-owned health state for frontend runtimes which cannot own policy state.
 pub struct FrontendRuntimeHealth {
     character_renderer: Mutex<RendererRetryState<SystemClock, Jitter>>,

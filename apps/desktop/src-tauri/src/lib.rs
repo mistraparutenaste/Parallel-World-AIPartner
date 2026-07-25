@@ -99,7 +99,6 @@ pub fn run() {
             commands::tts::list_user_dict,
             commands::tts::add_user_dict_word,
             commands::tts::delete_user_dict_word,
-            supervisor::rearm_managed_process,
             supervisor::report_runtime_failure,
             supervisor::report_runtime_success,
             supervisor::retry_character_renderer,
