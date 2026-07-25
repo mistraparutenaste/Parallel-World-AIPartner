@@ -125,7 +125,7 @@ if (-not (Test-WebView2Runtime)) {
     Invoke-WingetInstall -Id 'Microsoft.EdgeWebView2Runtime'
 }
 
-if (-not (Test-Command 'corepack.exe')) {
+if (-not (Test-Command 'corepack.cmd')) {
     throw 'Corepack was not installed with Node.js. Repair the Node.js installation and run this launcher again.'
 }
 
@@ -133,14 +133,14 @@ if (-not (Test-Path -LiteralPath (Join-Path $repositoryRoot 'node_modules') -Pat
     if (-not (Confirm-Download -Description 'JavaScript dependencies' -Size 'several hundred MB')) {
         throw 'JavaScript dependency installation was declined. The app cannot start without these packages.'
     }
-    & corepack.exe pnpm install --frozen-lockfile
+    & corepack.cmd pnpm install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw 'JavaScript dependency installation failed.' }
 }
 
 $live2dDist = Join-Path $repositoryRoot 'packages\live2d-runtime\dist'
 if (-not (Test-Path -LiteralPath $live2dDist -PathType Container)) {
     Write-Host '[Setup] Building workspace packages.' -ForegroundColor Cyan
-    & corepack.exe pnpm build
+    & corepack.cmd pnpm build
     if ($LASTEXITCODE -ne 0) { throw 'Workspace build failed.' }
 }
 
