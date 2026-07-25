@@ -11,7 +11,9 @@ use pw_domain::reply::{
 
 use super::ports::{ChatMessage, ChatRole, ConversationEvents, LlmClient};
 use super::prompt::PromptBuilder;
-use super::routing::{ConfiguredResponsePipeline, IntentRouter, default_response_pipeline};
+use super::routing::{
+    ConfiguredResponsePipeline, DialogueClassifier, IntentRouter, default_response_pipeline,
+};
 use crate::memory::MemoryContext;
 
 /// Tuning for [`ConversationOrchestrator`].
@@ -38,6 +40,7 @@ pub struct ConversationOrchestrator<L, E> {
     state: ConversationState,
     history: VecDeque<ChatMessage>,
     router: IntentRouter,
+    dialogue_classifier: DialogueClassifier,
     response_pipeline: ConfiguredResponsePipeline,
 }
 
@@ -130,6 +133,7 @@ where
             state: ConversationState::Idle,
             history,
             router: IntentRouter,
+            dialogue_classifier: DialogueClassifier,
             response_pipeline,
         };
         orchestrator.events.on_state(orchestrator.state);
@@ -175,18 +179,25 @@ where
 
         let history: Vec<ChatMessage> = self.history.iter().cloned().collect();
         let kind = self.router.classify(text);
+        let turn_style = self.dialogue_classifier.classify(text, &history);
         let prepared = self.response_pipeline.try_prepare(kind, text, context);
         let messages = if let Some(prepared) = prepared {
-            self.config.prompt.build_with_context_and_surface(
-                &history,
-                text,
-                &prepared.context,
-                &prepared.surface,
-            )
-        } else {
             self.config
                 .prompt
-                .build_with_context(&history, text, context)
+                .build_with_context_surface_and_turn_style(
+                    &history,
+                    text,
+                    &prepared.context,
+                    &prepared.surface,
+                    &turn_style,
+                )
+        } else {
+            self.config.prompt.build_with_context_and_turn_style(
+                &history,
+                text,
+                context,
+                &turn_style,
+            )
         };
 
         let mut parser = ReplyParser::new();
@@ -460,18 +471,23 @@ mod tests {
                 ConversationState::Idle,
             ]
         );
-        // Prompt contains rules, character, dialogue policy, then the utterance.
+        // Prompt preserves its base order and adds one per-turn contract before the utterance.
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0][0], ChatMessage::new(ChatRole::System, "規則"));
+        assert_eq!(prompts[0][1], ChatMessage::new(ChatRole::System, "キャラ"));
         assert_eq!(
-            prompts[0],
-            [
-                ChatMessage::new(ChatRole::System, "規則"),
-                ChatMessage::new(ChatRole::System, "キャラ"),
-                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
-                ChatMessage::new(ChatRole::User, "ただいま"),
-            ]
+            prompts[0][2],
+            ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY)
         );
+        assert_eq!(
+            prompts[0]
+                .iter()
+                .filter(|message| message.content.starts_with("<turn_style_contract>\n"))
+                .count(),
+            1
+        );
+        assert_eq!(prompts[0].last().unwrap().content, "ただいま");
     }
 
     #[test]
@@ -496,20 +512,20 @@ mod tests {
 
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 3);
+        let third = &prompts[2];
         // max 4 history messages: (一つ目, はい。, 二つ目, はい。).
-        assert_eq!(
-            prompts[2],
-            [
-                ChatMessage::new(ChatRole::System, "規則"),
-                ChatMessage::new(ChatRole::System, "キャラ"),
-                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
-                ChatMessage::new(ChatRole::User, "一つ目"),
-                ChatMessage::new(ChatRole::Assistant, "はい。"),
-                ChatMessage::new(ChatRole::User, "二つ目"),
-                ChatMessage::new(ChatRole::Assistant, "はい。"),
-                ChatMessage::new(ChatRole::User, "三つ目"),
-            ]
-        );
+        for message in [
+            ChatMessage::new(ChatRole::User, "一つ目"),
+            ChatMessage::new(ChatRole::Assistant, "はい。"),
+            ChatMessage::new(ChatRole::User, "二つ目"),
+            ChatMessage::new(ChatRole::Assistant, "はい。"),
+        ] {
+            assert!(
+                third.contains(&message),
+                "missing history message: {message:?}"
+            );
+        }
+        assert_eq!(third.last().unwrap().content, "三つ目");
     }
 
     #[test]
@@ -535,17 +551,15 @@ mod tests {
 
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0][0], ChatMessage::new(ChatRole::System, "規則"));
+        assert_eq!(prompts[0][1], ChatMessage::new(ChatRole::System, "キャラ"));
         assert_eq!(
-            prompts[0],
-            [
-                ChatMessage::new(ChatRole::System, "規則"),
-                ChatMessage::new(ChatRole::System, "キャラ"),
-                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
-                ChatMessage::new(ChatRole::User, "saved user"),
-                ChatMessage::new(ChatRole::Assistant, "saved assistant"),
-                ChatMessage::new(ChatRole::User, "new user"),
-            ]
+            prompts[0][2],
+            ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY)
         );
+        assert!(prompts[0].contains(&ChatMessage::new(ChatRole::User, "saved user")));
+        assert!(prompts[0].contains(&ChatMessage::new(ChatRole::Assistant, "saved assistant")));
+        assert_eq!(prompts[0].last().unwrap().content, "new user");
     }
 
     #[test]
@@ -645,16 +659,8 @@ mod tests {
         orchestrator.submit_user_text("再挑戦");
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 2);
-        assert_eq!(
-            prompts[1],
-            [
-                ChatMessage::new(ChatRole::System, "規則"),
-                ChatMessage::new(ChatRole::System, "キャラ"),
-                ChatMessage::new(ChatRole::System, EXPECTED_CONVERSATIONAL_STYLE_POLICY),
-                ChatMessage::new(ChatRole::User, "聞こえてる？"),
-                ChatMessage::new(ChatRole::User, "再挑戦"),
-            ]
-        );
+        assert!(prompts[1].contains(&ChatMessage::new(ChatRole::User, "聞こえてる？")));
+        assert_eq!(prompts[1].last().unwrap().content, "再挑戦");
     }
 
     #[test]
@@ -760,6 +766,11 @@ mod tests {
                 .iter()
                 .all(|message| !message.content.contains("response_surface_context"))
         );
+        assert!(
+            prompts[0]
+                .iter()
+                .any(|message| message.content.starts_with("<turn_style_contract>\n"))
+        );
     }
 
     #[test]
@@ -782,11 +793,63 @@ mod tests {
 
         let prompts = prompts.lock().unwrap();
         assert_eq!(prompts.len(), 1);
-        assert!(
+        assert_eq!(
             prompts[0]
                 .iter()
-                .any(|message| message.content.contains("<response_surface_context>"))
+                .filter(|message| message.content.starts_with("<response_surface_context>\n"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            prompts[0]
+                .iter()
+                .filter(|message| message.content.starts_with("<turn_style_contract>\n"))
+                .count(),
+            1
         );
         assert_eq!(prompts[0].last().unwrap().content, "これを覚えて");
+    }
+
+    #[test]
+    fn second_ordinary_turn_carries_one_contract_and_unchanged_assistant_history() {
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec!["first assistant reply?"],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config(),
+            llm,
+            Events(Arc::new(Recording::default())),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("first ordinary request");
+        orchestrator.submit_user_text("second ordinary request");
+
+        assert_eq!(prompts.lock().unwrap().len(), 2);
+        let second = &prompts.lock().unwrap()[1];
+        assert_eq!(
+            second
+                .iter()
+                .filter(|message| message.content.starts_with("<turn_style_contract>\n"))
+                .count(),
+            1
+        );
+        assert!(
+            second
+                .iter()
+                .any(|message| message.content == "first assistant reply?")
+        );
+        assert_eq!(second.last().unwrap().content, "second ordinary request");
+        assert_eq!(
+            second
+                .iter()
+                .filter(|message| message.content == "first assistant reply?")
+                .count(),
+            1,
+            "stored assistant history must be attached unchanged exactly once"
+        );
     }
 }

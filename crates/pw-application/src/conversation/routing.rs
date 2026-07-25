@@ -12,6 +12,8 @@ use std::time::Duration;
 use crate::PortError;
 use crate::memory::MemoryContext;
 
+use super::{ChatMessage, ChatRole};
+
 const MAX_PLAN_GOAL_CHARS: usize = 160;
 const MAX_PLAN_QUERY_CHARS: usize = 240;
 const MAX_PLAN_DIRECTIVES: usize = 4;
@@ -50,6 +52,243 @@ impl TurnKind {
             Self::Proactive => "proactive check-in",
         }
     }
+}
+
+/// The response-ending constraints selected for one user turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TurnStyleContract {
+    pub turn_kind: DialogueTurnKind,
+    pub question_policy: QuestionPolicy,
+    pub closing_preference: ClosingPreference,
+    pub recent_assistant_question_endings: u8,
+}
+
+/// Conservative categories for deterministic dialogue-style selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DialogueTurnKind {
+    Greeting,
+    Compliment,
+    CasualObservation,
+    AnswerOrRequest,
+    RequestedQuestioning,
+}
+
+/// Whether a response may close with a question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuestionPolicy {
+    AvoidQuestionEnding,
+    ClarificationOnlyIfMateriallyNecessary,
+    ContentfulQuestionOnlyIfNoRecentQuestion,
+    QuestionRequested,
+}
+
+/// Preferred response-ending form for one turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClosingPreference {
+    Declarative,
+    QuestionPermitted,
+}
+
+/// Pure, deterministic lexical classifier for dialogue-ending constraints.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DialogueClassifier;
+
+impl DialogueClassifier {
+    #[must_use]
+    pub fn classify(&self, current_utterance: &str, history: &[ChatMessage]) -> TurnStyleContract {
+        let recent_assistant_question_endings = history
+            .iter()
+            .rev()
+            .filter(|message| message.role == ChatRole::Assistant)
+            .take(3)
+            .filter(|message| assistant_ends_with_question(&message.content))
+            .count() as u8;
+        let normalized = current_utterance.trim().to_lowercase();
+        let (turn_kind, question_policy, closing_preference) = if is_greeting(&normalized) {
+            (
+                DialogueTurnKind::Greeting,
+                QuestionPolicy::AvoidQuestionEnding,
+                ClosingPreference::Declarative,
+            )
+        } else if is_requested_questioning(&normalized) {
+            (
+                DialogueTurnKind::RequestedQuestioning,
+                QuestionPolicy::QuestionRequested,
+                ClosingPreference::QuestionPermitted,
+            )
+        } else if is_compliment(&normalized) {
+            (
+                DialogueTurnKind::Compliment,
+                QuestionPolicy::AvoidQuestionEnding,
+                ClosingPreference::Declarative,
+            )
+        } else if is_casual_observation(&normalized) {
+            if recent_assistant_question_endings == 0 {
+                (
+                    DialogueTurnKind::CasualObservation,
+                    QuestionPolicy::ContentfulQuestionOnlyIfNoRecentQuestion,
+                    ClosingPreference::QuestionPermitted,
+                )
+            } else {
+                (
+                    DialogueTurnKind::CasualObservation,
+                    QuestionPolicy::AvoidQuestionEnding,
+                    ClosingPreference::Declarative,
+                )
+            }
+        } else {
+            (
+                DialogueTurnKind::AnswerOrRequest,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                ClosingPreference::Declarative,
+            )
+        };
+
+        TurnStyleContract {
+            turn_kind,
+            question_policy,
+            closing_preference,
+            recent_assistant_question_endings,
+        }
+    }
+}
+
+fn is_greeting(text: &str) -> bool {
+    !has_concrete_request(text)
+        && matches!(
+            trim_terminal_punctuation(text),
+            "hello" | "hello there" | "hi" | "hey" | "こんにちは" | "おはよう"
+        )
+}
+
+fn is_compliment(text: &str) -> bool {
+    !has_concrete_request(text)
+        && text.chars().count() <= 48
+        && contains_any(
+            text,
+            &[
+                "thank you",
+                "thanks",
+                "great",
+                "nice",
+                "ありがとう",
+                "すごい",
+                "分かりやすい",
+                "わかりやすい",
+            ],
+        )
+}
+
+fn is_casual_observation(text: &str) -> bool {
+    !has_concrete_request(text)
+        && text.chars().count() <= 48
+        && contains_any(
+            text,
+            &[
+                "weather",
+                "rain",
+                "sunny",
+                "today is",
+                "it's ",
+                "it is ",
+                "天気",
+                "今日は",
+                "雨",
+                "暑い",
+                "寒い",
+                "疲れた",
+                "眠い",
+            ],
+        )
+}
+
+fn is_requested_questioning(text: &str) -> bool {
+    is_affirmative_command(
+        text,
+        &[
+            "ask me questions",
+            "ask me a question",
+            "ask me one question at a time",
+            "please ask me questions",
+            "please ask me a question",
+            "can you ask me questions",
+            "could you ask me questions",
+            "i want you to ask me questions",
+            "interview me",
+            "please interview me",
+            "can you interview me",
+            "could you interview me",
+        ],
+    ) || matches!(
+        trim_terminal_punctuation(text),
+        "質問して"
+            | "質問してください"
+            | "質問を一つずつして"
+            | "質問を一つずつして、計画を整理して"
+            | "質問で確認して"
+    )
+}
+
+fn is_affirmative_command(text: &str, commands: &[&str]) -> bool {
+    let text = trim_terminal_punctuation(text);
+    commands.iter().any(|command| {
+        text == *command
+            || text
+                .strip_prefix(command)
+                .is_some_and(|suffix| suffix.starts_with(" to "))
+    })
+}
+
+fn has_concrete_request(text: &str) -> bool {
+    assistant_ends_with_question(text)
+        || [
+            "can you ",
+            "could you ",
+            "please ",
+            "help me ",
+            "recommend ",
+            "show ",
+            "tell me ",
+            "explain ",
+            "suggest ",
+            "give me ",
+            "i need ",
+        ]
+        .iter()
+        .any(|prefix| text.starts_with(prefix))
+        || ["教えて", "してください", "してほしい", "相談したい"]
+            .iter()
+            .any(|suffix| trim_terminal_punctuation(text).ends_with(suffix))
+}
+
+fn trim_terminal_punctuation(text: &str) -> &str {
+    text.trim_end_matches(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '.' | '!'
+                    | '。'
+                    | '！'
+                    | '…'
+                    | '"'
+                    | '\''
+                    | ')'
+                    | '）'
+                    | ']'
+                    | '】'
+                    | '}'
+                    | '」'
+                    | '』'
+            )
+    })
+}
+
+fn assistant_ends_with_question(content: &str) -> bool {
+    let content = trim_terminal_punctuation(content);
+    content.ends_with(['?', '？'])
+        || ["ですか", "ますか", "ませんか", "でしょうか", "ましょうか"]
+            .iter()
+            .any(|suffix| content.ends_with(suffix))
 }
 
 /// Deterministic, conservative lexical router.
@@ -577,7 +816,373 @@ pub fn default_response_pipeline() -> ConfiguredResponsePipeline {
 mod tests {
     use std::thread;
 
+    use super::super::{ChatMessage, ChatRole};
     use super::*;
+
+    #[test]
+    fn contract_counts_only_the_last_three_assistant_question_endings() {
+        let history = vec![
+            ChatMessage::new(ChatRole::Assistant, "older question?"),
+            ChatMessage::new(ChatRole::User, "intervening user"),
+            ChatMessage::new(ChatRole::Assistant, "recent question?"),
+            ChatMessage::new(ChatRole::Assistant, "recent statement."),
+            ChatMessage::new(ChatRole::Assistant, "newest question？"),
+        ];
+
+        let contract = DialogueClassifier::default().classify("Explain the trade-off.", &history);
+
+        assert_eq!(contract.recent_assistant_question_endings, 2);
+        assert_eq!(contract.turn_kind, DialogueTurnKind::AnswerOrRequest);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::ClarificationOnlyIfMateriallyNecessary
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+    }
+
+    #[test]
+    fn explicit_request_for_questions_can_override_cadence_preference() {
+        let history = vec![ChatMessage::new(ChatRole::Assistant, "What is the goal?")];
+
+        let contract = DialogueClassifier::default().classify(
+            "Ask me one question at a time to clarify the plan.",
+            &history,
+        );
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
+        assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
+        assert_eq!(
+            contract.closing_preference,
+            ClosingPreference::QuestionPermitted
+        );
+    }
+
+    #[test]
+    fn japanese_greeting_avoids_a_question_ending() {
+        let contract = DialogueClassifier::default().classify("こんにちは", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::Greeting);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::AvoidQuestionEnding
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+    }
+
+    #[test]
+    fn japanese_compliment_avoids_a_question_ending() {
+        let contract = DialogueClassifier::default().classify("説明が分かりやすいです", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::Compliment);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::AvoidQuestionEnding
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+    }
+
+    #[test]
+    fn casual_observation_allows_a_contentful_question_without_recent_questions() {
+        let contract = DialogueClassifier::default().classify("今日は雨です", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::CasualObservation);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::ContentfulQuestionOnlyIfNoRecentQuestion
+        );
+        assert_eq!(
+            contract.closing_preference,
+            ClosingPreference::QuestionPermitted
+        );
+        assert_eq!(contract.recent_assistant_question_endings, 0);
+    }
+
+    #[test]
+    fn casual_observation_avoids_a_question_after_a_recent_assistant_question() {
+        let history = [ChatMessage::new(ChatRole::Assistant, "How are you?")];
+
+        let contract = DialogueClassifier::default().classify("今日は雨です", &history);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::CasualObservation);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::AvoidQuestionEnding
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+        assert_eq!(contract.recent_assistant_question_endings, 1);
+    }
+
+    #[test]
+    fn ordinary_questions_and_requests_do_not_request_questioning() {
+        for utterance in ["どうすればいい？", "相談したい", "help me decide"] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::AnswerOrRequest,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn negated_or_referenced_questioning_does_not_request_questions() {
+        for utterance in [
+            "Please do not ask me questions.",
+            "I dislike it when people ask me questions.",
+            "We talked about why you ask me questions.",
+            "Ask me questions is a phrase we discussed.",
+            "\"Ask me questions\" is a phrase we discussed.",
+        ] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::AnswerOrRequest,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_command_with_an_appraisal_word_remains_answer_or_request() {
+        let contract = DialogueClassifier::default().classify("recommend nice restaurants", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::AnswerOrRequest);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::ClarificationOnlyIfMateriallyNecessary
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+    }
+
+    #[test]
+    fn compliment_with_show_as_a_noun_remains_a_compliment() {
+        let contract = DialogueClassifier::default().classify("Great show today!", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::Compliment);
+        assert_eq!(
+            contract.question_policy,
+            QuestionPolicy::AvoidQuestionEnding
+        );
+        assert_eq!(contract.closing_preference, ClosingPreference::Declarative);
+    }
+
+    #[test]
+    fn japanese_explicit_questioning_remains_requested() {
+        let contract = DialogueClassifier::default().classify("質問を一つずつして", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
+        assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
+        assert_eq!(
+            contract.closing_preference,
+            ClosingPreference::QuestionPermitted
+        );
+    }
+
+    #[test]
+    fn japanese_requested_questioning_with_follow_on_goal_is_requested() {
+        let contract =
+            DialogueClassifier::default().classify("質問を一つずつして、計画を整理して", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
+        assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
+        assert_eq!(
+            contract.closing_preference,
+            ClosingPreference::QuestionPermitted
+        );
+    }
+
+    #[test]
+    fn japanese_negated_or_referenced_follow_on_questioning_stays_ordinary() {
+        for utterance in [
+            "質問を一つずつしてほしくない",
+            "質問を一つずつして、計画を整理してほしくない",
+            "「質問を一つずつして、計画を整理して」は依頼文の例です",
+            "質問を一つずつして、計画を整理してという例を説明して",
+        ] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::AnswerOrRequest,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn questioning_commands_override_appraisal_and_observation_subject_words() {
+        for utterance in [
+            "ask me questions to discuss the weather",
+            "ask me questions to discuss great ideas",
+        ] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::RequestedQuestioning,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::QuestionRequested,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::QuestionPermitted,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn natural_japanese_polite_question_command_is_requested() {
+        let contract = DialogueClassifier::default().classify("質問してください", &[]);
+
+        assert_eq!(contract.turn_kind, DialogueTurnKind::RequestedQuestioning);
+        assert_eq!(contract.question_policy, QuestionPolicy::QuestionRequested);
+        assert_eq!(
+            contract.closing_preference,
+            ClosingPreference::QuestionPermitted
+        );
+    }
+
+    #[test]
+    fn japanese_polite_question_command_negation_quotes_and_references_stay_ordinary() {
+        for utterance in [
+            "質問しないでください",
+            "質問してくださいとは言っていません",
+            "「質問してください」は依頼文の例です",
+            "質問してくださいという表現を説明して",
+        ] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::AnswerOrRequest,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn requests_with_compliment_or_observation_words_remain_answer_or_request() {
+        for utterance in ["show weather forecast", "I need nice advice"] {
+            let contract = DialogueClassifier::default().classify(utterance, &[]);
+
+            assert_eq!(
+                contract.turn_kind,
+                DialogueTurnKind::AnswerOrRequest,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::ClarificationOnlyIfMateriallyNecessary,
+                "{utterance}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{utterance}"
+            );
+        }
+    }
+
+    #[test]
+    fn assistant_question_ending_detection_handles_terminal_variants() {
+        assert!(assistant_ends_with_question("ASCII?"));
+        assert!(assistant_ends_with_question("全角？"));
+        assert!(assistant_ends_with_question("quoted question?\")  "));
+        assert!(!assistant_ends_with_question("not a question."));
+    }
+
+    #[test]
+    fn assistant_question_ending_detects_japanese_period_interrogatives() {
+        for question in [
+            "リストアップしておくのはいかがでしょうか。",
+            "こちらでよろしいですか。",
+            "明日確認しますか。",
+            "少し休みませんか。",
+        ] {
+            assert!(assistant_ends_with_question(question), "{question}");
+        }
+        for declarative in ["傘を持っていきましょう。", "またいつか。"] {
+            assert!(!assistant_ends_with_question(declarative), "{declarative}");
+        }
+    }
+
+    #[test]
+    fn assistant_question_ending_counts_mashouka_and_japanese_quote_closer_for_cadence() {
+        for assistant_question in ["ほかにお手伝いしましょうか。", "次は何を確認しますか？」"]
+        {
+            assert!(
+                assistant_ends_with_question(assistant_question),
+                "{assistant_question}"
+            );
+            let contract = DialogueClassifier::default().classify(
+                "今日は雨です",
+                &[ChatMessage::new(ChatRole::Assistant, assistant_question)],
+            );
+            assert_eq!(contract.turn_kind, DialogueTurnKind::CasualObservation);
+            assert_eq!(
+                contract.question_policy,
+                QuestionPolicy::AvoidQuestionEnding,
+                "{assistant_question}"
+            );
+            assert_eq!(
+                contract.closing_preference,
+                ClosingPreference::Declarative,
+                "{assistant_question}"
+            );
+            assert_eq!(contract.recent_assistant_question_endings, 1);
+        }
+
+        for declarative in ["またいつか。", "いきましょう。"] {
+            assert!(!assistant_ends_with_question(declarative), "{declarative}");
+        }
+    }
 
     #[test]
     fn router_only_plans_explicit_intents() {

@@ -1,0 +1,97 @@
+[
+  {
+    "name": "japanese_greeting_uses_a_declarative_close",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": [],
+    "utterance": "こんにちは",
+    "expected_turn_kind": "greeting",
+    "expected_question_policy": "avoid_question_ending",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "japanese_compliment_uses_a_declarative_close",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": [],
+    "utterance": "説明が分かりやすいです",
+    "expected_turn_kind": "compliment",
+    "expected_question_policy": "avoid_question_ending",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "japanese_casual_observation_allows_one_contentful_question_without_recent_question",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": [],
+    "utterance": "今日は雨ですね",
+    "expected_turn_kind": "casual_observation",
+    "expected_question_policy": "contentful_question_only_if_no_recent_question",
+    "expected_closing_preference": "question_permitted",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "japanese_casual_observation_avoids_question_after_recent_assistant_question",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": ["Would you like the summary now?"],
+    "utterance": "今日は雨ですね",
+    "expected_turn_kind": "casual_observation",
+    "expected_question_policy": "avoid_question_ending",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 1
+  },
+  {
+    "name": "normal_japanese_request_allows_only_material_clarification",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": [],
+    "utterance": "どうすれば進められますか",
+    "expected_turn_kind": "answer_or_request",
+    "expected_question_policy": "clarification_only_if_materially_necessary",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "secretary_persona_is_preserved_while_app_owns_turn_progression",
+    "persona": "You are a meticulous executive secretary. Use the user's preferred form of address and your own natural wording.",
+    "history": ["May I organize anything else?"],
+    "utterance": "Summarize today's confirmed appointments.",
+    "expected_turn_kind": "answer_or_request",
+    "expected_question_policy": "clarification_only_if_materially_necessary",
+    "expected_closing_preference": "declarative",
+    "expected_recent_question_endings": 1
+  },
+  {
+    "name": "fourth_old_assistant_question_does_not_count",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": [
+      "Would you like a reminder?",
+      "The calendar is synchronized.",
+      "The notes are ready.",
+      "The draft is saved."
+    ],
+    "utterance": "今日は雨ですね",
+    "expected_turn_kind": "casual_observation",
+    "expected_question_policy": "contentful_question_only_if_no_recent_question",
+    "expected_closing_preference": "question_permitted",
+    "expected_recent_question_endings": 0
+  },
+  {
+    "name": "japanese_explicit_questioning_is_permitted",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": ["What outcome matters most?"],
+    "utterance": "質問を一つずつして、計画を整理して",
+    "expected_turn_kind": "requested_questioning",
+    "expected_question_policy": "question_requested",
+    "expected_closing_preference": "question_permitted",
+    "expected_recent_question_endings": 1
+  },
+  {
+    "name": "english_explicit_questioning_is_permitted",
+    "persona": "You are a calm office assistant who speaks plainly.",
+    "history": ["What outcome matters most?"],
+    "utterance": "ask me questions",
+    "expected_turn_kind": "requested_questioning",
+    "expected_question_policy": "question_requested",
+    "expected_closing_preference": "question_permitted",
+    "expected_recent_question_endings": 1
+  }
+]
