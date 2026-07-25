@@ -6,6 +6,7 @@ import type {
   RuntimeHealthEventDto,
   SttStateEventDto,
 } from '@parallel-world/contracts';
+import { RUNTIME_HEALTH_EVENT } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useRef, useState } from 'react';
 import { subscribeEvent } from '../../shared/ipc/event-bus';
@@ -78,7 +79,7 @@ export function MicrophonePanel() {
     const stopLevel = subscribeEvent<AudioLevelEventDto>('stt-level', (payload) => {
       setLevel(payload.rms);
     });
-    const stopHealth = subscribeEvent<RuntimeHealthEventDto>('runtime-health', (payload) => {
+    const stopHealth = subscribeEvent<RuntimeHealthEventDto>(RUNTIME_HEALTH_EVENT, (payload) => {
       if (payload.feature !== 'audio_input') return;
       if (payload.status === 'recovering') {
         if (payload.circuit_open) return;

@@ -5,6 +5,7 @@ import type {
   PersonaProfileDto,
 } from '@parallel-world/contracts';
 import {
+  CHARACTER_SETTINGS_CHANGED_EVENT,
   DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION,
   DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
 } from '@parallel-world/contracts';
@@ -205,7 +206,7 @@ export function PersonalityPanel() {
   const profileSaveInFlight = useRef(false);
   const safetySaveInFlight = useRef(false);
 
-  useEffect(() => subscribeEvent('character-settings-changed', () => {
+  useEffect(() => subscribeEvent(CHARACTER_SETTINGS_CHANGED_EVENT, () => {
     setLoadGeneration((current) => current + 1);
   }), []);
 

@@ -5,6 +5,10 @@ import type {
   SafewordTriggeredEventDto,
   TtsStateEventDto,
 } from '@parallel-world/contracts';
+import {
+  DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
+  SAFEWORD_TRIGGERED_EVENT,
+} from '@parallel-world/contracts';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatWindow } from './ChatWindow';
@@ -35,13 +39,13 @@ function fireMessage(payload: ChatMessageEventDto) {
 
 function fireSafetyChanged(payload: DarkExpressionSafetyChangedEventDto) {
   act(() => {
-    listenHandlers.get('dark-expression-safety-changed')?.({ payload });
+    listenHandlers.get(DARK_EXPRESSION_SAFETY_CHANGED_EVENT)?.({ payload });
   });
 }
 
 function fireSafewordTriggered(payload: SafewordTriggeredEventDto) {
   act(() => {
-    listenHandlers.get('safeword-triggered')?.({ payload });
+    listenHandlers.get(SAFEWORD_TRIGGERED_EVENT)?.({ payload });
   });
 }
 

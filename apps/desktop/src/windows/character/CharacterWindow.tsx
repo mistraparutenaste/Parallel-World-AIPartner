@@ -10,6 +10,10 @@ import type {
   SpeechStopEventDto,
 } from '@parallel-world/contracts';
 import {
+  CHARACTER_SETTINGS_CHANGED_EVENT,
+  RUNTIME_HEALTH_EVENT,
+} from '@parallel-world/contracts';
+import {
   Live2DController,
   SpeechAudioPlayer,
   WebAudioSink,
@@ -189,7 +193,7 @@ export function CharacterWindow({
     );
 
     unlisteners.push(dependencies.subscribeEvent<RuntimeHealthEventDto>(
-      'runtime-health',
+      RUNTIME_HEALTH_EVENT,
       (event) => {
         if (
           event.feature === 'character_renderer'
@@ -205,7 +209,7 @@ export function CharacterWindow({
     ));
 
     unlisteners.push(dependencies.subscribeEvent<CharacterSettingsChangedEventDto>(
-      'character-settings-changed',
+      CHARACTER_SETTINGS_CHANGED_EVENT,
       ({ settings }) => {
         settingsRevision += 1;
         idle?.setTimeoutSeconds(settings.expression_idle_timeout_seconds);

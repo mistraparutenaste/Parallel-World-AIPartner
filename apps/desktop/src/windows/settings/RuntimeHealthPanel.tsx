@@ -1,4 +1,5 @@
 import type { RuntimeDiagnosticsDto, RuntimeHealthEventDto } from '@parallel-world/contracts';
+import { RUNTIME_HEALTH_EVENT } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useState } from 'react';
@@ -50,7 +51,7 @@ export function RuntimeHealthPanel() {
     const poll = window.setInterval(refresh, 5_000);
     let dispose: (() => void) | undefined;
     void Promise.resolve()
-      .then(() => listen<RuntimeHealthEventDto>('runtime-health', ({ payload }) => {
+      .then(() => listen<RuntimeHealthEventDto>(RUNTIME_HEALTH_EVENT, ({ payload }) => {
         if (active) setHealth((current) => mergeHealthEvents(current, [payload]));
       }))
       .then((unlisten) => {
