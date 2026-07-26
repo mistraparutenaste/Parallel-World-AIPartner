@@ -40,12 +40,17 @@ function appDataDir() {
   );
 }
 
+// Live2Dサンプルデータは利用規約への同意が必要でリポジトリに含められない。
+// 新規cloneでは存在しないのが正常なので、警告のみでスキップする（起動は継続）。
 if (!existsSync(sourceDir)) {
-  console.error(`model source not found: ${sourceDir}`);
-  console.error(
-    'project-input/live2d/selected/ にモデルが必要です（SOURCE_URLS.md参照）。',
+  console.warn(`[Live2D] 開発用モデルが見つかりません: ${sourceDir}`);
+  console.warn(
+    '[Live2D] 同梱していないサンプルデータです。project-input/live2d/SOURCE_URLS.md の手順で取得するか、',
   );
-  process.exit(1);
+  console.warn(
+    '[Live2D] アプリ起動後に設定画面からキャラクター（Live2Dまたは静止画）を追加してください。',
+  );
+  process.exit(0);
 }
 
 const targetDir = join(

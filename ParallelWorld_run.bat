@@ -14,10 +14,17 @@ rem ============================================================
 cd /d "%~dp0"
 title Parallel World
 
+rem Corepack must not stop on an interactive download prompt during setup.
+set "COREPACK_ENABLE_DOWNLOAD_PROMPT=0"
+
 echo.
 echo ===== [1/4] Prepare this computer =====
 call powershell -NoProfile -ExecutionPolicy Bypass -File "tools\scripts\prepare-dev-environment.ps1"
 if errorlevel 1 goto :setup_error
+
+rem Tools installed by step 1 (Node.js, Rust) only update the stored PATH.
+rem Reload it so the remaining steps of this session can find them.
+for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$parts = @([Environment]::GetEnvironmentVariable('PATH','Machine'), [Environment]::GetEnvironmentVariable('PATH','User'), (Join-Path $env:USERPROFILE '.cargo\bin')); ((($parts -ne $null) -ne '') -join ';')"`) do set "PATH=%%P"
 
 echo.
 echo ===== [2/4] Validate the frontend =====

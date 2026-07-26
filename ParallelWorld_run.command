@@ -25,6 +25,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
   fail "This launcher is for macOS."
 fi
 
+# Corepack must not stop on an interactive download prompt during setup.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+
 printf '\n===== [1/4] Prepare this computer =====\n'
 /bin/bash tools/scripts/prepare-dev-environment.sh ||
   fail "Environment preparation failed."

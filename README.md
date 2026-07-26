@@ -18,6 +18,11 @@ character assets, validates the frontend and Rust application, and starts
 Parallel World. It is safe to run again: completed steps and downloaded files
 are reused.
 
+Live2D sample models cannot be redistributed, so a fresh clone contains none.
+The launcher reports this and continues: the app starts without a character, and
+a Live2D model or a static image can be added from Settings afterwards. See
+`project-input/live2d/SOURCE_URLS.md` to place the development models manually.
+
 Every large download presents an English `y/n` prompt before it starts. This
 includes compiler toolchains, JavaScript dependencies, the optional speech
 recognition models, and the managed Irodori TTS environment and base model.
