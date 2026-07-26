@@ -77,8 +77,10 @@ pub fn stop_listening<R: Runtime>(app: AppHandle<R>) -> Result<(), String> {
         .map_err(|error| format!("failed to emit stopped speech state: {error}"))
 }
 
-/// Mutes or unmutes capture without tearing the pipeline down
-/// (also used while TTS is playing).
+/// Mutes or unmutes capture without tearing the pipeline down.
+///
+/// Unmuting latches the microphone open; while muted (the launch
+/// default) capture only opens while the push-to-talk shortcut is held.
 ///
 /// # Errors
 ///
@@ -95,6 +97,14 @@ pub async fn set_capture_enabled<R: Runtime>(
     .map_err(|error| format!("audio command worker failed: {error}"))
 }
 
+/// Returns whether the microphone is latched open, so a window mounted
+/// after a mute shortcut can hydrate its toggle.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)] // Tauri injects an owned AppHandle.
+pub fn get_capture_enabled<R: Runtime>(app: AppHandle<R>) -> bool {
+    app.state::<SpeechService>().is_capture_latched()
+}
+
 /// Reported by the character window around speech playback: capture
 /// is muted while TTS audio is playing so the assistant does not hear
 /// itself (基本設計 Phase 2完了条件).
@@ -108,7 +118,7 @@ pub async fn set_speech_playback<R: Runtime>(
     active: bool,
 ) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<SpeechService>().set_capture_enabled(!active);
+        app.state::<SpeechService>().set_playback_active(active);
     })
     .await
     .map_err(|error| format!("audio command worker failed: {error}"))

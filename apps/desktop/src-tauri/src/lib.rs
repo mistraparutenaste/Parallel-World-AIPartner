@@ -57,6 +57,7 @@ pub fn run() {
             commands::audio::set_input_device,
             commands::audio::stop_listening,
             commands::audio::set_capture_enabled,
+            commands::audio::get_capture_enabled,
             commands::audio::set_speech_playback,
             commands::audio::get_audio_diagnostics,
             commands::audio::get_stt_state,

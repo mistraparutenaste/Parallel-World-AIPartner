@@ -104,9 +104,19 @@ pub const fn cycle_mode(mode: Option<CompanionModeDto>) -> Option<CompanionModeD
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct DesktopControlState {
     capture_muted: AtomicBool,
+}
+
+impl Default for DesktopControlState {
+    fn default() -> Self {
+        // The microphone starts muted: input is push-to-talk only until
+        // the user latches it open (起動時マイクOFF).
+        Self {
+            capture_muted: AtomicBool::new(true),
+        }
+    }
 }
 
 impl DesktopControlState {
@@ -220,7 +230,7 @@ fn handle_shortcut<R: Runtime>(
 ) {
     if action == DesktopControlAction::PushToTalk {
         app.state::<SpeechService>()
-            .set_capture_enabled(state == ShortcutState::Pressed);
+            .set_push_to_talk(state == ShortcutState::Pressed);
         return;
     }
     if state != ShortcutState::Pressed {

@@ -255,6 +255,58 @@ impl SttModelPaths {
     }
 }
 
+/// Extra time capture stays open after the push-to-talk key is
+/// released so the segmenter hangover (`hang_ms`) can still close the
+/// last utterance; releasing the key mid-segment would discard it.
+const PUSH_TO_TALK_RELEASE_GRACE: Duration = Duration::from_millis(900);
+
+/// Capture gate shared with the running pipeline.
+///
+/// The microphone is closed at launch (`latched_open` starts `false`)
+/// and opens only while the push-to-talk key is held, or while the user
+/// latches it open from the mute toggle. TTS playback closes it either
+/// way so the assistant never hears itself.
+#[derive(Debug)]
+struct CaptureGate {
+    /// Effective flag read by the pipeline for every frame.
+    effective: Arc<AtomicBool>,
+    ptt_held: AtomicBool,
+    latched_open: AtomicBool,
+    playback_active: AtomicBool,
+    /// Bumped on every push-to-talk transition so a stale release-grace
+    /// timer cannot close a gate the user has already reopened.
+    ptt_epoch: AtomicU64,
+}
+
+impl Default for CaptureGate {
+    fn default() -> Self {
+        Self {
+            effective: Arc::new(AtomicBool::new(false)),
+            ptt_held: AtomicBool::new(false),
+            latched_open: AtomicBool::new(false),
+            playback_active: AtomicBool::new(false),
+            ptt_epoch: AtomicU64::new(0),
+        }
+    }
+}
+
+impl CaptureGate {
+    /// Flag handed to a newly started pipeline. The gate is owned by the
+    /// service, so a restart never reopens a microphone the user left
+    /// muted (起動時マイクOFF).
+    fn shared_flag(&self) -> Arc<AtomicBool> {
+        self.apply();
+        Arc::clone(&self.effective)
+    }
+
+    fn apply(&self) {
+        let open = (self.ptt_held.load(Ordering::Relaxed)
+            || self.latched_open.load(Ordering::Relaxed))
+            && !self.playback_active.load(Ordering::Relaxed);
+        self.effective.store(open, Ordering::Relaxed);
+    }
+}
+
 struct RunningPipeline {
     active_device_id: Arc<Mutex<String>>,
     // The outer `Option` distinguishes "no pending request" from a request;
@@ -559,6 +611,9 @@ pub struct SpeechService {
     pending_start: Mutex<Option<PendingStart>>,
     generation: Arc<AtomicU64>,
     state: Arc<SpeechState>,
+    /// Outlives individual pipelines so mute / push-to-talk state
+    /// survives a restart or a device switch.
+    capture: Arc<CaptureGate>,
 }
 
 impl Default for SpeechService {
@@ -570,6 +625,7 @@ impl Default for SpeechService {
             pending_start: Mutex::new(None),
             generation: Arc::new(AtomicU64::new(0)),
             state: Arc::new(SpeechState::default()),
+            capture: Arc::new(CaptureGate::default()),
         }
     }
 }
@@ -652,7 +708,7 @@ impl SpeechService {
         let cancel = Arc::new(AtomicBool::new(false));
         let startup_timed_out = Arc::new(AtomicBool::new(false));
         *self.lock_active_cancel() = Some(Arc::clone(&cancel));
-        let capture_enabled = Arc::new(AtomicBool::new(true));
+        let capture_enabled = self.capture.shared_flag();
         let requested_device = Arc::new(Mutex::new(None));
         let diagnostics = Arc::new(PipelineDiagnostics::default());
         let dropped_samples = Arc::new(AtomicU64::new(0));
@@ -822,10 +878,59 @@ impl SpeechService {
             .unwrap_or_else(|| self.state.snapshot())
     }
 
-    /// Enables or disables capture (mute / TTS playback guard).
+    /// Latches the microphone open (unmute) or closed (mute).
+    ///
+    /// Push-to-talk still opens capture while the shortcut is held even
+    /// when the latch is closed, which is the launch default.
     pub fn set_capture_enabled(&self, enabled: bool) {
-        if let Some(running) = self.lock().as_ref() {
-            running.capture_enabled.store(enabled, Ordering::Relaxed);
+        self.capture.latched_open.store(enabled, Ordering::Relaxed);
+        self.capture.apply();
+    }
+
+    /// Whether the microphone is latched open (i.e. not muted).
+    #[must_use]
+    pub fn is_capture_latched(&self) -> bool {
+        self.capture.latched_open.load(Ordering::Relaxed)
+    }
+
+    /// Suppresses capture while TTS audio plays so the assistant does
+    /// not transcribe its own voice. Independent of the mute latch.
+    pub fn set_playback_active(&self, active: bool) {
+        self.capture
+            .playback_active
+            .store(active, Ordering::Relaxed);
+        self.capture.apply();
+    }
+
+    /// Opens capture while the push-to-talk shortcut is held.
+    ///
+    /// The release is deferred by [`PUSH_TO_TALK_RELEASE_GRACE`] so the
+    /// utterance that ends with the key press still reaches the
+    /// recognizer instead of being discarded mid-segment.
+    pub fn set_push_to_talk(&self, held: bool) {
+        let gate = Arc::clone(&self.capture);
+        let epoch = gate.ptt_epoch.fetch_add(1, Ordering::AcqRel) + 1;
+        if held {
+            gate.ptt_held.store(true, Ordering::Relaxed);
+            gate.apply();
+            return;
+        }
+        let close = move || {
+            if gate.ptt_epoch.load(Ordering::Acquire) == epoch {
+                gate.ptt_held.store(false, Ordering::Relaxed);
+                gate.apply();
+            }
+        };
+        if let Err(error) = std::thread::Builder::new()
+            .name("pw-push-to-talk-release".into())
+            .spawn(move || {
+                std::thread::sleep(PUSH_TO_TALK_RELEASE_GRACE);
+                close();
+            })
+        {
+            tracing::warn!(%error, "failed to defer push-to-talk release; closing capture now");
+            self.capture.ptt_held.store(false, Ordering::Relaxed);
+            self.capture.apply();
         }
     }
 
@@ -1547,10 +1652,11 @@ mod tests {
     use pw_platform::paths::AppDataLayout;
 
     use super::{
-        CaptureFactory, CaptureLifecycle, DeviceSelector, HealthRegistry, RecoveryCycle,
-        RecoveryCycleEvent, RunningPipeline, SpeechFailure, SpeechService, SpeechState,
-        StartupProgress, StartupStage, StartupWatchdogOutcome, SttModelPaths, WorkerInterruption,
-        aggregate_counter, resolve_device, wait_for_startup_watchdog, worker_interruption,
+        CaptureFactory, CaptureLifecycle, DeviceSelector, HealthRegistry,
+        PUSH_TO_TALK_RELEASE_GRACE, RecoveryCycle, RecoveryCycleEvent, RunningPipeline,
+        SpeechFailure, SpeechService, SpeechState, StartupProgress, StartupStage,
+        StartupWatchdogOutcome, SttModelPaths, WorkerInterruption, aggregate_counter,
+        resolve_device, wait_for_startup_watchdog, worker_interruption,
     };
     use pw_contracts::{HealthStatusDto, RuntimeFeatureDto, SttPhaseDto};
 
@@ -1758,6 +1864,45 @@ mod tests {
         assert!(!diagnostics.running, "installed pipeline is cancelled");
         release.send(()).unwrap();
         probe.join().unwrap();
+    }
+
+    #[test]
+    fn capture_starts_closed_and_push_to_talk_opens_it() {
+        let service = SpeechService::default();
+        assert!(
+            !service.capture.effective.load(Ordering::Relaxed),
+            "the microphone must be muted at launch"
+        );
+        assert!(!service.is_capture_latched());
+
+        service.set_push_to_talk(true);
+        assert!(service.capture.effective.load(Ordering::Relaxed));
+
+        // The release is deferred so the last utterance still completes.
+        service.set_push_to_talk(false);
+        assert!(service.capture.effective.load(Ordering::Relaxed));
+
+        // A new press invalidates the pending release timer.
+        service.set_push_to_talk(true);
+        std::thread::sleep(PUSH_TO_TALK_RELEASE_GRACE + Duration::from_millis(100));
+        assert!(service.capture.effective.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn playback_closes_capture_even_when_unmuted() {
+        let service = SpeechService::default();
+        service.set_capture_enabled(true);
+        assert!(service.capture.effective.load(Ordering::Relaxed));
+
+        service.set_playback_active(true);
+        assert!(!service.capture.effective.load(Ordering::Relaxed));
+        // Push-to-talk must not talk over the assistant's own voice.
+        service.set_push_to_talk(true);
+        assert!(!service.capture.effective.load(Ordering::Relaxed));
+
+        service.set_playback_active(false);
+        assert!(service.capture.effective.load(Ordering::Relaxed));
+        assert!(service.is_capture_latched());
     }
 
     #[test]

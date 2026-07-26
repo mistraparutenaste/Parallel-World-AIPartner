@@ -39,6 +39,7 @@ fn main() {
             "set_input_device",
             "stop_listening",
             "set_capture_enabled",
+            "get_capture_enabled",
             "get_audio_diagnostics",
             "get_stt_state",
             "send_chat_message",

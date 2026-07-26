@@ -34,7 +34,8 @@ export function MicrophonePanel() {
   const [phase, setPhase] = useState<SttStateEventDto['phase']>('stopped');
   const [message, setMessage] = useState<string | null>(null);
   const [level, setLevel] = useState(0);
-  const [muted, setMuted] = useState(false);
+  // 起動時マイクOFF: 入力はプッシュトゥトークを押している間だけ開く。
+  const [muted, setMuted] = useState(true);
   const [diagnostics, setDiagnostics] = useState<AudioDiagnosticsDto | null>(
     null,
   );
@@ -78,6 +79,13 @@ export function MicrophonePanel() {
         if (!disposed && !stateEventSeen) {
           setPhase(snapshot.phase);
           setMessage(snapshot.message ?? null);
+        }
+      })
+      .catch(() => {});
+    invoke<boolean>('get_capture_enabled')
+      .then((enabled) => {
+        if (!disposed) {
+          setMuted(!enabled);
         }
       })
       .catch(() => {});
@@ -195,6 +203,10 @@ export function MicrophonePanel() {
           ミュート
         </label>
       </div>
+      <p>
+        起動直後はミュート状態です。ミュート中もプッシュトゥトークの
+        ショートカットを押している間だけマイク入力を受け付けます。
+      </p>
       <div>
         <label htmlFor="input-level">入力レベル</label>
         <meter id="input-level" min={0} max={0.5} value={level} />

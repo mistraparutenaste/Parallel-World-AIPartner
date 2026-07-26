@@ -160,15 +160,34 @@ describe('MicrophonePanel', () => {
     );
   });
 
-  it('toggles mute through set_capture_enabled', async () => {
+  it('starts muted and toggles mute through set_capture_enabled', async () => {
     render(<MicrophonePanel />);
     await screen.findByRole('option', { name: 'Mic A' });
 
-    fireEvent.click(screen.getByLabelText('ミュート'));
+    expect(screen.getByLabelText('ミュート')).toBeChecked();
 
+    fireEvent.click(screen.getByLabelText('ミュート'));
+    expect(invokeMock).toHaveBeenCalledWith('set_capture_enabled', {
+      enabled: true,
+    });
+
+    fireEvent.click(screen.getByLabelText('ミュート'));
     expect(invokeMock).toHaveBeenCalledWith('set_capture_enabled', {
       enabled: false,
     });
+  });
+
+  it('hydrates the mute toggle from the backend capture state', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'list_microphones') return Promise.resolve(DEVICES);
+      if (command === 'get_capture_enabled') return Promise.resolve(true);
+      return Promise.resolve(null);
+    });
+
+    render(<MicrophonePanel />);
+    await screen.findByRole('option', { name: 'Mic A' });
+
+    expect(screen.getByLabelText('ミュート')).not.toBeChecked();
   });
 
   it('shows audio recovery and re-enumerates devices', async () => {

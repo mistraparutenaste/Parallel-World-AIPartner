@@ -154,6 +154,7 @@ fn settings_capability_exposes_status_character_and_audio_control() {
             "allow-set-input-device",
             "allow-stop-listening",
             "allow-set-capture-enabled",
+            "allow-get-capture-enabled",
             "allow-get-audio-diagnostics",
             "allow-get-stt-state",
             "allow-get-runtime-diagnostics",
