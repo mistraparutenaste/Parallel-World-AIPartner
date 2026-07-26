@@ -35,6 +35,11 @@ test('Windows setup prompts before each large prerequisite or model download', (
   assert.match(windowsSetup, /download-stt-models\.mjs/);
 });
 
+test('Windows setup recognizes the installed WebView2 Runtime product', () => {
+  assert.match(windowsSetup, /\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5\}/);
+  assert.doesNotMatch(windowsSetup, /\{F1E7E71E-42A2-4B5A-B7A7-3007D3C4141F\}/);
+});
+
 test('Windows launcher prepares the environment before validation and TTS', () => {
   const prepare = windowsLauncher.indexOf('prepare-dev-environment.ps1');
   const typecheck = windowsLauncher.indexOf('corepack pnpm typecheck');

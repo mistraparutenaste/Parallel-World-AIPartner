@@ -933,15 +933,15 @@ fn tombstone_memory_work(
         "INSERT INTO memory_tombstones(memory_id,generation,deleted_at,final_support_removed,pinned) VALUES(?1,?2,?3,1,?4)",
         params![memory_id, generation, now, pinned],
     ).map_err(memory_error)?;
-    transaction.execute(
-        "UPDATE memory_candidates SET candidate_state='rejected',policy_state='rejected',rejection_reason='target memory deleted',updated_at=?1 WHERE target_memory_id=?2 AND candidate_state='pending'",
-        params![now, memory_id],
-    ).map_err(memory_error)?;
     // Any observation that supplied, or is attempting to alter, this memory
     // loses its lease generation.  The existing privacy convention retains a
     // content-free tombstone so historical deletion/provenance audits work.
     transaction.execute(
         "UPDATE memory_observations SET deletion_generation=deletion_generation+1,user_text='[deleted]',input_hash='tombstone:' || id,processing_state='deferred',lease_owner=NULL,lease_expires_at=NULL,attempt_token=NULL,retry_after_at=NULL,last_error='memory deleted',deleted_at=?1,updated_at=?1 WHERE deleted_at IS NULL AND (id IN (SELECT observation_id FROM memory_provenance WHERE memory_id=?2) OR id IN (SELECT observation_id FROM memory_candidates WHERE target_memory_id=?2))",
+        params![now, memory_id],
+    ).map_err(memory_error)?;
+    transaction.execute(
+        "UPDATE memory_candidates SET target_memory_id=NULL,expected_target_revision=NULL,candidate_state=CASE WHEN candidate_state='pending' THEN 'rejected' ELSE candidate_state END,policy_state=CASE WHEN candidate_state='pending' THEN 'rejected' ELSE policy_state END,rejection_reason=CASE WHEN candidate_state='pending' THEN 'target memory deleted' ELSE rejection_reason END,updated_at=CASE WHEN candidate_state='pending' THEN ?1 ELSE updated_at END WHERE target_memory_id=?2",
         params![now, memory_id],
     ).map_err(memory_error)?;
     Ok(())
@@ -2531,6 +2531,41 @@ mod tests {
         prompt_rank, should_become_dormant,
     };
 
+    fn store_with_targeted_candidate() -> (SqliteMemoryStore, i64) {
+        let mut store = SqliteMemoryStore::new(Database::open_in_memory().unwrap());
+        let memory_id = store.upsert_memory(None, "target memory", 1).unwrap();
+        store
+            .database
+            .connection()
+            .execute(
+                "INSERT INTO memory_observations(conversation_id,turn_id,user_text,input_hash,observed_at,created_at,updated_at)
+                 VALUES('chat',1,'updated memory','targeted-input',1,1,1)",
+                [],
+            )
+            .unwrap();
+        let observation_id = store.database.connection().last_insert_rowid();
+        store
+            .database
+            .connection()
+            .execute(
+                "INSERT INTO memory_classification_runs(observation_id,classifier_version,schema_version,input_hash,lease_attempt_token,transport_outcome,created_at)
+                 VALUES(?1,'test',1,'targeted-input','attempt','completed',1)",
+                [observation_id],
+            )
+            .unwrap();
+        let run_id = store.database.connection().last_insert_rowid();
+        store
+            .database
+            .connection()
+            .execute(
+                "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,target_memory_id,expected_target_revision,proposed_operation,proposed_relation,source_start,source_end,created_at,updated_at)
+                 VALUES(?1,?2,0,'updated memory','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable',?3,1,'reinforce','reasserted',0,14,1,1)",
+                rusqlite::params![observation_id, run_id, memory_id],
+            )
+            .unwrap();
+        (store, memory_id)
+    }
+
     /// Pins the exact on-disk enum strings. These values live in existing
     /// `SQLite` rows, so any diff here is a data-compatibility break, not a
     /// refactoring detail.
@@ -3371,6 +3406,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(tombstone, 1);
+    }
+
+    #[test]
+    fn deleting_a_memory_clears_both_candidate_target_fields() {
+        let (mut store, memory_id) = store_with_targeted_candidate();
+
+        store.delete_memory(memory_id).unwrap();
+
+        let candidate_target: (Option<i64>, Option<i64>) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT target_memory_id,expected_target_revision FROM memory_candidates",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(candidate_target, (None, None));
+        let deleted_at: Option<i64> = store
+            .database
+            .connection()
+            .query_row("SELECT deleted_at FROM memory_observations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(deleted_at.is_some());
+    }
+
+    #[test]
+    fn deleting_all_memories_clears_both_candidate_target_fields() {
+        let (mut store, _) = store_with_targeted_candidate();
+        let transaction = store.database.connection_mut().transaction().unwrap();
+
+        assert_eq!(
+            delete_all_memories_in_transaction(&transaction, 2).unwrap(),
+            1
+        );
+        transaction.commit().unwrap();
+
+        let candidate_target: (Option<i64>, Option<i64>) = store
+            .database
+            .connection()
+            .query_row(
+                "SELECT target_memory_id,expected_target_revision FROM memory_candidates",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(candidate_target, (None, None));
     }
 
     #[test]

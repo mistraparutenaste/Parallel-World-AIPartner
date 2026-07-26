@@ -426,6 +426,59 @@ mod tests {
     use pw_contracts::{ConversationHistoryDeletedEventDto, SCHEMA_VERSION};
     use pw_storage::{Database, SqliteConversationHistory};
 
+    fn seed_targeted_memory_candidate(database: &Database, conversation_id: &str) {
+        database
+            .connection()
+            .execute(
+                "INSERT INTO conversations(id,created_at,updated_at) VALUES(?1,1,1)",
+                [conversation_id],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memories(content,created_at,updated_at) VALUES('target memory',1,1)",
+                [],
+            )
+            .unwrap();
+        let memory_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memory_observations(conversation_id,turn_id,user_text,input_hash,observed_at,created_at,updated_at)
+                 VALUES(?1,1,'updated memory','targeted-input',1,1,1)",
+                [conversation_id],
+            )
+            .unwrap();
+        let observation_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memory_classification_runs(observation_id,classifier_version,schema_version,input_hash,lease_attempt_token,transport_outcome,created_at)
+                 VALUES(?1,'test',1,'targeted-input','attempt','completed',1)",
+                [observation_id],
+            )
+            .unwrap();
+        let run_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memory_candidates(observation_id,classification_run_id,candidate_ordinal,content,subject_scope,epistemic_form,attribution,speech_act,source_mode,polarity,conditionality,fictionality,verification_status,temporal_scope,target_memory_id,expected_target_revision,proposed_operation,proposed_relation,source_start,source_end,created_at,updated_at)
+                 VALUES(?1,?2,0,'updated memory','user_self','fact_claim','user','asserted','direct','affirmed','actual','real_world','user_reported','stable',?3,1,'reinforce','reasserted',0,14,1,1)",
+                rusqlite::params![observation_id, run_id, memory_id],
+            )
+            .unwrap();
+        let candidate_id = database.connection().last_insert_rowid();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memory_provenance(memory_id,observation_id,candidate_id,relation,created_at)
+                 VALUES(?1,?2,?3,'reasserted',1)",
+                rusqlite::params![memory_id, observation_id, candidate_id],
+            )
+            .unwrap();
+    }
+
     #[test]
     fn conversation_log_pages_latest_messages_and_searches_literal_wildcards() {
         let root = std::env::temp_dir().join(format!("pw-conversation-log-{}", std::process::id()));
@@ -644,6 +697,51 @@ mod tests {
                 .tts_audio_files,
             0
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn memory_deletion_handles_candidates_that_target_deleted_memories() {
+        let root =
+            std::env::temp_dir().join(format!("pw-data-target-memory-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("data.sqlite3");
+        let database = Database::open(&database_path).unwrap();
+        seed_targeted_memory_candidate(&database, "target-memory");
+        drop(database);
+
+        let deleted = delete_memories_core(&database_path).unwrap();
+        assert_eq!(deleted.deleted_records, 1);
+        let database = Database::open(&database_path).unwrap();
+        let remaining: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+        drop(database);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn history_deletion_handles_candidates_that_target_deleted_memories() {
+        let root =
+            std::env::temp_dir().join(format!("pw-data-target-history-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("data.sqlite3");
+        let database = Database::open(&database_path).unwrap();
+        seed_targeted_memory_candidate(&database, "target-history");
+        drop(database);
+
+        delete_history_core(&database_path).unwrap();
+        let database = Database::open(&database_path).unwrap();
+        let remaining: i64 = database
+            .connection()
+            .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(remaining, 0);
+        drop(database);
         let _ = std::fs::remove_dir_all(root);
     }
 

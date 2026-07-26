@@ -66,10 +66,14 @@ function Test-MsvcBuildTools {
 }
 
 function Test-WebView2Runtime {
+    $productId = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
     foreach ($scope in @('HKLM:', 'HKCU:')) {
         foreach ($architecture in @('', '\Wow6432Node')) {
-            $path = "$scope\SOFTWARE$architecture\Microsoft\EdgeUpdate\Clients\{F1E7E71E-42A2-4B5A-B7A7-3007D3C4141F}"
-            if (Test-Path -LiteralPath $path) { return $true }
+            $path = "$scope\SOFTWARE$architecture\Microsoft\EdgeUpdate\Clients\$productId"
+            $version = Get-ItemPropertyValue -LiteralPath $path -Name 'pv' -ErrorAction SilentlyContinue
+            if (-not [string]::IsNullOrWhiteSpace($version) -and $version -ne '0.0.0.0') {
+                return $true
+            }
         }
     }
     return $false
