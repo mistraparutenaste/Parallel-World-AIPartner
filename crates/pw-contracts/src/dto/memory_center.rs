@@ -63,6 +63,7 @@ pub struct PendingMemoryCandidateDto {
 pub struct CommitmentSummaryDto {
     #[ts(type = "number")]
     pub id: i64,
+    pub content: String,
     pub status: String,
     #[ts(type = "number | null")]
     pub due_at: Option<i64>,
@@ -81,4 +82,14 @@ pub struct DialogueSummaryDto {
     pub expires_at: i64,
     #[ts(type = "number")]
     pub revision: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "SelfReviewDto.ts")]
+pub struct SelfReviewDto {
+    pub content: String,
+    #[ts(type = "number")]
+    pub generated_at: i64,
+    #[ts(type = "number | null")]
+    pub source_message_id: Option<i64>,
 }

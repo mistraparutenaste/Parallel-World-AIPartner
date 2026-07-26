@@ -32,14 +32,15 @@ use crate::{
     ConversationLogPageDto, ConversationStateEventDto, DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION,
     DARK_EXPRESSION_SAFETY_CHANGED_EVENT, DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
     DarkExpressionSafetyChangedEventDto, DataDeletionResultDto, DataUsageDto,
-    DeviceFallbackEventDto, DiagnosticReportDto, FrontendDiagnosticDto, LlmSettingsDto,
-    MemoryCenterDto, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaSettingsDto, RUNTIME_HEALTH_EVENT,
-    RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT, SCHEMA_VERSION, SPEECH_AUDIO_EVENT,
-    SPEECH_STOP_EVENT, STT_DEVICE_FALLBACK_EVENT, STT_LEVEL_EVENT, STT_STATE_EVENT,
-    STT_TRANSCRIPT_EVENT, SafewordTriggeredEventDto, SpeechAudioEventDto, SpeechStopEventDto,
-    SttStateEventDto, TTS_STATE_EVENT, TechnicalLogChunkDto, TranscriptEventDto, TtsSettingsDto,
-    TtsStateEventDto, TtsVoiceDto, UI_PREFERENCES_CHANGED_EVENT, UPDATE_PROGRESS_EVENT,
-    UiPreferencesDto, UpdateStateDto, UserDictWordDto,
+    DeviceFallbackEventDto, DiagnosticReportDto, FrontendDiagnosticDto, IrodoriInstallStateDto,
+    LlmSettingsDto, MemoryCenterDto, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaSettingsDto,
+    RUNTIME_HEALTH_EVENT, RetentionSettingsDto, RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT,
+    SCHEMA_VERSION, SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, STT_DEVICE_FALLBACK_EVENT,
+    STT_LEVEL_EVENT, STT_STATE_EVENT, STT_TRANSCRIPT_EVENT, SafewordTriggeredEventDto,
+    SelfReviewDto, SpeechAudioEventDto, SpeechStopEventDto, SttStateEventDto, TTS_STATE_EVENT,
+    TechnicalLogChunkDto, TranscriptEventDto, TtsSettingsDto, TtsStateEventDto, TtsVoiceDto,
+    UI_PREFERENCES_CHANGED_EVENT, UPDATE_PROGRESS_EVENT, UiPreferencesDto, UpdateStateDto,
+    UserDictWordDto,
 };
 
 /// One `pub const` re-exported into `packages/contracts/src/index.ts`.
@@ -225,10 +226,12 @@ fn export_dto_bindings(config: &Config) {
     LlmSettingsDto::export_all(config).expect("export LlmSettingsDto bindings");
     DataUsageDto::export_all(config).expect("export DataUsageDto bindings");
     DataDeletionResultDto::export_all(config).expect("export DataDeletionResultDto bindings");
+    RetentionSettingsDto::export_all(config).expect("export RetentionSettingsDto bindings");
     DiagnosticReportDto::export_all(config).expect("export DiagnosticReportDto bindings");
     FrontendDiagnosticDto::export_all(config).expect("export FrontendDiagnosticDto bindings");
     TechnicalLogChunkDto::export_all(config).expect("export TechnicalLogChunkDto bindings");
     MemoryCenterDto::export_all(config).expect("export MemoryCenterDto bindings");
+    SelfReviewDto::export_all(config).expect("export SelfReviewDto bindings");
     PersonaSettingsDto::export_all(config).expect("export PersonaSettingsDto bindings");
     RuntimeDiagnosticsDto::export_all(config).expect("export RuntimeDiagnosticsDto bindings");
     DarkExpressionSafetyChangedEventDto::export_all(config)
@@ -236,6 +239,7 @@ fn export_dto_bindings(config: &Config) {
     SafewordTriggeredEventDto::export_all(config)
         .expect("export SafewordTriggeredEventDto bindings");
     TtsSettingsDto::export_all(config).expect("export TtsSettingsDto bindings");
+    IrodoriInstallStateDto::export_all(config).expect("export IrodoriInstallStateDto bindings");
     TtsVoiceDto::export_all(config).expect("export TtsVoiceDto bindings");
     SpeechAudioEventDto::export_all(config).expect("export SpeechAudioEventDto bindings");
     SpeechStopEventDto::export_all(config).expect("export SpeechStopEventDto bindings");

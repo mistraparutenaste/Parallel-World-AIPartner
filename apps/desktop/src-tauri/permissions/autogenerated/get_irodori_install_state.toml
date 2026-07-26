@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-irodori-install-state"
+description = "Enables the get_irodori_install_state command without any pre-configured scope."
+commands.allow = ["get_irodori_install_state"]
+
+[[permission]]
+identifier = "deny-get-irodori-install-state"
+description = "Denies the get_irodori_install_state command without any pre-configured scope."
+commands.deny = ["get_irodori_install_state"]

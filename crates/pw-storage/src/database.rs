@@ -28,7 +28,10 @@ const MEMORY_POLICY_FENCES_MIGRATION: &str =
     include_str!("../migrations/0015_memory_policy_fences.sql");
 const TEMPORARY_CONVERSATION_FENCE_MIGRATION: &str =
     include_str!("../migrations/0016_temporary_conversation_fence.sql");
-const CURRENT_SCHEMA_VERSION: i64 = 16;
+const SELF_REVIEW_MIGRATION: &str = include_str!("../migrations/0017_self_review.sql");
+const IMPORTED_MEMORY_DOMAINS_MIGRATION: &str =
+    include_str!("../migrations/0018_imported_memory_domains.sql");
+const CURRENT_SCHEMA_VERSION: i64 = 18;
 
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -157,6 +160,8 @@ impl Database {
         apply_migration!(14, DIALOGUE_STATE_MIGRATION);
         apply_migration!(15, MEMORY_POLICY_FENCES_MIGRATION);
         apply_migration!(16, TEMPORARY_CONVERSATION_FENCE_MIGRATION);
+        apply_migration!(17, SELF_REVIEW_MIGRATION);
+        apply_migration!(18, IMPORTED_MEMORY_DOMAINS_MIGRATION);
         let _ = current;
         migration.commit()?;
         Ok(Self { connection })
@@ -245,7 +250,7 @@ mod tests {
             connection
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
 
         for table in [
@@ -265,6 +270,8 @@ mod tests {
             "commitments",
             "temporary_conversations",
             "dialogue_states",
+            "self_reviews",
+            "imported_memory_domains",
         ] {
             let exists: bool = connection
                 .query_row(
@@ -281,13 +288,13 @@ mod tests {
     fn rejects_database_from_a_future_schema_version() {
         let path = std::env::temp_dir().join(format!("pw-future-{}.sqlite3", std::process::id()));
         let connection = rusqlite::Connection::open(&path).unwrap();
-        connection.pragma_update(None, "user_version", 17).unwrap();
+        connection.pragma_update(None, "user_version", 19).unwrap();
         drop(connection);
         assert!(matches!(
             Database::open(&path),
             Err(super::StorageError::FutureSchema {
-                found: 17,
-                supported: 16
+                found: 19,
+                supported: 18
             })
         ));
         let _ = std::fs::remove_file(path);
@@ -315,7 +322,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
 
         drop(reopened);
@@ -390,7 +397,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         drop(database);
         let _ = std::fs::remove_file(path);
@@ -514,7 +521,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -558,7 +565,7 @@ mod tests {
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
         assert!(index_exists);
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         let typed: (i64, String, String, String, String, String, String, String) = database
             .connection()
             .query_row(
@@ -598,7 +605,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -674,7 +681,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
@@ -731,14 +738,14 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         drop(reopened);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn populated_v12_fixture_upgrades_through_v16_and_reopens() {
+    fn populated_v12_fixture_upgrades_through_v18_and_reopens() {
         let path = std::env::temp_dir().join(format!(
             "pw-v12-companion-state-{}.sqlite3",
             std::process::id()
@@ -781,7 +788,7 @@ mod tests {
             .connection()
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         drop(database);
         assert_eq!(
             Database::open(&path)
@@ -789,7 +796,7 @@ mod tests {
                 .connection()
                 .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
                 .unwrap(),
-            16
+            18
         );
         let _ = std::fs::remove_file(path);
     }
@@ -837,7 +844,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(version, 16);
+        assert_eq!(version, 18);
         assert!(trigger.contains("memory_tombstones"));
         drop(database);
         let _ = std::fs::remove_file(path);

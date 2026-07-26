@@ -8,6 +8,7 @@ pub mod epistemic;
 mod lifecycle;
 mod observation;
 mod promotion;
+mod self_review;
 mod state;
 mod validator;
 
@@ -45,6 +46,7 @@ pub use promotion::{
     MemoryPromoter, PromotionResult, ProvenanceLink, ProvisionalMemoryChangeSet,
     VersionedMemoryAction,
 };
+pub use self_review::SelfReviewGenerator;
 pub use state::{
     AsyncStateWrite, AsyncStateWriter, CasOutcome, Commitment, CommitmentStatus,
     CompanionStateStore, DialogueSignals, DialogueState, DomainConsent, DomainControl,

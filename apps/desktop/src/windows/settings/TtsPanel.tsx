@@ -1,4 +1,5 @@
 import type {
+  IrodoriInstallStateDto,
   TtsEngineKind,
   TtsSettingsDto,
   TtsVoiceDto,
@@ -33,6 +34,8 @@ export function TtsPanel() {
   const [surface, setSurface] = useState('');
   const [pronunciation, setPronunciation] = useState('');
   const [accentType, setAccentType] = useState(0);
+  const [irodoriInstall, setIrodoriInstall] = useState<IrodoriInstallStateDto | null>(null);
+  const [installingIrodori, setInstallingIrodori] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,10 +51,29 @@ export function TtsPanel() {
           setMessage(`音声合成設定を読み込めません: ${String(error)}`);
         }
       });
+    invoke<IrodoriInstallStateDto>('get_irodori_install_state')
+      .then((state) => {
+        if (!cancelled) setIrodoriInstall(state);
+      })
+      .catch(() => {
+        if (!cancelled) setIrodoriInstall(null);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const installIrodori = async () => {
+    setInstallingIrodori(true);
+    try {
+      await invoke('install_irodori');
+      setMessage('Irodoriインストーラーを別ウィンドウで起動しました。');
+    } catch (error) {
+      setMessage(`Irodoriインストーラーを起動できません: ${String(error)}`);
+    } finally {
+      setInstallingIrodori(false);
+    }
+  };
 
   const update = (patch: Partial<TtsSettingsDto>) => {
     if (patch.engine !== undefined || patch.base_url !== undefined) {
@@ -270,6 +292,22 @@ export function TtsPanel() {
           </div>
           {settings.engine === 'irodori' && (
             <div>
+              {irodoriInstall && !irodoriInstall.installed ? (
+                <div className="setting-row">
+                  <div>
+                    <strong>Irodoriがまだ導入されていません</strong>
+                    <p>約2.5GBのモデルを含むため、別ウィンドウで確認してからダウンロードします。</p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={installingIrodori}
+                    onClick={() => void installIrodori()}
+                  >
+                    {installingIrodori ? '起動中…' : 'インストールを開始'}
+                  </button>
+                </div>
+              ) : null}
+              {irodoriInstall?.installed ? <p>管理対象のIrodoriは導入済みです。</p> : null}
               <div>
                 <label htmlFor="tts-irodori-lora">LoRA adapter path</label>
                 <input

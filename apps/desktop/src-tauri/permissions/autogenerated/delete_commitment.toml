@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-commitment"
+description = "Enables the delete_commitment command without any pre-configured scope."
+commands.allow = ["delete_commitment"]
+
+[[permission]]
+identifier = "deny-delete-commitment"
+description = "Denies the delete_commitment command without any pre-configured scope."
+commands.deny = ["delete_commitment"]

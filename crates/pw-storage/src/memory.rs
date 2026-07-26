@@ -16,10 +16,30 @@ use pw_application::memory::{
 use std::collections::{HashMap, HashSet};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use sha2::{Digest, Sha256};
 
 const SEARCH_POOL_MULTIPLIER: usize = 4;
 const MAX_SEARCH_POOL: usize = 100;
 const MAX_FTS_PHRASES: usize = 16;
+
+/// One validated row from an explicit user-controlled memory import.
+#[derive(Clone, Copy, Debug)]
+pub struct ImportedMemoryRecord<'a> {
+    /// Existing memory id to update, or `None` to allocate a new id.
+    pub id: Option<i64>,
+    /// Memory domain retained for later export.
+    pub domain: &'a str,
+    /// Unredacted durable memory content.
+    pub content: &'a str,
+    /// Durable lifecycle state.
+    pub state: &'a str,
+    /// Whether the memory is pinned.
+    pub pinned: bool,
+    /// Original creation timestamp in epoch seconds.
+    pub created_at: i64,
+    /// Last update timestamp in epoch seconds.
+    pub updated_at: i64,
+}
 
 pub struct SqliteMemoryStore {
     database: Database,
@@ -122,6 +142,165 @@ impl SqliteMemoryStore {
             .map_err(memory_error)?;
         tombstone_and_delete_memory(&transaction, id, epoch_seconds())?;
         transaction.commit().map_err(memory_error)
+    }
+
+    /// Loads the unredacted content for one explicitly selected memory.
+    ///
+    /// # Errors
+    /// Returns an error for a failed `SQLite` query.
+    pub fn memory_content(&self, id: i64) -> Result<Option<(String, i64)>, PortError> {
+        self.database
+            .connection()
+            .query_row(
+                "SELECT content,revision FROM memories WHERE id=?1",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(memory_error)
+    }
+
+    /// Updates one durable memory behind a revision fence. The FTS projection
+    /// is maintained by the existing content-update trigger.
+    ///
+    /// # Errors
+    /// Returns an error when content is unsafe, the revision is stale, the
+    /// memory does not exist, or the transaction fails.
+    pub fn update_memory_fenced(
+        &mut self,
+        id: i64,
+        content: &str,
+        expected_revision: i64,
+    ) -> Result<i64, PortError> {
+        if id <= 0 || expected_revision <= 0 || !is_safe_persistent_content(content) {
+            return Err(PortError("invalid memory update".into()));
+        }
+        let now = epoch_seconds();
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(memory_error)?;
+        let changed = transaction
+            .execute(
+                "UPDATE memories SET content=?1,revision=revision+1,updated_at=?2 WHERE id=?3 AND revision=?4",
+                params![content, now, id, expected_revision],
+            )
+            .map_err(memory_error)?;
+        if changed != 1 {
+            return Err(PortError("MEMORY_CONFLICT".into()));
+        }
+        let next_revision = expected_revision + 1;
+        let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO memory_versions(memory_id,revision,content_hash,created_at) VALUES(?1,?2,?3,?4)",
+                params![id, next_revision, content_hash, now],
+            )
+            .map_err(memory_error)?;
+        transaction.commit().map_err(memory_error)?;
+        Ok(next_revision)
+    }
+
+    /// Inserts a memory from an explicit user import. When `id` exists, the
+    /// row is updated through its current revision; otherwise a new row is
+    /// created with conservative legacy typing defaults.
+    ///
+    /// # Errors
+    /// Returns an error when content is unsafe or the transaction fails.
+    pub fn insert_memory_direct(
+        &mut self,
+        imported: ImportedMemoryRecord<'_>,
+    ) -> Result<i64, PortError> {
+        let ImportedMemoryRecord {
+            id,
+            domain,
+            content,
+            state,
+            pinned,
+            created_at,
+            updated_at,
+        } = imported;
+        if MemoryDomain::parse(domain).is_err()
+            || content.trim().is_empty()
+            || !is_safe_persistent_content(content)
+            || !matches!(state, "active" | "dormant" | "superseded")
+            || created_at < 0
+            || updated_at < 0
+        {
+            return Err(PortError("invalid imported memory".into()));
+        }
+        if id.is_some_and(|value| value <= 0) {
+            return Err(PortError("invalid imported memory id".into()));
+        }
+        let transaction = self
+            .database
+            .connection_mut()
+            .transaction()
+            .map_err(memory_error)?;
+        if let Some(id) = id {
+            let revision = transaction
+                .query_row("SELECT revision FROM memories WHERE id=?1", [id], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .optional()
+                .map_err(memory_error)?;
+            if let Some(revision) = revision {
+                transaction
+                    .execute(
+                        "UPDATE memories SET content=?1,state=?2,pinned=?3,created_at=?4,updated_at=?5,last_seen_at=MAX(last_seen_at,?5),revision=revision+1 WHERE id=?6 AND revision=?7",
+                        params![content, state, pinned, created_at, updated_at, id, revision],
+                    )
+                    .map_err(memory_error)?;
+                let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                transaction
+                    .execute(
+                        "INSERT INTO memory_versions(memory_id,revision,content_hash,created_at) VALUES(?1,?2,?3,?4)",
+                        params![id, revision + 1, content_hash, updated_at],
+                    )
+                    .map_err(memory_error)?;
+                transaction
+                    .execute(
+                        "INSERT INTO imported_memory_domains(memory_id,domain) VALUES(?1,?2)
+                         ON CONFLICT(memory_id) DO UPDATE SET domain=excluded.domain",
+                        params![id, domain],
+                    )
+                    .map_err(memory_error)?;
+                transaction.commit().map_err(memory_error)?;
+                return Ok(id);
+            }
+        }
+        if let Some(id) = id {
+            transaction
+                .execute(
+                    "INSERT INTO memories(id,content,created_at,updated_at,state,pinned,last_seen_at) VALUES(?1,?2,?3,?4,?5,?6,?4)",
+                    params![id, content, created_at, updated_at, state, pinned],
+                )
+                .map_err(memory_error)?;
+        } else {
+            transaction
+                .execute(
+                    "INSERT INTO memories(content,created_at,updated_at,state,pinned,last_seen_at) VALUES(?1,?2,?3,?4,?5,?3)",
+                    params![content, created_at, updated_at, state, pinned],
+                )
+                .map_err(memory_error)?;
+        }
+        let memory_id = id.unwrap_or_else(|| transaction.last_insert_rowid());
+        transaction
+            .execute(
+                "INSERT INTO imported_memory_domains(memory_id,domain) VALUES(?1,?2)",
+                params![memory_id, domain],
+            )
+            .map_err(memory_error)?;
+        let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO memory_versions(memory_id,revision,content_hash,created_at) VALUES(?1,1,?2,?3)",
+                params![memory_id, content_hash, updated_at],
+            )
+            .map_err(memory_error)?;
+        transaction.commit().map_err(memory_error)?;
+        Ok(memory_id)
     }
 
     fn lifecycle_search(

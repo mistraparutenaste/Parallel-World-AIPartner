@@ -47,14 +47,14 @@ pub use chat::{
     ChatMessageEventDto, ChatRoleDto, ConversationHistoryDeletedEventDto, ConversationLogPageDto,
     ConversationMessageDto, ConversationStateEventDto, LlmProviderKind, LlmSettingsDto,
 };
-pub use data::{DataDeletionResultDto, DataUsageDto};
+pub use data::{DataDeletionResultDto, DataUsageDto, RetentionSettingsDto};
 pub use diagnostics::{
     DiagnosticReportDto, FrontendDiagnosticDto, FrontendErrorKindDto, TechnicalLogChunkDto,
     TechnicalLogCursorDto,
 };
 pub use memory_center::{
     CommitmentSummaryDto, DialogueSummaryDto, MemoryCenterDto, MemoryDomainControlDto,
-    MemorySummaryDto, PendingMemoryCandidateDto,
+    MemorySummaryDto, PendingMemoryCandidateDto, SelfReviewDto,
 };
 pub use persona::{
     DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaProfileDto,
@@ -70,8 +70,9 @@ pub use safety::{
     SafewordTriggeredEventDto,
 };
 pub use tts::{
-    SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, SpeechAudioEventDto, SpeechStopEventDto,
-    TTS_STATE_EVENT, TtsEngineKind, TtsSettingsDto, TtsStateEventDto, TtsVoiceDto, UserDictWordDto,
+    IrodoriInstallStateDto, SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, SpeechAudioEventDto,
+    SpeechStopEventDto, TTS_STATE_EVENT, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
+    TtsVoiceDto, UserDictWordDto,
 };
 pub use ui::{
     CONTROL_CENTER_NAVIGATE_EVENT, ChatPlacementDto, ThemePreferenceDto,

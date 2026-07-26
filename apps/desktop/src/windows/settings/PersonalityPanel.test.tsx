@@ -75,7 +75,8 @@ describe('PersonalityPanel', () => {
 
     expect(await screen.findByText('アリスの性格')).toBeInTheDocument();
     const headings = screen.getAllByRole('group').map((group) => group.getAttribute('aria-label'));
-    expect(headings).toEqual(expect.arrayContaining(['この子について', '会話の傾向', 'ダーク傾向']));
+    expect(headings).toEqual(expect.arrayContaining(['この子について', '会話の傾向']));
+    expect(screen.getByText('高度な設定').closest('details')).not.toHaveAttribute('open');
     expect(screen.getByLabelText('名前')).toHaveValue('アリス');
     expect(screen.getByLabelText('興味')).toHaveValue('紅茶');
     const identity = screen.getByRole('region', { name: '基本情報' });
@@ -89,6 +90,8 @@ describe('PersonalityPanel', () => {
     expect(within(story).getByLabelText('自由記述').tagName).toBe('TEXTAREA');
     expect(screen.getAllByRole('slider')).toHaveLength(10);
     expect(screen.getByLabelText('積極性')).toHaveValue('50');
+    fireEvent.click(screen.getByText('高度な設定'));
+    expect(screen.getByText('高度な設定').closest('details')).toHaveAttribute('open');
     expect(screen.getByLabelText('サディズム')).toHaveValue('50');
     expect(screen.getAllByText('0 · 低い')).toHaveLength(4);
     expect(screen.getAllByText('高い · 100')).toHaveLength(4);
@@ -137,6 +140,7 @@ describe('PersonalityPanel', () => {
 
   it('requires acknowledgement version 2 before enabling intense dark expression', async () => {
     render(<PersonalityPanel />);
+    fireEvent.click(await screen.findByText('高度な設定'));
     const toggle = await screen.findByRole('switch', { name: '強いダーク表現を許可' });
     fireEvent.click(toggle);
 
@@ -182,6 +186,7 @@ describe('PersonalityPanel', () => {
       return Promise.resolve(args?.profile);
     });
     render(<PersonalityPanel />);
+    fireEvent.click(await screen.findByText('高度な設定'));
     const input = await screen.findByLabelText('セーフワード（推奨）');
     expect(screen.getByText('ダーク表現を停止しています。')).toBeInTheDocument();
 
@@ -195,5 +200,21 @@ describe('PersonalityPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ダーク表現を再開' }));
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('resume_dark_expression'));
+  });
+
+  it('applies a preset to all six general traits', async () => {
+    render(<PersonalityPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: '元気' }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('set_persona_profile', {
+      profile: {
+        ...PROFILE,
+        initiative: 80,
+        closeness: 75,
+        humor: 80,
+        response_length: 55,
+        emotional_expression: 85,
+        reaction_interval: 80,
+      },
+    }));
   });
 });

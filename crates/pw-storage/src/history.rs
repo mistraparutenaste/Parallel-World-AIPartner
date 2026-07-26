@@ -62,6 +62,40 @@ impl SqliteConversationHistory {
             .map_err(adapter_error)
     }
 
+    /// Deletes only messages already folded behind the durable summary cursor,
+    /// while always preserving the newest `keep_messages` rows.
+    ///
+    /// # Errors
+    /// Returns an error when the limit is invalid or the delete fails.
+    pub fn prune_summarized_messages(
+        &self,
+        conversation_id: &str,
+        keep_messages: usize,
+    ) -> Result<usize, PortError> {
+        if keep_messages == 0 {
+            return Err(PortError("message retention must be positive".into()));
+        }
+        let keep = i64::try_from(keep_messages).map_err(adapter_error)?;
+        self.database
+            .connection()
+            .execute(
+                "DELETE FROM messages
+                 WHERE conversation_id=?1
+                   AND id < COALESCE(
+                     (SELECT through_message_id FROM conversation_summaries WHERE conversation_id=?1),
+                     0
+                   )
+                   AND id NOT IN (
+                     SELECT id FROM messages
+                     WHERE conversation_id=?1
+                     ORDER BY id DESC
+                     LIMIT ?2
+                   )",
+                params![conversation_id, keep],
+            )
+            .map_err(adapter_error)
+    }
+
     /// Loads a bounded id-ordered page for rolling-summary catch-up.
     ///
     /// # Errors

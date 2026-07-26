@@ -25,6 +25,11 @@ type TraitKey =
   | 'psychopathy'
   | 'sadism';
 
+type GeneralTraitKey = Exclude<
+  TraitKey,
+  'machiavellianism' | 'narcissism' | 'psychopathy' | 'sadism'
+>;
+
 type TraitDefinition = {
   key: TraitKey;
   label: string;
@@ -56,6 +61,28 @@ const GENERAL_TRAITS: TraitDefinition[] = [
   { key: 'response_length', label: '応答の長さ', low: '簡潔', high: '詳しい' },
   { key: 'emotional_expression', label: '感情表現', low: '控えめ', high: '豊か' },
   { key: 'reaction_interval', label: '反応間隔', low: 'ゆったり', high: '頻繁' },
+];
+
+const PERSONALITY_PRESETS: Array<{
+  label: string;
+  traits: Pick<PersonaProfileDto, GeneralTraitKey>;
+}> = [
+  {
+    label: 'おっとり',
+    traits: { initiative: 35, closeness: 65, humor: 45, response_length: 70, emotional_expression: 60, reaction_interval: 30 },
+  },
+  {
+    label: '元気',
+    traits: { initiative: 80, closeness: 75, humor: 80, response_length: 55, emotional_expression: 85, reaction_interval: 80 },
+  },
+  {
+    label: 'クール',
+    traits: { initiative: 45, closeness: 40, humor: 35, response_length: 45, emotional_expression: 30, reaction_interval: 45 },
+  },
+  {
+    label: '甘えん坊',
+    traits: { initiative: 65, closeness: 90, humor: 60, response_length: 60, emotional_expression: 85, reaction_interval: 70 },
+  },
 ];
 
 const DARK_TRAITS: TraitDefinition[] = [
@@ -369,6 +396,11 @@ export function PersonalityPanel() {
     }, true);
   };
 
+  const applyPreset = (traits: Pick<PersonaProfileDto, GeneralTraitKey>) => {
+    if (!profile) return;
+    void persistProfile({ ...profile, ...traits }, true);
+  };
+
   const safeWordDirty = safeWordDraft !== (safety?.safe_word ?? '');
 
   const applySafeWord = async () => {
@@ -522,10 +554,24 @@ export function PersonalityPanel() {
 
           <fieldset className="personality-group" aria-label="会話の傾向">
             <legend>会話の傾向</legend>
+            <div className="personality-presets" aria-label="性格プリセット">
+              {PERSONALITY_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  disabled={savingProfile}
+                  onClick={() => applyPreset(preset.traits)}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
             <div className="personality-grid">{renderSliders(GENERAL_TRAITS)}</div>
           </fieldset>
 
-          <fieldset className="personality-group personality-group--dark" aria-label="ダーク傾向">
+          <details className="personality-advanced">
+            <summary>高度な設定</summary>
+            <fieldset className="personality-group personality-group--dark" aria-label="ダーク傾向">
             <legend>ダーク傾向</legend>
             <p className="dark-triad-warning" role="note">
               この性格値を高くすると、攻撃的・操作的・共感性の低い応答が増え、あなたを傷つけたり、トラウマを想起させたりする可能性があります。
@@ -601,9 +647,9 @@ export function PersonalityPanel() {
                 有効にすると心理的負担の強い表現が増える可能性があります。基本的な安全保護は維持されます。
               </p>
             </div>
-          </fieldset>
-
-          <p className="personality-disclaimer">{DISCLAIMER}</p>
+            </fieldset>
+            <p className="personality-disclaimer">{DISCLAIMER}</p>
+          </details>
           <div className="personality-actions">
             <button
               type="button"

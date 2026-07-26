@@ -43,6 +43,13 @@ function mockSettings(settings: TtsSettingsDto = AIVIS_SETTINGS) {
     switch (command) {
       case 'get_tts_settings':
         return Promise.resolve(settings);
+      case 'get_irodori_install_state':
+        return Promise.resolve({
+          schema_version: 1,
+          installed: true,
+          install_root: 'C:\\irodori',
+          missing_artifacts: [],
+        });
       case 'list_tts_voices':
         return Promise.resolve(VOICES);
       case 'list_user_dict':
@@ -251,6 +258,32 @@ describe('TtsPanel', () => {
     expect(screen.getByText(/初回の音声合成.*モデル.*時間/)).toBeVisible();
     expect(screen.getByText(/IRODORI_COMPILE_MODEL=false/)).toBeVisible();
     expect(screen.getByText(/同意を得た参照音声のみ/)).toBeVisible();
+  });
+
+  it('offers the managed installer when irodori artifacts are missing', async () => {
+    invokeMock.mockImplementation((command: string) => {
+      if (command === 'get_tts_settings') {
+        return Promise.resolve({
+          ...AIVIS_SETTINGS,
+          engine: 'irodori',
+          base_url: 'http://127.0.0.1:8088',
+          voice_id: 'irodori-voice',
+        });
+      }
+      if (command === 'get_irodori_install_state') {
+        return Promise.resolve({
+          schema_version: 1,
+          installed: false,
+          install_root: 'C:\\irodori',
+          missing_artifacts: ['models/model.safetensors'],
+        });
+      }
+      return Promise.resolve(null);
+    });
+    render(<TtsPanel />);
+    fireEvent.click(await screen.findByRole('button', { name: 'インストールを開始' }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('install_irodori'));
+    expect(await screen.findByRole('status')).toHaveTextContent('別ウィンドウで起動');
   });
 
   it('uses an engine-specific voice error message', async () => {

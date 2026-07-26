@@ -937,6 +937,7 @@ fn run_context_worker<M: MemoryStore>(
     submit_metrics: Arc<QueueMetrics>,
     context_metrics: Arc<QueueMetrics>,
     conversation_metrics: Arc<QueueMetrics>,
+    retention_database_path: Option<std::path::PathBuf>,
 ) {
     run_context_worker_loop(
         memory,
@@ -945,7 +946,10 @@ fn run_context_worker<M: MemoryStore>(
         &submit_metrics,
         &context_metrics,
         &conversation_metrics,
-        MEMORY_MAINTENANCE_INTERVAL,
+        ContextWorkerMaintenance {
+            interval: MEMORY_MAINTENANCE_INTERVAL,
+            retention_database_path: retention_database_path.as_deref(),
+        },
     );
 }
 
@@ -967,8 +971,17 @@ fn run_context_worker_with_interval<M: MemoryStore>(
         &submit_metrics,
         &context_metrics,
         &conversation_metrics,
-        maintenance_interval,
+        ContextWorkerMaintenance {
+            interval: maintenance_interval,
+            retention_database_path: None,
+        },
     );
+}
+
+#[derive(Clone, Copy)]
+struct ContextWorkerMaintenance<'a> {
+    interval: std::time::Duration,
+    retention_database_path: Option<&'a std::path::Path>,
 }
 
 fn run_context_worker_loop<M: MemoryStore>(
@@ -978,19 +991,31 @@ fn run_context_worker_loop<M: MemoryStore>(
     submit_metrics: &Arc<QueueMetrics>,
     context_metrics: &Arc<QueueMetrics>,
     conversation_metrics: &Arc<QueueMetrics>,
-    maintenance_interval: std::time::Duration,
+    maintenance: ContextWorkerMaintenance<'_>,
 ) {
-    let mut next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+    let mut next_maintenance = maintenance_deadline(
+        &mut memory,
+        maintenance.interval,
+        maintenance.retention_database_path,
+    );
     loop {
         let now = std::time::Instant::now();
         if now >= next_maintenance {
-            next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+            next_maintenance = maintenance_deadline(
+                &mut memory,
+                maintenance.interval,
+                maintenance.retention_database_path,
+            );
         }
         let timeout = next_maintenance.saturating_duration_since(std::time::Instant::now());
         let command = match rx.recv_timeout(timeout) {
             Ok(command) => command,
             Err(RecvTimeoutError::Timeout) => {
-                next_maintenance = maintenance_deadline(&mut memory, maintenance_interval);
+                next_maintenance = maintenance_deadline(
+                    &mut memory,
+                    maintenance.interval,
+                    maintenance.retention_database_path,
+                );
                 continue;
             }
             Err(RecvTimeoutError::Disconnected) => break,
@@ -1030,6 +1055,7 @@ fn run_context_worker_loop<M: MemoryStore>(
 fn maintenance_deadline<M: MemoryStore>(
     memory: &mut M,
     maintenance_interval: std::time::Duration,
+    retention_database_path: Option<&std::path::Path>,
 ) -> std::time::Instant {
     let delay = match memory.run_maintenance(unix_timestamp(), 100) {
         Ok(report) if report.remaining => MEMORY_MAINTENANCE_FOLLOWUP.min(maintenance_interval),
@@ -1039,6 +1065,11 @@ fn maintenance_deadline<M: MemoryStore>(
             maintenance_interval
         }
     };
+    if let Some(path) = retention_database_path
+        && let Err(error) = crate::commands::retention::prune_messages_at(path)
+    {
+        tracing::warn!(%error, "conversation retention maintenance failed");
+    }
     std::time::Instant::now() + delay
 }
 
@@ -1925,6 +1956,7 @@ impl ChatService {
             Some(companion_state_worker.sender()),
         );
 
+        let retention_database_path = database_path.clone();
         let context_thread = std::thread::Builder::new()
             .name("pw-memory-context".into())
             .spawn({
@@ -1939,6 +1971,7 @@ impl ChatService {
                         submit_metrics,
                         context_metrics,
                         conversation_metrics,
+                        Some(retention_database_path),
                     );
                 }
             })
@@ -2920,6 +2953,7 @@ mod tests {
                     Arc::new(QueueMetrics::new("test_submit", 1)),
                     Arc::new(QueueMetrics::new("test_context", 1)),
                     Arc::new(QueueMetrics::new("test_conversation", 1)),
+                    None,
                 );
             });
             tx.send(Command::Submit(
@@ -4590,6 +4624,7 @@ mod tests {
                 Arc::new(QueueMetrics::new("test_submit", 8)),
                 Arc::new(QueueMetrics::new("test_context", 8)),
                 Arc::new(QueueMetrics::new("test_conversation", 8)),
+                None,
             );
         });
         let started = std::time::Instant::now();

@@ -55,6 +55,16 @@ pub struct TtsVoiceDto {
     pub label: String,
 }
 
+/// Installation state for the managed Irodori runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "IrodoriInstallStateDto.ts")]
+pub struct IrodoriInstallStateDto {
+    pub schema_version: u16,
+    pub installed: bool,
+    pub install_root: String,
+    pub missing_artifacts: Vec<String>,
+}
+
 /// `speech-audio` event payload: one synthesized sentence ready for
 /// playback. The `WebView` receives a file path only (基本設計 8章).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]

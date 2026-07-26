@@ -71,7 +71,7 @@ pub async fn get_data_usage(layout: State<'_, AppDataLayout>) -> Result<DataUsag
         .await
         .map_err(|error| error.to_string())?
 }
-fn validated_export_path(
+pub(crate) fn validated_export_path(
     source: &std::path::Path,
     requested: &std::path::Path,
     allow_overwrite: bool,
@@ -679,6 +679,14 @@ mod tests {
                     rusqlite::params![conversation, message_id],
                 )
                 .unwrap();
+            database
+                .connection()
+                .execute(
+                    "INSERT INTO self_reviews(conversation_id,content,generated_at,source_message_id)
+                     VALUES(?1,?1,1,?2)",
+                    rusqlite::params![conversation, message_id],
+                )
+                .unwrap();
         }
         drop(database);
 
@@ -702,6 +710,15 @@ mod tests {
             database
                 .connection()
                 .query_row("SELECT COUNT(*) FROM conversation_summaries", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM self_reviews", [], |row| {
                     row.get::<_, i64>(0)
                 })
                 .unwrap(),

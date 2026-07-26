@@ -25,6 +25,9 @@ fn credential_entry(provider: LlmProviderKind) -> Result<keyring::Entry, String>
 }
 
 /// Loads the provider key without exposing it through IPC or persisted settings.
+///
+/// # Errors
+/// Returns an error when the platform credential store cannot be accessed.
 pub fn load_llm_api_key(provider: LlmProviderKind) -> Result<Option<String>, String> {
     if provider == LlmProviderKind::Local {
         return Ok(None);

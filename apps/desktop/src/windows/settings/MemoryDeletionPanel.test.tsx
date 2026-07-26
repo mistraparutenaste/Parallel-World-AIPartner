@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { DataPanel } from './DataPanel';
+import { MemoryDeletionPanel } from './MemoryDeletionPanel';
 
 const invokeMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
@@ -19,11 +19,17 @@ async function waitForUsage(): Promise<void> {
   await screen.findByText(/12件のメッセージ \/ 1件の要約/);
 }
 
-describe('DataPanel', () => {
+describe('MemoryDeletionPanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
     invokeMock.mockImplementation((command: string) => {
       if (command === 'get_data_usage') return Promise.resolve(usage);
+      if (command === 'get_retention_settings') {
+        return Promise.resolve({ schema_version: 1, keep_messages: 30 });
+      }
+      if (command === 'set_retention_settings') {
+        return Promise.resolve({ schema_version: 1, keep_messages: 42 });
+      }
       if (command === 'delete_memories') {
         return Promise.resolve({
           schema_version: 1,
@@ -44,8 +50,18 @@ describe('DataPanel', () => {
     });
   });
 
+  it('saves the number of summarized messages to retain', async () => {
+    render(<MemoryDeletionPanel />);
+    const input = await screen.findByLabelText('保持するメッセージ件数');
+    fireEvent.change(input, { target: { value: '42' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('set_retention_settings', {
+      keepMessages: 42,
+    }));
+  });
+
   it('shows current destructive scopes and TTS cache size', async () => {
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
 
     expect(await screen.findByText(/12件のメッセージ \/ 1件の要約/)).toBeInTheDocument();
     expect(screen.getByText(/1件の要約 \/ 3件の長期記憶/)).toBeInTheDocument();
@@ -63,7 +79,7 @@ describe('DataPanel', () => {
       }
       return Promise.resolve(null);
     });
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
 
     const memoryButton = screen.getByRole('button', { name: '記憶を削除' });
     expect(memoryButton).toBeDisabled();
@@ -85,7 +101,7 @@ describe('DataPanel', () => {
     });
     render(
       <StrictMode>
-        <DataPanel />
+        <MemoryDeletionPanel />
       </StrictMode>,
     );
 
@@ -113,7 +129,7 @@ describe('DataPanel', () => {
       }
       return Promise.resolve(null);
     });
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
 
     const memoryButton = screen.getByRole('button', { name: '記憶を削除' });
     expect(await screen.findByRole('alert')).toHaveTextContent('削除操作は無効です');
@@ -127,7 +143,7 @@ describe('DataPanel', () => {
 
   it('requires the exact typed phrase before deleting memories', async () => {
     const confirmSpy = vi.spyOn(window, 'confirm');
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     const memoryButton = screen.getByRole('button', { name: '記憶を削除' });
     fireEvent.click(memoryButton);
@@ -145,19 +161,17 @@ describe('DataPanel', () => {
     fireEvent.click(finalButton);
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('delete_memories'));
-    const dangerZone = screen.getByRole('region', { name: 'デンジャーゾーン' });
+    const dangerZone = screen.getByRole('region', { name: '削除' });
     expect(await within(dangerZone).findByText(/4件の記憶データ/)).toHaveAttribute(
       'role',
       'status',
     );
-    expect(within(screen.getByRole('region', { name: 'データ' })).queryByRole('status'))
-      .not.toBeInTheDocument();
     await waitFor(() => expect(memoryButton).toHaveFocus());
     expect(confirmSpy).not.toHaveBeenCalled();
   });
 
   it('cancels a destructive confirmation, restores focus, and does not invoke the backend', async () => {
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     const historyButton = screen.getByRole('button', { name: '履歴を削除' });
     fireEvent.click(historyButton);
@@ -172,7 +186,7 @@ describe('DataPanel', () => {
   });
 
   it('clears only the TTS audio cache after its own confirmation phrase', async () => {
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     fireEvent.click(screen.getByRole('button', { name: '音声キャッシュを削除' }));
     fireEvent.change(screen.getByLabelText('確認用テキスト'), {
@@ -181,50 +195,11 @@ describe('DataPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: '完全に削除する' }));
 
     await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('clear_tts_audio_cache'));
-    const dangerZone = screen.getByRole('region', { name: 'デンジャーゾーン' });
+    const dangerZone = screen.getByRole('region', { name: '削除' });
     expect(await within(dangerZone).findByText(/5件の音声ファイル（1.5 KB）/)).toHaveAttribute(
       'role',
       'status',
     );
-  });
-
-  it('exports only to the explicitly entered path', async () => {
-    render(<DataPanel />);
-    fireEvent.change(screen.getByLabelText('保存先'), {
-      target: { value: 'C:/backup/user-data.sqlite3' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'エクスポート' }));
-
-    await waitFor(() => {
-      expect(invokeMock).toHaveBeenCalledWith('export_user_data', {
-        destination: 'C:/backup/user-data.sqlite3',
-        allowOverwrite: false,
-      });
-    });
-  });
-
-  it('asks for overwrite only after the backend reports an existing file', async () => {
-    invokeMock.mockImplementation((command: string, args?: { allowOverwrite?: boolean }) => {
-      if (command === 'get_data_usage') return Promise.resolve(usage);
-      if (command === 'export_user_data' && !args?.allowOverwrite) {
-        return Promise.reject('DESTINATION_EXISTS');
-      }
-      return Promise.resolve(null);
-    });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    render(<DataPanel />);
-    fireEvent.change(screen.getByLabelText('保存先'), { target: { value: 'C:/backup.sqlite3' } });
-    fireEvent.click(screen.getByRole('button', { name: 'エクスポート' }));
-
-    const dataSection = screen.getByRole('region', { name: 'データ' });
-    expect(await within(dataSection).findByRole('status')).toHaveTextContent('上書きエクスポート');
-    expect(within(screen.getByRole('region', { name: 'デンジャーゾーン' })).queryByText(
-      /上書きエクスポート/,
-    )).not.toBeInTheDocument();
-    expect(invokeMock).toHaveBeenLastCalledWith('export_user_data', {
-      destination: 'C:/backup.sqlite3',
-      allowOverwrite: true,
-    });
   });
 
   it('shows destructive command failures as alerts and keeps confirmation open', async () => {
@@ -233,7 +208,7 @@ describe('DataPanel', () => {
       if (command === 'delete_memories') return Promise.reject(new Error('busy'));
       return Promise.resolve(null);
     });
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     fireEvent.click(screen.getByRole('button', { name: '記憶を削除' }));
     fireEvent.change(screen.getByLabelText('確認用テキスト'), {
@@ -241,7 +216,7 @@ describe('DataPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: '完全に削除する' }));
 
-    const dangerZone = screen.getByRole('region', { name: 'デンジャーゾーン' });
+    const dangerZone = screen.getByRole('region', { name: '削除' });
     expect(await within(dangerZone).findByRole('alert')).toHaveTextContent('busy');
     expect(screen.getByLabelText('確認用テキスト')).toBeInTheDocument();
     await waitFor(() => {
@@ -261,7 +236,7 @@ describe('DataPanel', () => {
       if (command === 'delete_memories') return Promise.reject(new Error('busy'));
       return Promise.resolve(null);
     });
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     fireEvent.click(screen.getByRole('button', { name: '記憶を削除' }));
     fireEvent.change(screen.getByLabelText('確認用テキスト'), {
@@ -295,7 +270,7 @@ describe('DataPanel', () => {
       }
       return Promise.resolve(null);
     });
-    render(<DataPanel />);
+    render(<MemoryDeletionPanel />);
     await waitForUsage();
     fireEvent.click(screen.getByRole('button', { name: '記憶を削除' }));
     fireEvent.change(screen.getByLabelText('確認用テキスト'), {

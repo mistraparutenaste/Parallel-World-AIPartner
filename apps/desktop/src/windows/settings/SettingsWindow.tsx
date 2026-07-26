@@ -14,56 +14,50 @@ import { applyThemePreference } from '../../shared/ui-preferences';
 import { ChatWindow } from '../chat/ChatWindow';
 import { CharacterPanel } from './CharacterPanel';
 import { ConversationSettingsPanel } from './ConversationSettingsPanel';
-import { ConversationLogPanel } from './ConversationLogPanel';
-import { DataPanel } from './DataPanel';
 import { DiagnosticsPanel } from './DiagnosticsPanel';
 import { LlmPanel } from './LlmPanel';
 import { MicrophonePanel } from './MicrophonePanel';
-import { MemoryCenterPanel } from './MemoryCenterPanel';
+import { MemoryScreen } from './MemoryScreen';
 import { PersonalityPanel } from './PersonalityPanel';
 import { RuntimeHealthPanel } from './RuntimeHealthPanel';
 import { TechnicalLogPanel } from './TechnicalLogPanel';
 import { TtsPanel } from './TtsPanel';
 import { UpdatesPanel } from './UpdatesPanel';
 
-type ScreenArea = 'settings' | 'personality' | 'conversation' | 'chat';
+type ScreenArea = 'settings' | 'personality' | 'memory' | 'chat';
 type TransitionScreen = Exclude<ScreenArea, 'chat'>;
 type SettingsArea =
-  | 'audio'
   | 'ai'
+  | 'log'
   | 'character'
-  | 'data'
-  | 'diagnostics'
-  | 'display'
-  | 'updates';
+  | 'conversation'
+  | 'ui';
 
 const SCREEN_ITEMS: Array<{ id: ScreenArea; label: string }> = [
   { id: 'settings', label: '設定' },
   { id: 'personality', label: '性格' },
-  { id: 'conversation', label: '会話' },
+  { id: 'memory', label: '記憶' },
   { id: 'chat', label: 'チャット' },
 ];
 
 const SETTINGS_ITEMS: Array<{ id: SettingsArea; label: string; enterOrder: number }> = [
-  { id: 'audio', label: '音声', enterOrder: 0 },
-  { id: 'ai', label: 'AI', enterOrder: 2 },
-  { id: 'character', label: 'キャラクター', enterOrder: 4 },
-  { id: 'data', label: 'データ', enterOrder: 6 },
-  { id: 'diagnostics', label: '診断', enterOrder: 1 },
-  { id: 'display', label: '表示', enterOrder: 3 },
-  { id: 'updates', label: '更新', enterOrder: 5 },
+  { id: 'ai', label: 'AI', enterOrder: 0 },
+  { id: 'log', label: 'ログ', enterOrder: 1 },
+  { id: 'character', label: 'キャラ', enterOrder: 2 },
+  { id: 'conversation', label: '会話', enterOrder: 3 },
+  { id: 'ui', label: 'UI', enterOrder: 4 },
 ];
 
 const SCREEN_TRANSITION_DURATION: Record<TransitionScreen, number> = {
   settings: 760,
   personality: 760,
-  conversation: 760,
+  memory: 760,
 };
 
 const QUICK_SCREEN_TRANSITION_DURATION: Record<TransitionScreen, number> = {
   settings: 420,
   personality: 420,
-  conversation: 420,
+  memory: 420,
 };
 
 type ScreenTransition = {
@@ -137,15 +131,7 @@ function TabList<T extends string>({
           onClick={(event) => onChange(item.id, event.currentTarget)}
           onKeyDown={(event) => move(event, index)}
         >
-          <span aria-hidden="true">
-            {item.id === 'character' ? (
-              <>
-                キャラ
-                <br />
-                クター
-              </>
-            ) : item.label}
-          </span>
+          <span aria-hidden="true">{item.label}</span>
         </button>
       ))}
     </div>
@@ -219,23 +205,22 @@ function SettingsContent({
   onPlacementChange: (placement: ChatPlacementDto) => void;
 }) {
   switch (active) {
-    case 'audio':
-      return <div className="panel-stack"><MicrophonePanel /><TtsPanel /></div>;
     case 'ai':
-      return <div className="panel-stack"><LlmPanel /></div>;
-    case 'character':
-      return <div className="panel-stack"><CharacterPanel /></div>;
-    case 'data':
-      return <div className="panel-stack"><MemoryCenterPanel /><DataPanel /><ConversationLogPanel /></div>;
-    case 'diagnostics':
+      return <div className="panel-stack"><LlmPanel /><TtsPanel /><MicrophonePanel /></div>;
+    case 'log':
       return (
         <div className="panel-stack">
-          <RuntimeHealthPanel />
           <DiagnosticsPanel />
           <TechnicalLogPanel />
+          <RuntimeHealthPanel />
+          <UpdatesPanel />
         </div>
       );
-    case 'display':
+    case 'character':
+      return <div className="panel-stack"><CharacterPanel /></div>;
+    case 'conversation':
+      return <div className="panel-stack"><ConversationSettingsPanel /></div>;
+    case 'ui':
       return (
         <DisplaySettings
           preferences={preferences}
@@ -243,15 +228,13 @@ function SettingsContent({
           onPlacementChange={onPlacementChange}
         />
       );
-    case 'updates':
-      return <div className="panel-stack"><UpdatesPanel /></div>;
   }
 }
 
 export function SettingsWindow() {
   const [screenArea, setScreenArea] = useState<ScreenArea>('chat');
   const [screenTransition, setScreenTransition] = useState<ScreenTransition | null>(null);
-  const [settingsArea, setSettingsArea] = useState<SettingsArea>('display');
+  const [settingsArea, setSettingsArea] = useState<SettingsArea>('ui');
   const [preferences, setPreferences] = useState<UiPreferencesDto>({
     schema_version: 1,
     theme: 'system',
@@ -442,7 +425,7 @@ export function SettingsWindow() {
           data-motion-shape={
             screenArea === 'settings' || screenArea === 'personality'
               ? 'diamond'
-              : screenArea === 'conversation'
+              : screenArea === 'memory'
                 ? 'circle'
                 : 'gradient'
           }
@@ -491,9 +474,9 @@ export function SettingsWindow() {
             </div>
           ) : null}
 
-          {screenArea === 'conversation' ? (
+          {screenArea === 'memory' ? (
             <div className="screen-body">
-              <ConversationSettingsPanel />
+              <MemoryScreen />
             </div>
           ) : null}
         </section>
@@ -509,7 +492,7 @@ export function SettingsWindow() {
               key={tone}
               className={`screen-transition-ring screen-transition-ring--${tone}`}
               data-transition-ring={
-                screenTransition.target === 'conversation' ? 'circle' : 'diamond'
+                screenTransition.target === 'memory' ? 'circle' : 'diamond'
               }
             />
           ))}

@@ -87,13 +87,26 @@ pub fn run() {
             commands::data::delete_memories,
             commands::data::clear_tts_audio_cache,
             commands::memory_center::get_memory_center,
+            commands::memory_center::get_memory_content,
             commands::memory_center::set_memory_domain_control,
             commands::memory_center::set_temporary_conversation,
+            commands::memory_center::update_memory,
             commands::memory_center::delete_memory,
+            commands::memory_center::export_memories_csv,
+            commands::memory_center::import_memories_csv,
+            commands::memory_center::create_commitment,
+            commands::memory_center::update_commitment,
+            commands::memory_center::delete_commitment,
+            commands::retention::get_retention_settings,
+            commands::retention::set_retention_settings,
+            commands::self_review::get_self_review,
+            commands::self_review::regenerate_self_review,
             commands::ui::get_ui_preferences,
             commands::ui::set_theme_preference,
             commands::ui::set_chat_placement,
             commands::tts::get_tts_settings,
+            commands::tts::get_irodori_install_state,
+            commands::tts::install_irodori,
             commands::tts::set_tts_settings,
             commands::tts::list_tts_voices,
             commands::tts::list_user_dict,
@@ -121,7 +134,18 @@ pub fn run() {
                 &layout,
                 app.state::<chat::ChatService>().interaction_gate(),
             )?;
+            let self_review_layout = layout.clone();
             app.manage(layout);
+            std::thread::Builder::new()
+                .name("pw-self-review-startup".into())
+                .spawn(move || {
+                    if let Err(error) =
+                        commands::self_review::regenerate_self_review_at(&self_review_layout, true)
+                    {
+                        tracing::warn!(%error, "startup self review generation deferred");
+                    }
+                })
+                .map_err(|error| error.to_string())?;
             app.manage(behavior_runtime);
             desktop_controls::setup_desktop_controls(app)?;
             app.manage(stability_heartbeat::StabilityHeartbeatService::start(
@@ -235,6 +259,32 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building parallel-world")
         .run(|app, event| {
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                let layout = app
+                    .state::<pw_platform::paths::AppDataLayout>()
+                    .inner()
+                    .clone();
+                let (finished_tx, finished_rx) = std::sync::mpsc::sync_channel(1);
+                if let Ok(worker) = std::thread::Builder::new()
+                    .name("pw-self-review-exit".into())
+                    .spawn(move || {
+                        let result =
+                            commands::self_review::regenerate_self_review_at(&layout, true);
+                        let _ = finished_tx.send(result);
+                    })
+                {
+                    match finished_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+                        Ok(Err(error)) => {
+                            tracing::warn!(%error, "exit self review generation deferred");
+                        }
+                        Err(_) => {
+                            tracing::info!("exit self review generation deferred to next launch");
+                        }
+                        Ok(Ok(_)) => {}
+                    }
+                    drop(worker);
+                }
+            }
             if matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit

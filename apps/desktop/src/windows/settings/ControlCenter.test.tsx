@@ -153,10 +153,10 @@ describe('control center', () => {
     expect(screen.getByRole('dialog', { name: '設定画面' })).toBeInTheDocument();
   });
 
-  it('uses the same close-only screen for settings, personality, and conversation', async () => {
+  it('uses the same close-only screen for settings, personality, and memory', async () => {
     render(<SettingsWindow />);
 
-    for (const label of ['設定', '性格', '会話']) {
+    for (const label of ['設定', '性格', '記憶']) {
       const navigation = await screen.findByRole('tablist', { name: '画面メニュー' });
       fireEvent.click(within(navigation).getByRole('tab', { name: label }));
 
@@ -196,7 +196,7 @@ describe('control center', () => {
     );
 
     const categories = screen.getByRole('tablist', { name: '設定カテゴリ' });
-    const entranceOrder = ['音声', '診断', 'AI', '表示', 'キャラクター', '更新', 'データ'];
+    const entranceOrder = ['AI', 'ログ', 'キャラ', '会話', 'UI'];
     entranceOrder.forEach((label, index) => {
       expect(within(categories).getByRole('tab', { name: label })).toHaveAttribute(
         'data-enter-order',
@@ -208,7 +208,7 @@ describe('control center', () => {
   it.each([
     ['設定', 'settings', 'diamond'],
     ['性格', 'personality', 'diamond'],
-    ['会話', 'conversation', 'circle'],
+    ['記憶', 'memory', 'circle'],
   ] as const)('uses three %s transition outlines from the clicked diamond', async (label, target, shape) => {
     render(<SettingsWindow />);
     const controlCenter = await screen.findByRole('main', { name: 'Parallel World' });
@@ -247,25 +247,22 @@ describe('control center', () => {
     expect(controlCenter).toHaveAttribute('data-transition-speed', 'quick');
   });
 
-  it('uses the seven-category heart crown and keeps logs under data and diagnostics', async () => {
+  it('uses the five-category heart crown and keeps diagnostics under logs', async () => {
     render(<SettingsWindow />);
     const navigation = await screen.findByRole('tablist', { name: '画面メニュー' });
     fireEvent.click(within(navigation).getByRole('tab', { name: '設定' }));
 
     const categories = screen.getByRole('tablist', { name: '設定カテゴリ' });
-    expect(within(categories).getAllByRole('tab')).toHaveLength(7);
-    for (const label of ['音声', 'AI', 'キャラクター', 'データ', '診断', '表示', '更新']) {
+    expect(within(categories).getAllByRole('tab')).toHaveLength(5);
+    for (const label of ['AI', 'ログ', 'キャラ', '会話', 'UI']) {
       expect(within(categories).getByRole('tab', { name: label })).toBeInTheDocument();
     }
-    expect(within(categories).getByRole('tab', { name: '表示' })).toHaveAttribute(
+    expect(within(categories).getByRole('tab', { name: 'UI' })).toHaveAttribute(
       'aria-selected',
       'true',
     );
 
-    fireEvent.click(within(categories).getByRole('tab', { name: 'データ' }));
-    expect(await screen.findByRole('region', { name: '会話ログ' })).toBeInTheDocument();
-
-    fireEvent.click(within(categories).getByRole('tab', { name: '診断' }));
+    fireEvent.click(within(categories).getByRole('tab', { name: 'ログ' }));
     expect(await screen.findByRole('region', { name: '技術ログ' })).toBeInTheDocument();
     expect(await screen.findByText('INFO control center ready')).toBeInTheDocument();
   });
@@ -298,11 +295,13 @@ describe('control center', () => {
     });
   });
 
-  it('opens the complete user-wide conversation settings from the heart menu', async () => {
+  it('opens the complete user-wide conversation settings from settings', async () => {
     render(<SettingsWindow />);
     const navigation = await screen.findByRole('tablist', { name: '画面メニュー' });
 
-    fireEvent.click(within(navigation).getByRole('tab', { name: '会話' }));
+    fireEvent.click(within(navigation).getByRole('tab', { name: '設定' }));
+    const categories = screen.getByRole('tablist', { name: '設定カテゴリ' });
+    fireEvent.click(within(categories).getByRole('tab', { name: '会話' }));
 
     expect(await screen.findByRole('region', { name: '会話設定' })).toBeInTheDocument();
     expect(
@@ -312,29 +311,6 @@ describe('control center', () => {
     expect(
       screen.getByRole('switch', { name: '作業中の状況を参考にしてもらう' }),
     ).not.toBeChecked();
-  });
-
-  it('renders conversation timestamps stored as Unix seconds', async () => {
-    invokeMock.mockImplementation((command: string) => {
-      if (command === 'get_ui_preferences') {
-        return Promise.resolve({ schema_version: 1, theme: 'system', chat_placement: 'docked' });
-      }
-      if (command === 'list_conversation_history') return Promise.resolve([]);
-      if (command === 'list_conversation_log') {
-        return Promise.resolve({
-          schema_version: 1,
-          messages: [{ schema_version: 1, message_id: 1, turn_id: 1, role: 'user', text: 'saved', created_at: 1_700_000_000 }],
-          next_before_message_id: null,
-        });
-      }
-      return Promise.resolve(null);
-    });
-    render(<SettingsWindow />);
-    const navigation = await screen.findByRole('tablist', { name: '画面メニュー' });
-    fireEvent.click(within(navigation).getByRole('tab', { name: '設定' }));
-    const categories = screen.getByRole('tablist', { name: '設定カテゴリ' });
-    fireEvent.click(within(categories).getByRole('tab', { name: 'データ' }));
-    expect(await screen.findByText(/2023/)).toBeInTheDocument();
   });
 
   it('refocuses an already popped chat without showing a replacement panel', async () => {

@@ -2,12 +2,86 @@
 
 use std::time::Duration;
 
-use pw_contracts::{TtsEngineKind, TtsSettingsDto, TtsVoiceDto, UserDictWordDto};
+use pw_contracts::{
+    IrodoriInstallStateDto, SCHEMA_VERSION, TtsEngineKind, TtsSettingsDto, TtsVoiceDto,
+    UserDictWordDto,
+};
 use pw_platform::paths::AppDataLayout;
 use pw_tts::{AivisSpeechClient, IrodoriTtsClient, Speaker, TtsClientConfig};
 use tauri::State;
 
 use crate::tts::{load_tts_settings, save_tts_settings};
+
+const IRODORI_ARTIFACTS: [&str; 8] = [
+    "tools/uv/uv.exe",
+    "tools/git",
+    "server",
+    "models/model.safetensors",
+    "models/codec/weights.pth",
+    "models/tokenizer/tokenizer.model",
+    "models/tokenizer/tokenizer_config.json",
+    "models/tokenizer/config.json",
+];
+
+fn irodori_install_state(layout: &AppDataLayout) -> IrodoriInstallStateDto {
+    let root = layout.root.join("irodori");
+    let missing_artifacts = IRODORI_ARTIFACTS
+        .iter()
+        .filter(|relative| !root.join(relative).exists())
+        .map(|relative| (*relative).to_owned())
+        .collect::<Vec<_>>();
+    IrodoriInstallStateDto {
+        schema_version: SCHEMA_VERSION,
+        installed: missing_artifacts.is_empty(),
+        install_root: root.to_string_lossy().into_owned(),
+        missing_artifacts,
+    }
+}
+
+/// Returns whether every pinned Irodori artifact is present.
+#[tauri::command]
+#[must_use]
+#[allow(clippy::needless_pass_by_value)]
+pub fn get_irodori_install_state(layout: State<'_, AppDataLayout>) -> IrodoriInstallStateDto {
+    irodori_install_state(&layout)
+}
+
+/// Starts the existing managed Irodori bootstrap in a separate console.
+///
+/// # Errors
+/// Returns an error when the launcher is missing or cannot be started.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub fn install_irodori(layout: State<'_, AppDataLayout>) -> Result<(), String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = layout;
+        Err("Irodori managed installation is available on Windows only".into())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
+        let repository_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .ancestors()
+            .nth(3)
+            .ok_or_else(|| "repository root is unavailable".to_owned())?;
+        let script = repository_root.join("tools/scripts/irodori-bootstrap.ps1");
+        if !script.is_file() {
+            return Err("Irodori bootstrap script is unavailable".into());
+        }
+        std::process::Command::new("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script)
+            .arg("-DataRoot")
+            .arg(layout.root.join("irodori"))
+            .creation_flags(CREATE_NEW_CONSOLE)
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+}
 
 fn ensure_dictionary_supported(engine: TtsEngineKind) -> Result<(), String> {
     if engine == TtsEngineKind::Irodori {
@@ -187,9 +261,29 @@ mod tests {
     use pw_tts::{Speaker, SpeakerStyle};
 
     use super::{
-        VoiceClient, aivis_voices, dictionary_client, ensure_dictionary_supported, irodori_voices,
-        voice_client,
+        IRODORI_ARTIFACTS, VoiceClient, aivis_voices, dictionary_client,
+        ensure_dictionary_supported, irodori_install_state, irodori_voices, voice_client,
     };
+
+    #[test]
+    fn irodori_install_state_requires_every_manifest_artifact() {
+        let root = std::env::temp_dir().join(format!("pw-irodori-state-{}", std::process::id()));
+        let layout = pw_platform::paths::AppDataLayout::under(root.clone());
+        let initial = irodori_install_state(&layout);
+        assert!(!initial.installed);
+        assert_eq!(initial.missing_artifacts.len(), IRODORI_ARTIFACTS.len());
+        for relative in IRODORI_ARTIFACTS {
+            let path = root.join("irodori").join(relative);
+            if std::path::Path::new(relative).extension().is_some() {
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                std::fs::write(path, b"test").unwrap();
+            } else {
+                std::fs::create_dir_all(path).unwrap();
+            }
+        }
+        assert!(irodori_install_state(&layout).installed);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn voice_preview_selects_aivis_from_transient_arguments() {

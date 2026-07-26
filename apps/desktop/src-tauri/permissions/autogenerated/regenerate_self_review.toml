@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-regenerate-self-review"
+description = "Enables the regenerate_self_review command without any pre-configured scope."
+commands.allow = ["regenerate_self_review"]
+
+[[permission]]
+identifier = "deny-regenerate-self-review"
+description = "Denies the regenerate_self_review command without any pre-configured scope."
+commands.deny = ["regenerate_self_review"]

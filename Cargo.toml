@@ -21,6 +21,7 @@ publish = false
 
 [workspace.dependencies]
 async-trait = "0.1"
+csv = "1"
 cpal = "0.18.1"
 command-group = "5.0.1"
 hound = "3.5.1"

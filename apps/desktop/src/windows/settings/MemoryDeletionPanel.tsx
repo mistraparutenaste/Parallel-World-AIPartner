@@ -1,10 +1,14 @@
-import type { DataDeletionResultDto, DataUsageDto } from '@parallel-world/contracts';
+import type {
+  DataDeletionResultDto,
+  DataUsageDto,
+  RetentionSettingsDto,
+} from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 
 type DangerActionId = 'history' | 'memory' | 'tts';
-type Operation = 'export' | DangerActionId;
+type Operation = DangerActionId;
 type Feedback = { kind: 'status' | 'error'; text: string };
 type UsageState = 'loading' | 'ready' | 'error';
 
@@ -113,15 +117,14 @@ function DangerAction({
   );
 }
 
-export function DataPanel() {
-  const [destination, setDestination] = useState('');
-  const [exportFeedback, setExportFeedback] = useState<Feedback | null>(null);
+export function MemoryDeletionPanel() {
   const [dangerFeedback, setDangerFeedback] = useState<Feedback | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [usage, setUsage] = useState<DataUsageDto | null>(null);
   const [usageState, setUsageState] = useState<UsageState>('loading');
   const [confirming, setConfirming] = useState<DangerActionId | null>(null);
   const [confirmationText, setConfirmationText] = useState('');
+  const [keepMessages, setKeepMessages] = useState('30');
   const historyTriggerRef = useRef<HTMLButtonElement>(null);
   const memoryTriggerRef = useRef<HTMLButtonElement>(null);
   const ttsTriggerRef = useRef<HTMLButtonElement>(null);
@@ -151,6 +154,11 @@ export function DataPanel() {
   useEffect(() => {
     mountedRef.current = true;
     void refreshUsage();
+    void invoke<RetentionSettingsDto>('get_retention_settings')
+      .then((settings) => {
+        if (settings) setKeepMessages(String(settings.keep_messages));
+      })
+      .catch(() => setDangerFeedback({ kind: 'error', text: '自動削除件数を読み込めませんでした。' }));
     return () => {
       mountedRef.current = false;
       usageRequestGenerationRef.current += 1;
@@ -208,66 +216,26 @@ export function DataPanel() {
     }
   };
 
-  const exportData = async () => {
-    setOperation('export');
-    setExportFeedback(null);
-    const args = { destination: destination.trim(), allowOverwrite: false };
+  const saveRetention = async () => {
+    const value = Number(keepMessages);
     try {
-      await invoke('export_user_data', args);
-      setExportFeedback({ kind: 'status', text: 'データをエクスポートしました。' });
+      const saved = await invoke<RetentionSettingsDto>('set_retention_settings', {
+        keepMessages: value,
+      });
+      setKeepMessages(String(saved.keep_messages));
+      setDangerFeedback({ kind: 'status', text: '自動削除件数を保存しました。' });
     } catch (error) {
-      if (
-        String(error).includes('DESTINATION_EXISTS')
-        && window.confirm('保存先は既に存在します。上書きしますか？')
-      ) {
-        try {
-          await invoke('export_user_data', { ...args, allowOverwrite: true });
-          setExportFeedback({ kind: 'status', text: 'データを上書きエクスポートしました。' });
-          return;
-        } catch (overwriteError) {
-          setExportFeedback({ kind: 'error', text: String(overwriteError) });
-          return;
-        }
-      }
-      setExportFeedback({ kind: 'error', text: String(error) });
-    } finally {
-      setOperation(null);
+      setDangerFeedback({ kind: 'error', text: String(error) });
     }
   };
 
   return (
-    <>
-      <section aria-labelledby="data-title" aria-busy={operation === 'export'}>
-        <h2 id="data-title">データ</h2>
-        <p>会話履歴、要約、長期記憶をバックアップできます。</p>
-        <div className="data-export-row">
-          <label htmlFor="export-path">
-            <span>保存先</span>
-            <input
-              id="export-path"
-              disabled={busy}
-              value={destination}
-              onChange={(event) => setDestination(event.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            disabled={busy || !destination.trim()}
-            onClick={() => void exportData()}
-          >
-            {operation === 'export' ? 'エクスポート中…' : 'エクスポート'}
-          </button>
-        </div>
-        {exportFeedback?.kind === 'status' ? <p role="status">{exportFeedback.text}</p> : null}
-        {exportFeedback?.kind === 'error' ? <p role="alert">{exportFeedback.text}</p> : null}
-      </section>
-
       <section
         className="danger-zone"
         aria-labelledby="danger-zone-title"
         aria-busy={busy || usageState === 'loading'}
       >
-        <h2 id="danger-zone-title">デンジャーゾーン</h2>
+        <h2 id="danger-zone-title">削除</h2>
         <p className="danger-zone__intro">
           ここで削除したデータは元に戻せません。必要であれば先にエクスポートしてください。
         </p>
@@ -296,6 +264,29 @@ export function DataPanel() {
         {dangerFeedback?.kind === 'error' ? (
           <p className="danger-zone__feedback" role="alert">{dangerFeedback.text}</p>
         ) : null}
+        <div className="setting-row">
+          <div>
+            <strong>会話メッセージの自動削除</strong>
+            <p>要約済みの古いメッセージだけを削除し、最新の指定件数を残します。</p>
+          </div>
+          <label>
+            <span>保持するメッセージ件数</span>
+            <input
+              type="number"
+              min="1"
+              max="10000"
+              value={keepMessages}
+              onChange={(event) => setKeepMessages(event.target.value)}
+            />
+            <button
+              type="button"
+              disabled={!Number.isInteger(Number(keepMessages)) || Number(keepMessages) < 1}
+              onClick={() => void saveRetention()}
+            >
+              保存
+            </button>
+          </label>
+        </div>
         <div className="danger-action-list">
           <DangerAction
             title="会話履歴と要約"
@@ -347,6 +338,5 @@ export function DataPanel() {
           />
         </div>
       </section>
-    </>
   );
 }

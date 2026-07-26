@@ -7,20 +7,32 @@ use pw_contracts::{
     MemorySummaryDto, PendingMemoryCandidateDto, SCHEMA_VERSION,
 };
 use pw_platform::paths::AppDataLayout;
-use pw_storage::{Database, SqliteMemoryStore};
+use pw_storage::{Database, ImportedMemoryRecord, SqliteMemoryStore};
 use rusqlite::{OptionalExtension, params};
+use std::path::Path;
 use tauri::{AppHandle, Manager, Runtime, State};
 
 use crate::chat::ChatService;
+use crate::commands::data::validated_export_path;
 
 const CONVERSATION: &str = "default";
 const PREVIEW_LIMIT: usize = 160;
+const MAX_MEMORY_CHARS: usize = 2_000;
+const MEMORY_CSV_HEADER: [&str; 7] = [
+    "id",
+    "domain",
+    "content",
+    "state",
+    "pinned",
+    "created_at",
+    "updated_at",
+];
 
 fn database_path(layout: &AppDataLayout) -> std::path::PathBuf {
     layout.main_database()
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |value| {
@@ -110,14 +122,15 @@ fn memory_center_at(path: &std::path::Path, now: i64) -> Result<MemoryCenterDto,
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     let commitments = connection
-        .prepare("SELECT id,status,due_at,revision FROM commitments WHERE status='open' ORDER BY COALESCE(due_at,9223372036854775807),id LIMIT 50")
+        .prepare("SELECT id,content,status,due_at,revision FROM commitments WHERE status='open' ORDER BY COALESCE(due_at,9223372036854775807),id LIMIT 50")
         .map_err(|error| error.to_string())?
         .query_map([], |row| {
             Ok(CommitmentSummaryDto {
                 id: row.get(0)?,
-                status: row.get(1)?,
-                due_at: row.get(2)?,
-                revision: row.get(3)?,
+                content: row.get(1)?,
+                status: row.get(2)?,
+                due_at: row.get(3)?,
+                revision: row.get(4)?,
             })
         })
         .map_err(|error| error.to_string())?
@@ -172,6 +185,423 @@ pub async fn get_memory_center(
     tauri::async_runtime::spawn_blocking(move || memory_center_at(&path, now()))
         .await
         .map_err(|error| error.to_string())?
+}
+
+fn memory_content_at(path: &Path, memory_id: i64) -> Result<String, String> {
+    if memory_id <= 0 {
+        return Err("invalid memory id".into());
+    }
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    SqliteMemoryStore::new(database)
+        .memory_content(memory_id)
+        .map_err(|error| error.to_string())?
+        .map(|(content, _)| content)
+        .ok_or_else(|| "MEMORY_NOT_FOUND".to_owned())
+}
+
+/// Returns the full content of one explicitly selected memory. List responses
+/// remain preview-only.
+///
+/// # Errors
+/// Returns an error for an invalid or missing id, or a database/worker failure.
+#[tauri::command]
+pub async fn get_memory_content(
+    layout: State<'_, AppDataLayout>,
+    memory_id: i64,
+) -> Result<String, String> {
+    let path = database_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || memory_content_at(&path, memory_id))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn update_memory_at(
+    path: &Path,
+    memory_id: i64,
+    content: &str,
+    expected_revision: i64,
+) -> Result<(), String> {
+    if memory_id <= 0
+        || expected_revision <= 0
+        || content.trim().is_empty()
+        || content.chars().count() > MAX_MEMORY_CHARS
+        || !is_safe_persistent_content(content)
+    {
+        return Err("INVALID_MEMORY_CONTENT".into());
+    }
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    SqliteMemoryStore::new(database)
+        .update_memory_fenced(memory_id, content, expected_revision)
+        .map(|_| ())
+        .map_err(|error| {
+            if error.to_string().contains("MEMORY_CONFLICT") {
+                "MEMORY_CONFLICT".to_owned()
+            } else {
+                error.to_string()
+            }
+        })
+}
+
+/// Updates one memory through compare-and-set and returns a fresh preview-only
+/// Memory Center snapshot.
+///
+/// # Errors
+/// Returns `MEMORY_CONFLICT` for a stale revision, or an error for unsafe,
+/// empty, over-limit content and database/worker failures.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn update_memory<R: Runtime>(
+    app: AppHandle<R>,
+    memory_id: i64,
+    content: String,
+    expected_revision: i64,
+) -> Result<MemoryCenterDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let layout = app.state::<AppDataLayout>();
+        let path = database_path(&layout);
+        let chat = app.state::<ChatService>();
+        chat.with_exclusive_reset(|| {
+            update_memory_at(&path, memory_id, &content, expected_revision)?;
+            memory_center_at(&path, now())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn export_memories_csv_at(
+    database_path: &Path,
+    destination: &Path,
+    allow_overwrite: bool,
+) -> Result<(), String> {
+    let destination = validated_export_path(database_path, destination, allow_overwrite)?;
+    let database = Database::open(database_path).map_err(|error| error.to_string())?;
+    let mut statement = database
+        .connection()
+        .prepare(
+            "SELECT m.id,COALESCE(
+               (SELECT d.domain FROM imported_memory_domains d WHERE d.memory_id=m.id),
+               (SELECT c.memory_domain FROM memory_provenance p JOIN memory_candidates c ON c.id=p.candidate_id WHERE p.memory_id=m.id ORDER BY p.created_at DESC,p.candidate_id DESC LIMIT 1),
+               'semantic_user'
+             ),m.content,m.state,m.pinned,m.created_at,m.updated_at FROM memories m ORDER BY m.id",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([], |row| {
+            Ok([
+                row.get::<_, i64>(0)?.to_string(),
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, bool>(4)?.to_string(),
+                row.get::<_, i64>(5)?.to_string(),
+                row.get::<_, i64>(6)?.to_string(),
+            ])
+        })
+        .map_err(|error| error.to_string())?;
+    let mut writer = csv::WriterBuilder::new()
+        .terminator(csv::Terminator::CRLF)
+        .from_path(destination)
+        .map_err(|error| error.to_string())?;
+    writer
+        .write_record(MEMORY_CSV_HEADER)
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        writer
+            .write_record(row.map_err(|error| error.to_string())?)
+            .map_err(|error| error.to_string())?;
+    }
+    writer.flush().map_err(|error| error.to_string())
+}
+
+/// Exports durable memories as RFC 4180 CSV.
+///
+/// # Errors
+/// Returns an error for unsafe destinations or database/file failures.
+#[tauri::command]
+pub async fn export_memories_csv(
+    layout: State<'_, AppDataLayout>,
+    destination: String,
+    allow_overwrite: bool,
+) -> Result<(), String> {
+    let database_path = database_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || {
+        export_memories_csv_at(&database_path, Path::new(&destination), allow_overwrite)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[derive(Debug)]
+struct ImportedMemory {
+    id: Option<i64>,
+    domain: String,
+    content: String,
+    state: String,
+    pinned: bool,
+    created_at: i64,
+    updated_at: i64,
+}
+
+fn parse_memory_csv(source: &Path) -> Result<Vec<ImportedMemory>, String> {
+    let mut reader = csv::ReaderBuilder::new()
+        .from_path(source)
+        .map_err(|error| error.to_string())?;
+    if reader
+        .headers()
+        .map_err(|error| error.to_string())?
+        .iter()
+        .ne(MEMORY_CSV_HEADER)
+    {
+        return Err("INVALID_MEMORY_CSV_HEADER".into());
+    }
+    let mut imported = Vec::new();
+    for record in reader.records() {
+        let record = record.map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?;
+        let field = |index: usize| {
+            record
+                .get(index)
+                .ok_or_else(|| "INVALID_MEMORY_CSV_ROW".to_owned())
+        };
+        let id = match field(0)?.trim() {
+            "" => None,
+            value => Some(
+                value
+                    .parse::<i64>()
+                    .map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?,
+            ),
+        };
+        let domain = field(1)?.to_owned();
+        MemoryDomain::parse(&domain).map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?;
+        let content = field(2)?.to_owned();
+        let state = field(3)?.to_owned();
+        let pinned = field(4)?
+            .parse::<bool>()
+            .map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?;
+        let created_at = field(5)?
+            .parse::<i64>()
+            .map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?;
+        let updated_at = field(6)?
+            .parse::<i64>()
+            .map_err(|_| "INVALID_MEMORY_CSV_ROW".to_owned())?;
+        if id.is_some_and(|value| value <= 0)
+            || content.trim().is_empty()
+            || content.chars().count() > MAX_MEMORY_CHARS
+            || !is_safe_persistent_content(&content)
+            || !matches!(state.as_str(), "active" | "dormant" | "superseded")
+            || created_at < 0
+            || updated_at < 0
+        {
+            return Err("INVALID_MEMORY_CSV_ROW".into());
+        }
+        imported.push(ImportedMemory {
+            id,
+            domain,
+            content,
+            state,
+            pinned,
+            created_at,
+            updated_at,
+        });
+    }
+    Ok(imported)
+}
+
+fn import_memories_csv_at(database_path: &Path, source: &Path) -> Result<(), String> {
+    let source = source.canonicalize().map_err(|error| error.to_string())?;
+    if !source.is_file() {
+        return Err("インポート元は通常ファイルである必要があります".into());
+    }
+    if same_file::is_same_file(database_path, &source).map_err(|error| error.to_string())? {
+        return Err("使用中のデータベースはCSVとして読み込めません".into());
+    }
+    let imported = parse_memory_csv(&source)?;
+    let database = Database::open(database_path).map_err(|error| error.to_string())?;
+    let mut store = SqliteMemoryStore::new(database);
+    for memory in imported {
+        store
+            .insert_memory_direct(ImportedMemoryRecord {
+                id: memory.id,
+                domain: &memory.domain,
+                content: &memory.content,
+                state: &memory.state,
+                pinned: memory.pinned,
+                created_at: memory.created_at,
+                updated_at: memory.updated_at,
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+/// Imports RFC 4180 memory CSV. Existing ids are updated; blank ids insert.
+///
+/// # Errors
+/// Returns an error for malformed rows, unsafe content, or database/file
+/// failures.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn import_memories_csv<R: Runtime>(
+    app: AppHandle<R>,
+    source: String,
+) -> Result<MemoryCenterDto, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let layout = app.state::<AppDataLayout>();
+        let path = database_path(&layout);
+        let chat = app.state::<ChatService>();
+        chat.with_exclusive_reset(|| {
+            import_memories_csv_at(&path, Path::new(&source))?;
+            memory_center_at(&path, now())
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn validate_commitment(content: &str, status: &str, due_at: Option<i64>) -> Result<(), String> {
+    if content.trim().is_empty()
+        || content.chars().count() > MAX_MEMORY_CHARS
+        || !is_safe_persistent_content(content)
+        || !matches!(status, "open" | "completed" | "cancelled")
+        || due_at.is_some_and(|value| value < 0)
+    {
+        return Err("INVALID_COMMITMENT".into());
+    }
+    Ok(())
+}
+
+fn create_commitment_at(
+    path: &Path,
+    content: &str,
+    due_at: Option<i64>,
+    now: i64,
+) -> Result<(), String> {
+    validate_commitment(content, "open", due_at)?;
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    database
+        .connection()
+        .execute(
+            "INSERT INTO commitments(conversation_id,content,status,due_at,revision,created_at,updated_at) VALUES(?1,?2,'open',?3,1,?4,?4)",
+            params![CONVERSATION, content.trim(), due_at, now],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn update_commitment_at(
+    path: &Path,
+    id: i64,
+    content: &str,
+    status: &str,
+    due_at: Option<i64>,
+    expected_revision: i64,
+    now: i64,
+) -> Result<(), String> {
+    validate_commitment(content, status, due_at)?;
+    if id <= 0 || expected_revision <= 0 {
+        return Err("INVALID_COMMITMENT".into());
+    }
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    let changed = database
+        .connection()
+        .execute(
+            "UPDATE commitments SET content=?1,status=?2,due_at=?3,revision=revision+1,updated_at=?4 WHERE id=?5 AND conversation_id=?6 AND revision=?7",
+            params![content.trim(), status, due_at, now, id, CONVERSATION, expected_revision],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("COMMITMENT_CONFLICT".into())
+    }
+}
+
+fn delete_commitment_at(path: &Path, id: i64) -> Result<(), String> {
+    if id <= 0 {
+        return Err("INVALID_COMMITMENT".into());
+    }
+    let database = Database::open(path).map_err(|error| error.to_string())?;
+    let changed = database
+        .connection()
+        .execute(
+            "DELETE FROM commitments WHERE id=?1 AND conversation_id=?2",
+            params![id, CONVERSATION],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed == 1 {
+        Ok(())
+    } else {
+        Err("COMMITMENT_NOT_FOUND".into())
+    }
+}
+
+/// Creates a manually entered task for the durable default conversation.
+///
+/// # Errors
+/// Returns an error for unsafe/over-limit content or a database failure.
+#[tauri::command]
+pub async fn create_commitment(
+    layout: State<'_, AppDataLayout>,
+    content: String,
+    due_at: Option<i64>,
+) -> Result<MemoryCenterDto, String> {
+    let path = database_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || {
+        create_commitment_at(&path, &content, due_at, now())?;
+        memory_center_at(&path, now())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Updates task content, status, and due date through compare-and-set.
+///
+/// # Errors
+/// Returns `COMMITMENT_CONFLICT` for a stale revision, or a validation,
+/// database, or worker error.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn update_commitment(
+    layout: State<'_, AppDataLayout>,
+    id: i64,
+    content: String,
+    status: String,
+    due_at: Option<i64>,
+    expected_revision: i64,
+) -> Result<MemoryCenterDto, String> {
+    let path = database_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || {
+        update_commitment_at(
+            &path,
+            id,
+            &content,
+            &status,
+            due_at,
+            expected_revision,
+            now(),
+        )?;
+        memory_center_at(&path, now())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// Deletes a manually managed task.
+///
+/// # Errors
+/// Returns an error for an invalid/missing id or a database/worker failure.
+#[tauri::command]
+pub async fn delete_commitment(
+    layout: State<'_, AppDataLayout>,
+    id: i64,
+) -> Result<MemoryCenterDto, String> {
+    let path = database_path(&layout);
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_commitment_at(&path, id)?;
+        memory_center_at(&path, now())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn set_domain_control_at(
@@ -413,5 +843,103 @@ mod tests {
         assert_eq!(set_temporary_at(&path, true, 0, 2).unwrap(), 1);
         assert!(set_temporary_at(&path, false, 0, 3).is_err());
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn memory_edit_and_csv_paths_enforce_bounds_cas_and_valid_rows() {
+        let root =
+            std::env::temp_dir().join(format!("pw-memory-edit-{}-{}", std::process::id(), now()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("main.sqlite3");
+        let database = Database::open(&path).unwrap();
+        database
+            .connection()
+            .execute(
+                "INSERT INTO memories(content,created_at,updated_at) VALUES('before',1,1)",
+                [],
+            )
+            .unwrap();
+        let memory_id = database.connection().last_insert_rowid();
+        drop(database);
+
+        assert_eq!(memory_content_at(&path, memory_id).unwrap(), "before");
+        update_memory_at(&path, memory_id, "after", 1).unwrap();
+        assert_eq!(memory_content_at(&path, memory_id).unwrap(), "after");
+        assert_eq!(
+            update_memory_at(&path, memory_id, "stale", 1).unwrap_err(),
+            "MEMORY_CONFLICT"
+        );
+        assert_eq!(
+            update_memory_at(&path, memory_id, &"x".repeat(MAX_MEMORY_CHARS + 1), 2).unwrap_err(),
+            "INVALID_MEMORY_CONTENT"
+        );
+
+        let exported = root.join("memories.csv");
+        export_memories_csv_at(&path, &exported, false).unwrap();
+        let exported_text = std::fs::read_to_string(&exported).unwrap();
+        assert!(exported_text.starts_with("id,domain,content,state,pinned,created_at,updated_at"));
+        assert!(exported_text.contains(",semantic_user,after,"));
+
+        let imported = root.join("import.csv");
+        std::fs::write(
+            &imported,
+            "id,domain,content,state,pinned,created_at,updated_at\r\n,relationship,imported,active,false,2,2\r\n",
+        )
+        .unwrap();
+        import_memories_csv_at(&path, &imported).unwrap();
+        assert_eq!(memory_center_at(&path, now()).unwrap().memories.len(), 2);
+        let reexported = root.join("memories-reexported.csv");
+        export_memories_csv_at(&path, &reexported, false).unwrap();
+        assert!(
+            std::fs::read_to_string(&reexported)
+                .unwrap()
+                .contains(",relationship,imported,")
+        );
+
+        let invalid = root.join("invalid.csv");
+        std::fs::write(
+            &invalid,
+            "id,domain,content,state,pinned,created_at,updated_at\r\n,invalid,bad,active,false,2,2\r\n",
+        )
+        .unwrap();
+        assert_eq!(
+            import_memories_csv_at(&path, &invalid).unwrap_err(),
+            "INVALID_MEMORY_CSV_ROW"
+        );
+
+        create_commitment_at(&path, "first task", None, 3).unwrap();
+        let commitment = memory_center_at(&path, now()).unwrap().commitments[0].clone();
+        assert_eq!(commitment.content, "first task");
+        update_commitment_at(
+            &path,
+            commitment.id,
+            "renamed task",
+            "open",
+            Some(10),
+            commitment.revision,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            update_commitment_at(
+                &path,
+                commitment.id,
+                "stale task",
+                "open",
+                None,
+                commitment.revision,
+                5,
+            )
+            .unwrap_err(),
+            "COMMITMENT_CONFLICT"
+        );
+        delete_commitment_at(&path, commitment.id).unwrap();
+        assert!(
+            memory_center_at(&path, now())
+                .unwrap()
+                .commitments
+                .is_empty()
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

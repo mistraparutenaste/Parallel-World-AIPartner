@@ -35,7 +35,7 @@ describe('desktop windows', () => {
     const nav = screen.getByRole('tablist', { name: '画面メニュー' });
     expect(within(nav).getByRole('tab', { name: '設定' })).toBeInTheDocument();
     expect(within(nav).getByRole('tab', { name: '性格' })).toBeInTheDocument();
-    expect(within(nav).getByRole('tab', { name: '会話' })).toBeInTheDocument();
+    expect(within(nav).getByRole('tab', { name: '記憶' })).toBeInTheDocument();
     expect(within(nav).getByRole('tab', { name: 'チャット' })).toBeInTheDocument();
   });
 });

@@ -95,7 +95,7 @@ describe('conversation-first motion styles', () => {
       /\.screen-tabs button\[data-tab-id='personality'\] \{[\s\S]*?top: 0;[\s\S]*?left: var\(--screen-span\);/,
     );
     expect(css).toMatch(
-      /\.screen-tabs button\[data-tab-id='conversation'\] \{[\s\S]*?top: 0;[\s\S]*?left: 0;/,
+      /\.screen-tabs button\[data-tab-id='memory'\] \{[\s\S]*?top: 0;[\s\S]*?left: 0;/,
     );
   });
 

@@ -201,6 +201,18 @@
           "markdownDescription": "Enables the clear_tts_audio_cache command without any pre-configured scope."
         },
         {
+          "description": "Enables the create_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-create-commitment",
+          "markdownDescription": "Enables the create_commitment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-commitment",
+          "markdownDescription": "Enables the delete_commitment command without any pre-configured scope."
+        },
+        {
           "description": "Enables the delete_conversation_history command without any pre-configured scope.",
           "type": "string",
           "const": "allow-delete-conversation-history",
@@ -229,6 +241,12 @@
           "type": "string",
           "const": "allow-export-diagnostic-reports",
           "markdownDescription": "Enables the export_diagnostic_reports command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the export_memories_csv command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-memories-csv",
+          "markdownDescription": "Enables the export_memories_csv command without any pre-configured scope."
         },
         {
           "description": "Enables the export_user_data command without any pre-configured scope.",
@@ -297,6 +315,12 @@
           "markdownDescription": "Enables the get_data_usage command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_irodori_install_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-irodori-install-state",
+          "markdownDescription": "Enables the get_irodori_install_state command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_llm_settings command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-llm-settings",
@@ -309,16 +333,34 @@
           "markdownDescription": "Enables the get_memory_center command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_memory_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-memory-content",
+          "markdownDescription": "Enables the get_memory_content command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_persona_profile command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-persona-profile",
           "markdownDescription": "Enables the get_persona_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_retention_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-retention-settings",
+          "markdownDescription": "Enables the get_retention_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_runtime_diagnostics command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-runtime-diagnostics",
           "markdownDescription": "Enables the get_runtime_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_self_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-self-review",
+          "markdownDescription": "Enables the get_self_review command without any pre-configured scope."
         },
         {
           "description": "Enables the get_stt_state command without any pre-configured scope.",
@@ -349,6 +391,18 @@
           "type": "string",
           "const": "allow-import-character-asset",
           "markdownDescription": "Enables the import_character_asset command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the import_memories_csv command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-import-memories-csv",
+          "markdownDescription": "Enables the import_memories_csv command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_irodori command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-irodori",
+          "markdownDescription": "Enables the install_irodori command without any pre-configured scope."
         },
         {
           "description": "Enables the install_update command without any pre-configured scope.",
@@ -409,6 +463,12 @@
           "type": "string",
           "const": "allow-rearm-runtime-feature",
           "markdownDescription": "Enables the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the regenerate_self_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-regenerate-self-review",
+          "markdownDescription": "Enables the regenerate_self_review command without any pre-configured scope."
         },
         {
           "description": "Enables the report_frontend_error command without any pre-configured scope.",
@@ -519,6 +579,12 @@
           "markdownDescription": "Enables the set_persona_profile command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_retention_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-retention-settings",
+          "markdownDescription": "Enables the set_retention_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_safe_word command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-safe-word",
@@ -567,6 +633,18 @@
           "markdownDescription": "Enables the stop_listening command without any pre-configured scope."
         },
         {
+          "description": "Enables the update_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-commitment",
+          "markdownDescription": "Enables the update_commitment command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the update_memory command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-update-memory",
+          "markdownDescription": "Enables the update_memory command without any pre-configured scope."
+        },
+        {
           "description": "Denies the add_user_dict_word command without any pre-configured scope.",
           "type": "string",
           "const": "deny-add-user-dict-word",
@@ -589,6 +667,18 @@
           "type": "string",
           "const": "deny-clear-tts-audio-cache",
           "markdownDescription": "Denies the clear_tts_audio_cache command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the create_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-create-commitment",
+          "markdownDescription": "Denies the create_commitment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the delete_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-commitment",
+          "markdownDescription": "Denies the delete_commitment command without any pre-configured scope."
         },
         {
           "description": "Denies the delete_conversation_history command without any pre-configured scope.",
@@ -619,6 +709,12 @@
           "type": "string",
           "const": "deny-export-diagnostic-reports",
           "markdownDescription": "Denies the export_diagnostic_reports command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the export_memories_csv command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-memories-csv",
+          "markdownDescription": "Denies the export_memories_csv command without any pre-configured scope."
         },
         {
           "description": "Denies the export_user_data command without any pre-configured scope.",
@@ -687,6 +783,12 @@
           "markdownDescription": "Denies the get_data_usage command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_irodori_install_state command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-irodori-install-state",
+          "markdownDescription": "Denies the get_irodori_install_state command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_llm_settings command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-llm-settings",
@@ -699,16 +801,34 @@
           "markdownDescription": "Denies the get_memory_center command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_memory_content command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-memory-content",
+          "markdownDescription": "Denies the get_memory_content command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_persona_profile command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-persona-profile",
           "markdownDescription": "Denies the get_persona_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_retention_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-retention-settings",
+          "markdownDescription": "Denies the get_retention_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_runtime_diagnostics command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-runtime-diagnostics",
           "markdownDescription": "Denies the get_runtime_diagnostics command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_self_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-self-review",
+          "markdownDescription": "Denies the get_self_review command without any pre-configured scope."
         },
         {
           "description": "Denies the get_stt_state command without any pre-configured scope.",
@@ -739,6 +859,18 @@
           "type": "string",
           "const": "deny-import-character-asset",
           "markdownDescription": "Denies the import_character_asset command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the import_memories_csv command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-import-memories-csv",
+          "markdownDescription": "Denies the import_memories_csv command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_irodori command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-irodori",
+          "markdownDescription": "Denies the install_irodori command without any pre-configured scope."
         },
         {
           "description": "Denies the install_update command without any pre-configured scope.",
@@ -799,6 +931,12 @@
           "type": "string",
           "const": "deny-rearm-runtime-feature",
           "markdownDescription": "Denies the rearm_runtime_feature command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the regenerate_self_review command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-regenerate-self-review",
+          "markdownDescription": "Denies the regenerate_self_review command without any pre-configured scope."
         },
         {
           "description": "Denies the report_frontend_error command without any pre-configured scope.",
@@ -909,6 +1047,12 @@
           "markdownDescription": "Denies the set_persona_profile command without any pre-configured scope."
         },
         {
+          "description": "Denies the set_retention_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-retention-settings",
+          "markdownDescription": "Denies the set_retention_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_safe_word command without any pre-configured scope.",
           "type": "string",
           "const": "deny-set-safe-word",
@@ -955,6 +1099,18 @@
           "type": "string",
           "const": "deny-stop-listening",
           "markdownDescription": "Denies the stop_listening command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_commitment command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-commitment",
+          "markdownDescription": "Denies the update_commitment command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the update_memory command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-update-memory",
+          "markdownDescription": "Denies the update_memory command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

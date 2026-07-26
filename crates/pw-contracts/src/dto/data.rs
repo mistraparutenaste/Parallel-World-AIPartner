@@ -30,3 +30,10 @@ pub struct DataDeletionResultDto {
     #[ts(type = "number")]
     pub freed_bytes: u64,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "RetentionSettingsDto.ts")]
+pub struct RetentionSettingsDto {
+    pub schema_version: u16,
+    pub keep_messages: u32,
+}

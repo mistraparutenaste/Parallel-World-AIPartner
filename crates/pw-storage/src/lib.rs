@@ -10,8 +10,8 @@ mod state_worker;
 pub use database::{Database, StorageError};
 pub use history::SqliteConversationHistory;
 pub use memory::{
-    SqliteMemoryStore, delete_all_memories_fenced, delete_all_memories_in_transaction,
-    tombstone_memories_for_deleted_observations,
+    ImportedMemoryRecord, SqliteMemoryStore, delete_all_memories_fenced,
+    delete_all_memories_in_transaction, tombstone_memories_for_deleted_observations,
 };
 pub use state::SqliteCompanionStateStore;
 pub use state_worker::{
