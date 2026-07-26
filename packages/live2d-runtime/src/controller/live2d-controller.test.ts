@@ -12,6 +12,7 @@ function createModelHandle(): ModelHandle {
     motionGroups: new Map([['Idle', 1]]),
     setExpression: vi.fn().mockReturnValue(true),
     startMotion: vi.fn().mockReturnValue(true),
+    startIdleMotion: vi.fn().mockReturnValue(true),
     setLipSyncValue: vi.fn(),
     hitTest: vi.fn().mockReturnValue(false),
     release: vi.fn(),
@@ -101,6 +102,7 @@ describe('Live2DController', () => {
 
     expect(controller.setExpression('Smile')).toBe(false);
     expect(controller.startMotion('Idle')).toBe(false);
+    expect(controller.startIdleMotion()).toBe(false);
   });
 
   it('delegates expression and motion requests to the model', async () => {
@@ -116,6 +118,8 @@ describe('Live2DController', () => {
     expect(handle.setExpression).toHaveBeenCalledWith('Smile');
     expect(controller.startMotion('Idle')).toBe(true);
     expect(handle.startMotion).toHaveBeenCalledWith('Idle', undefined);
+    expect(controller.startIdleMotion()).toBe(true);
+    expect(handle.startIdleMotion).toHaveBeenCalledOnce();
   });
 
   it('resizes the canvas backing store by device pixel ratio', async () => {

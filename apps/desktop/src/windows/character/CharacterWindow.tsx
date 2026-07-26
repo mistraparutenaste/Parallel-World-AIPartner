@@ -1,6 +1,7 @@
 import type {
   CharacterCursorEventDto,
   CharacterManifestDto,
+  CharacterMotionEventDto,
   CharacterSettingsChangedEventDto,
   CharacterSettingsDto,
   ConversationStateDto,
@@ -148,8 +149,17 @@ export function CharacterWindow({
     let manifest: CharacterManifestDto | null = null;
     let interactive = true;
     let settingsRevision = 0;
+    const pendingMotions = new Map<number, string>();
+    let speechReactionActive = false;
     const unlisteners: Array<() => void> = [];
     const reportFailureOnce = dependencies.createFailureReporter();
+
+    const resetSpeechReaction = (clearPending: boolean) => {
+      if (clearPending) pendingMotions.clear();
+      if (!speechReactionActive) return;
+      speechReactionActive = false;
+      renderer?.resetSpeechReaction();
+    };
 
     const recordFailure = (error: unknown, fallback?: CharacterRendererFailureCode) => {
       if (disposed) return;
@@ -172,12 +182,21 @@ export function CharacterWindow({
       onLevel: (level) => renderer?.setAudioLevel(level),
       onActiveChange: (active) => {
         idle?.setAudioActive(active);
+        if (!active) resetSpeechReaction(false);
         void dependencies.invoke('set_speech_playback', { active }).catch(
           (error: unknown) => console.error('failed to report speech playback', error),
         );
       },
       onTurnPlaybackStart: (turnId) => {
-        renderer?.reactToSpeechStart(turnId);
+        const motion = pendingMotions.get(turnId);
+        const motionStarted = motion === undefined
+          ? false
+          : (renderer?.startMotion(motion) ?? false);
+        for (const pendingTurnId of pendingMotions.keys()) {
+          if (pendingTurnId <= turnId) pendingMotions.delete(pendingTurnId);
+        }
+        const rendererReacted = renderer?.reactToSpeechStart(turnId) ?? false;
+        speechReactionActive = motionStarted || rendererReacted;
         idle?.activity();
       },
     });
@@ -192,7 +211,7 @@ export function CharacterWindow({
       }),
       dependencies.subscribeEvent<SpeechStopEventDto>(SPEECH_STOP_EVENT, () => {
         audioPlayer.stop();
-        renderer?.resetSpeechReaction();
+        resetSpeechReaction(true);
         idle?.activity();
       }),
     );
@@ -253,14 +272,14 @@ export function CharacterWindow({
           if (!loaded) pendingExpression = name;
           else if (renderer?.setExpression(name)) idle?.activity();
         }),
-        dependencies.subscribeEvent<string>(CHARACTER_MOTION_EVENT, (group) => {
-          if (loaded && renderer?.startMotion(group)) idle?.activity();
+        dependencies.subscribeEvent<CharacterMotionEventDto>(CHARACTER_MOTION_EVENT, (payload) => {
+          if (loaded) pendingMotions.set(payload.turn_id, payload.group);
         }),
         dependencies.subscribeEvent<ConversationStateEventDto>(
           'conversation-state',
           ({ state: conversationState }) => {
             idle?.setConversationState(conversationState);
-            if (conversationState === 'interrupting') renderer?.resetSpeechReaction();
+            if (conversationState === 'interrupting') resetSpeechReaction(true);
           },
         ),
         dependencies.subscribeEvent<CharacterCursorEventDto>(CHARACTER_CURSOR_EVENT, (payload) => {

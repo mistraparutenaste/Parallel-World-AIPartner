@@ -12,6 +12,7 @@ export interface Live2DControllerLike {
   loadModel(source: ModelSource): Promise<void>;
   setExpression(name: string): boolean;
   startMotion(group: string): boolean;
+  startIdleMotion(): boolean;
   setLipSyncValue(level: number): boolean;
   resize(width: number, height: number, dpr: number): void;
   hitTest(x: number, y: number): boolean;
@@ -72,7 +73,9 @@ export class Live2DCharacterRenderer implements CharacterRenderer {
     return false;
   }
 
-  resetSpeechReaction(): void {}
+  resetSpeechReaction(): void {
+    if (!this.#disposed) this.#controller.startIdleMotion();
+  }
 
   resize(width: number, height: number, dpr: number): void {
     if (!this.#disposed) this.#controller.resize(width, height, dpr);

@@ -154,11 +154,12 @@ describe('CharacterWindow common renderer lifecycle', () => {
     expect(screen.getByRole('status')).toHaveTextContent(/待機|idle/i);
 
     h.publish('conversation-state', { schema_version: 1, state: 'thinking', message: null });
-    h.publish('character-motion', 'nod');
+    const activityBeforeMotion = h.idle.activity.mock.calls.length;
+    h.publish('character-motion', { schema_version: 1, turn_id: 7, group: 'nod' });
     const activityBeforeCursor = h.idle.activity.mock.calls.length;
     h.publish('character-cursor', { schema_version: 1, x: 0, y: 0 });
     expect(h.idle.setConversationState).toHaveBeenCalledWith('thinking');
-    expect(activityBeforeCursor).toBe(2);
+    expect(activityBeforeCursor).toBe(activityBeforeMotion);
     expect(h.idle.activity).toHaveBeenCalledTimes(activityBeforeCursor);
     expect(h.renderer.hitTest).toHaveBeenCalled();
   });
@@ -182,6 +183,48 @@ describe('CharacterWindow common renderer lifecycle', () => {
     expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
     h.publish(CHARACTER_SETTINGS_CHANGED_EVENT, { schema_version: 2, settings: { ...SETTINGS, expression_idle_timeout_seconds: null } });
     expect(h.idle.setTimeoutSeconds).toHaveBeenLastCalledWith(null);
+  });
+
+  it('starts a turn motion only when that turn actually begins playback', async () => {
+    const h = harness({ manifest: LIVE2D_MANIFEST });
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.reportSuccess).toHaveBeenCalledOnce());
+
+    h.publish('character-motion', {
+      schema_version: 1,
+      turn_id: 7,
+      group: 'TapBody',
+    });
+
+    expect(h.renderer.startMotion).not.toHaveBeenCalled();
+    h.speechOptions?.onTurnPlaybackStart?.(6);
+    expect(h.renderer.startMotion).not.toHaveBeenCalled();
+
+    h.speechOptions?.onTurnPlaybackStart?.(7);
+    expect(h.renderer.startMotion).toHaveBeenCalledOnce();
+    expect(h.renderer.startMotion).toHaveBeenCalledWith('TapBody');
+
+    h.speechOptions?.onActiveChange?.(true);
+    h.speechOptions?.onActiveChange?.(false);
+    expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
+    h.publish('speech-stop', { schema_version: 1 });
+    expect(h.renderer.resetSpeechReaction).toHaveBeenCalledOnce();
+  });
+
+  it('drops a queued motion when speech is stopped before playback starts', async () => {
+    const h = harness({ manifest: LIVE2D_MANIFEST });
+    render(<CharacterWindow dependencies={h.dependencies} />);
+    await waitFor(() => expect(h.dependencies.reportSuccess).toHaveBeenCalledOnce());
+
+    h.publish('character-motion', {
+      schema_version: 1,
+      turn_id: 8,
+      group: 'TapBody',
+    });
+    h.publish('speech-stop', { schema_version: 1 });
+    h.speechOptions?.onTurnPlaybackStart?.(8);
+
+    expect(h.renderer.startMotion).not.toHaveBeenCalled();
   });
 
   it('does not overwrite a newer settings event with a stale initial response', async () => {
@@ -401,6 +444,7 @@ describe('CharacterWindow common renderer lifecycle', () => {
     const h = harness();
     render(<CharacterWindow dependencies={h.dependencies} />);
     await waitFor(() => expect(h.dependencies.reportSuccess).toHaveBeenCalledOnce());
+    h.speechOptions?.onTurnPlaybackStart?.(7);
     h.publish('conversation-state', {
       schema_version: 1, state: 'interrupting', message: null,
     });

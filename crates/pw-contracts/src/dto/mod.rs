@@ -37,10 +37,11 @@ pub use behavior::{
 pub use character_cursor::{CHARACTER_CURSOR_EVENT, CharacterCursorEventDto};
 pub use character_manifest::{
     CHARACTER_EXPRESSION_EVENT, CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_MOTION_EVENT,
-    CHARACTER_SETTINGS_CHANGED_EVENT, CHARACTER_SETTINGS_SCHEMA_VERSION,
-    CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
-    CharacterRendererKindDto, CharacterSettingsChangedEventDto, CharacterSettingsDto,
-    CharacterSetupDto, CharacterSourceStatusDto, MotionGroupDto, StaticExpressionDto,
+    CHARACTER_MOTION_SCHEMA_VERSION, CHARACTER_SETTINGS_CHANGED_EVENT,
+    CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto,
+    CharacterMotionEventDto, CharacterRendererDto, CharacterRendererKindDto,
+    CharacterSettingsChangedEventDto, CharacterSettingsDto, CharacterSetupDto,
+    CharacterSourceStatusDto, MotionGroupDto, StaticExpressionDto,
 };
 pub use chat::{
     CHAT_MESSAGE_EVENT, CONVERSATION_HISTORY_DELETED_EVENT, CONVERSATION_STATE_EVENT,

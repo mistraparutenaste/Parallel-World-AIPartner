@@ -27,17 +27,18 @@ use crate::{
     CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_MOTION_EVENT, CHARACTER_SETTINGS_CHANGED_EVENT,
     CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CHAT_MESSAGE_EVENT,
     CONTROL_CENTER_NAVIGATE_EVENT, CONVERSATION_HISTORY_DELETED_EVENT, CONVERSATION_STATE_EVENT,
-    CharacterCursorEventDto, CharacterManifestDto, CharacterSettingsChangedEventDto,
-    CharacterSetupDto, ChatMessageEventDto, ConversationHistoryDeletedEventDto,
-    ConversationLogPageDto, ConversationStateEventDto, DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION,
-    DARK_EXPRESSION_SAFETY_CHANGED_EVENT, DARK_EXPRESSION_SAFETY_SCHEMA_VERSION,
-    DarkExpressionSafetyChangedEventDto, DataDeletionResultDto, DataUsageDto,
-    DeviceFallbackEventDto, DiagnosticReportDto, FrontendDiagnosticDto, IrodoriInstallStateDto,
-    LlmSettingsDto, MemoryCenterDto, PERSONA_SETTINGS_SCHEMA_VERSION, PersonaSettingsDto,
-    RUNTIME_HEALTH_EVENT, RetentionSettingsDto, RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT,
-    SCHEMA_VERSION, SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, STT_DEVICE_FALLBACK_EVENT,
-    STT_LEVEL_EVENT, STT_STATE_EVENT, STT_TRANSCRIPT_EVENT, SafewordTriggeredEventDto,
-    SelfReviewDto, SpeechAudioEventDto, SpeechStopEventDto, SttStateEventDto, TTS_STATE_EVENT,
+    CharacterCursorEventDto, CharacterManifestDto, CharacterMotionEventDto,
+    CharacterSettingsChangedEventDto, CharacterSetupDto, ChatMessageEventDto,
+    ConversationHistoryDeletedEventDto, ConversationLogPageDto, ConversationStateEventDto,
+    DARK_EXPRESSION_ACKNOWLEDGEMENT_VERSION, DARK_EXPRESSION_SAFETY_CHANGED_EVENT,
+    DARK_EXPRESSION_SAFETY_SCHEMA_VERSION, DarkExpressionSafetyChangedEventDto,
+    DataDeletionResultDto, DataUsageDto, DeviceFallbackEventDto, DiagnosticReportDto,
+    FrontendDiagnosticDto, IrodoriInstallStateDto, LlmSettingsDto, MemoryCenterDto,
+    PERSONA_SETTINGS_SCHEMA_VERSION, PersonaSettingsDto, RUNTIME_HEALTH_EVENT,
+    RetentionSettingsDto, RuntimeDiagnosticsDto, SAFEWORD_TRIGGERED_EVENT, SCHEMA_VERSION,
+    SPEECH_AUDIO_EVENT, SPEECH_STOP_EVENT, STT_DEVICE_FALLBACK_EVENT, STT_LEVEL_EVENT,
+    STT_STATE_EVENT, STT_TRANSCRIPT_EVENT, SafewordTriggeredEventDto, SelfReviewDto,
+    SpeechAudioEventDto, SpeechStopEventDto, SttStateEventDto, TTS_STATE_EVENT,
     TechnicalLogChunkDto, TranscriptEventDto, TtsSettingsDto, TtsStateEventDto, TtsVoiceDto,
     UI_PREFERENCES_CHANGED_EVENT, UPDATE_PROGRESS_EVENT, UiPreferencesDto, UpdateStateDto,
     UserDictWordDto,
@@ -214,6 +215,7 @@ fn export_dto_bindings(config: &Config) {
         .expect("export ActivityCollectionHealthEventDto bindings");
     CharacterCursorEventDto::export_all(config).expect("export CharacterCursorEventDto bindings");
     CharacterManifestDto::export_all(config).expect("export CharacterManifestDto bindings");
+    CharacterMotionEventDto::export_all(config).expect("export CharacterMotionEventDto bindings");
     CharacterSetupDto::export_all(config).expect("export CharacterSetupDto bindings");
     CharacterSettingsChangedEventDto::export_all(config)
         .expect("export CharacterSettingsChangedEventDto bindings");

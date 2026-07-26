@@ -16,7 +16,9 @@ members = [
 [workspace.package]
 edition = "2024"
 rust-version = "1.96"
-license = "UNLICENSED"
+# 非商用はPolyForm Noncommercial License 1.0.0、商用は個別契約のデュアルライセンス。
+# SPDX式では商用側を表現できないため、詳細はLICENSE-COMMERCIAL.mdを参照。
+license = "PolyForm-Noncommercial-1.0.0"
 publish = false
 
 [workspace.dependencies]

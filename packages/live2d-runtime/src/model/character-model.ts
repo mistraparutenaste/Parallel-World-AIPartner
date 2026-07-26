@@ -184,6 +184,19 @@ export class CharacterModel extends CubismUserModel {
     return true;
   }
 
+  /** Stops the active gesture and starts the first stable idle motion. */
+  startIdleMotion(): boolean {
+    if (this.#idleGroup === null) {
+      return false;
+    }
+    this._motionManager.stopAllMotions();
+    // Cubism clears the current priority only while updating a finished
+    // queue. Do that synchronously so the lower-priority idle motion can
+    // start now instead of being rejected behind the stopped speech motion.
+    this._motionManager.updateMotion(this._model, 0);
+    return this.startMotionIn(this.#idleGroup, 0, PRIORITY_IDLE);
+  }
+
   /**
    * Sets the mouth-open value (0..1) computed from the playing audio.
    * Applied to the model's LipSync parameters every frame.

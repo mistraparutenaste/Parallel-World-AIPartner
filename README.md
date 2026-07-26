@@ -271,9 +271,16 @@ corepack pnpm bundle:macos:local
 
 ## ライセンス関係
 
-このリポジトリは`UNLICENSED`かつ`publish = false`です。明示的な許可なく、ソースコードを利用、改変、再配布することはできません。
+Parallel Worldはデュアルライセンスです。
 
-Live2D SDK、VAD / STTモデル、LLM、AivisSpeech、Irodori-TTS、キャラクター画像には、それぞれ異なる利用条件があります。利用、改変、再配布の前に、各vendor README、モデルmanifest、同梱ライセンスを確認してください。キャラクターのモデルと画像はGitおよび配布bundleには含めません。
+- **非商用利用**: [PolyForm Noncommercial License 1.0.0](LICENSE)に基づき許諾します。個人的な学習、趣味、研究、非営利団体や教育機関での利用などが該当します。追加の手続きは不要です。
+- **商用利用**: 上記ライセンスの許諾範囲外です。著作権者との個別の商用ライセンス契約が必要です。条件と問い合わせ先は[LICENSE-COMMERCIAL.md](LICENSE-COMMERCIAL.md)を参照してください。
+
+PolyForm Noncommercial LicenseはOSI承認のオープンソースライセンスではありません。頒布する場合は、[LICENSE](LICENSE)またはそのURLと、`Required Notice:`で始まる行を必ず一緒に渡してください。
+
+このライセンスが対象とするのは、著作権者が本リポジトリにおいて権利を有する著作物のみです。Live2D SDK、VAD / STTモデル、LLM、AivisSpeech、Irodori-TTS、フォント、キャラクター画像には、それぞれ異なる利用条件があり、商用ライセンスの対象にも含まれません。特にLive2D Cubism SDKは、直近会計年度の売上高が1000万円以上の事業者が利用する場合、Live2D社のリリースライセンスへの同意が別途必要です。詳細は[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)を参照してください。キャラクターのモデルと画像はGitおよび配布bundleには含めません。
+
+コントリビューションを受け付ける際の権利の扱いは[CONTRIBUTING.md](CONTRIBUTING.md)に定めます。
 
 標準UIフォントには[ラノベPOP v2](https://flopdesign.booth.pm/)を使用しています。同梱の説明書は[こちら](apps/desktop/src/assets/fonts/lanobe-pop-v2/ReadMe.html)です。
 

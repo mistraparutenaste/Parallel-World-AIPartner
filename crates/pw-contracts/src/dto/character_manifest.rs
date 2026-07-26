@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 pub const CHARACTER_MANIFEST_SCHEMA_VERSION: u16 = 2;
+pub const CHARACTER_MOTION_SCHEMA_VERSION: u16 = 1;
 pub const CHARACTER_SETTINGS_SCHEMA_VERSION: u16 = 3;
 pub const CHARACTER_SETUP_SCHEMA_VERSION: u16 = 1;
 pub const CHARACTER_SETTINGS_CHANGED_EVENT: &str = "character-settings-changed";
@@ -16,6 +17,17 @@ pub const CHARACTER_MOTION_EVENT: &str = "character-motion";
 pub struct MotionGroupDto {
     pub name: String,
     pub motion_count: u32,
+}
+
+/// Motion selected for one assistant turn, applied when its audio starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "CharacterMotionEventDto.ts")]
+pub struct CharacterMotionEventDto {
+    pub schema_version: u16,
+    /// Assistant turn whose first actual audio start applies this motion.
+    #[ts(type = "number")]
+    pub turn_id: u64,
+    pub group: String,
 }
 
 /// Everything a window needs to load and control the active character.
@@ -129,11 +141,29 @@ pub struct CharacterSettingsChangedEventDto {
 #[cfg(test)]
 mod tests {
     use super::{
-        CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_SETTINGS_SCHEMA_VERSION,
-        CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto, CharacterRendererDto,
-        CharacterRendererKindDto, CharacterSettingsDto, CharacterSetupDto,
-        CharacterSourceStatusDto, StaticExpressionDto,
+        CHARACTER_MANIFEST_SCHEMA_VERSION, CHARACTER_MOTION_SCHEMA_VERSION,
+        CHARACTER_SETTINGS_SCHEMA_VERSION, CHARACTER_SETUP_SCHEMA_VERSION, CharacterManifestDto,
+        CharacterMotionEventDto, CharacterRendererDto, CharacterRendererKindDto,
+        CharacterSettingsDto, CharacterSetupDto, CharacterSourceStatusDto, StaticExpressionDto,
     };
+
+    #[test]
+    fn serializes_turn_bound_character_motion_event() {
+        let event = CharacterMotionEventDto {
+            schema_version: CHARACTER_MOTION_SCHEMA_VERSION,
+            turn_id: 7,
+            group: "TapBody".into(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            serde_json::json!({
+                "schema_version": 1,
+                "turn_id": 7,
+                "group": "TapBody",
+            })
+        );
+    }
 
     #[test]
     fn serializes_static_renderer_contract() {

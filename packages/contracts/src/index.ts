@@ -18,6 +18,7 @@ export type { BehaviorSettingsChangedEventDto } from './generated/BehaviorSettin
 export type { BehaviorSettingsDto } from './generated/BehaviorSettingsDto';
 export type { CharacterCursorEventDto } from './generated/CharacterCursorEventDto';
 export type { CharacterManifestDto } from './generated/CharacterManifestDto';
+export type { CharacterMotionEventDto } from './generated/CharacterMotionEventDto';
 export type { CharacterRendererDto } from './generated/CharacterRendererDto';
 export type { CharacterRendererKindDto } from './generated/CharacterRendererKindDto';
 export type { CharacterSettingsChangedEventDto } from './generated/CharacterSettingsChangedEventDto';

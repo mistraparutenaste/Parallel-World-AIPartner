@@ -39,6 +39,7 @@ describe('createCharacterRenderer', () => {
       loadModel: vi.fn().mockResolvedValue(undefined),
       setExpression: vi.fn(() => true),
       startMotion: vi.fn(() => true),
+      startIdleMotion: vi.fn(() => true),
       setLipSyncValue: vi.fn(() => true),
       resize: vi.fn(),
       hitTest: vi.fn(() => true),
@@ -73,6 +74,7 @@ describe('createCharacterRenderer', () => {
     renderer.dispose();
     expect(controller.setExpression).toHaveBeenCalledWith('happy');
     expect(controller.startMotion).toHaveBeenCalledWith('idle');
+    expect(controller.startIdleMotion).toHaveBeenCalledOnce();
     expect(controller.setLipSyncValue).toHaveBeenCalledWith(0.4);
     expect(controller.resize).toHaveBeenCalledWith(100, 200, 1.5);
     expect(controller.hitTest).toHaveBeenCalledWith(10, 20);
@@ -88,6 +90,7 @@ describe('createCharacterRenderer', () => {
       loadModel: vi.fn().mockResolvedValue(undefined),
       setExpression: vi.fn(() => false),
       startMotion: vi.fn(() => false),
+      startIdleMotion: vi.fn(() => false),
       setLipSyncValue: vi.fn(() => false),
       resize: vi.fn(),
       hitTest: vi.fn(() => false),
@@ -119,6 +122,7 @@ describe('createCharacterRenderer', () => {
       loadModel: vi.fn(async () => { await modelLoaded.promise; state = 'model-loaded'; }),
       setExpression: vi.fn(() => false),
       startMotion: vi.fn(() => false),
+      startIdleMotion: vi.fn(() => false),
       setLipSyncValue: vi.fn(() => false),
       resize: vi.fn(),
       hitTest: vi.fn(() => false),
@@ -152,6 +156,7 @@ describe('createCharacterRenderer', () => {
       loadModel: vi.fn(() => modelLoaded.promise),
       setExpression: vi.fn(() => false),
       startMotion: vi.fn(() => false),
+      startIdleMotion: vi.fn(() => false),
       setLipSyncValue: vi.fn(() => false),
       resize: vi.fn(),
       hitTest: vi.fn(() => false),

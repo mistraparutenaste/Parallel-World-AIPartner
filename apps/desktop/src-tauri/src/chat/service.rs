@@ -33,8 +33,9 @@ use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
 };
 use pw_contracts::{
-    ChatMessageEventDto, ChatRoleDto, ConversationStateEventDto, LlmSettingsDto,
-    RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION,
+    CHARACTER_MOTION_SCHEMA_VERSION, CharacterMotionEventDto, ChatMessageEventDto, ChatRoleDto,
+    ConversationStateEventDto, LlmSettingsDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto,
+    SCHEMA_VERSION,
 };
 use pw_domain::conversation::ConversationState;
 use pw_domain::reply::{ReplyControl, ReplyEvent, ReplyParser, TurnId, strip_emoji};
@@ -2069,6 +2070,17 @@ fn character_instruction(base: &str, capabilities: &CharacterCapabilities) -> St
             "利用できるモーション(motion): {}",
             capabilities.motions.join(", ")
         ));
+        lines.push(
+            "motionは発話内容に自然に合う場合だけ指定し、変更不要ならnullにしてください。"
+                .to_owned(),
+        );
+        if capabilities
+            .motions
+            .iter()
+            .any(|motion| motion.eq_ignore_ascii_case("idle"))
+        {
+            lines.push("待機用のIdleは発話モーションとして指定しないでください。".to_owned());
+        }
     }
     lines.join("\n")
 }
@@ -2077,7 +2089,8 @@ fn dispatch_character_control(
     capabilities: &CharacterCapabilities,
     renderer: &str,
     control: &ReplyControl,
-    mut emit: impl FnMut(&'static str, &str),
+    mut emit_expression: impl FnMut(&str),
+    mut emit_motion: impl FnMut(&str),
 ) {
     if let Some(emotion) = &control.emotion {
         if capabilities
@@ -2085,7 +2098,7 @@ fn dispatch_character_control(
             .iter()
             .any(|known| known == emotion)
         {
-            emit(EXPRESSION_EVENT, emotion);
+            emit_expression(emotion);
         } else {
             tracing::warn!(
                 renderer = %renderer,
@@ -2097,7 +2110,7 @@ fn dispatch_character_control(
     }
     if let Some(motion) = &control.motion {
         if capabilities.motions.iter().any(|known| known == motion) {
-            emit(MOTION_EVENT, motion);
+            emit_motion(motion);
         } else {
             tracing::warn!(
                 renderer = %renderer,
@@ -2116,6 +2129,12 @@ trait ConversationEventRuntime: Send {
         target: &'static str,
         event: &'static str,
         name: &str,
+    ) -> Result<(), String>;
+    fn emit_motion_to_webview(
+        &self,
+        target: &'static str,
+        event: &'static str,
+        payload: CharacterMotionEventDto,
     ) -> Result<(), String>;
     fn emit_chat_message(&self, payload: ChatMessageEventDto);
     fn emit_conversation_state(&self, payload: ConversationStateEventDto);
@@ -2141,6 +2160,17 @@ impl<R: Runtime> ConversationEventRuntime for AppConversationEventRuntime<R> {
     ) -> Result<(), String> {
         self.app
             .emit_to(EventTarget::webview_window(target), event, name)
+            .map_err(|error| error.to_string())
+    }
+
+    fn emit_motion_to_webview(
+        &self,
+        target: &'static str,
+        event: &'static str,
+        payload: CharacterMotionEventDto,
+    ) -> Result<(), String> {
+        self.app
+            .emit_to(EventTarget::webview_window(target), event, payload)
             .map_err(|error| error.to_string())
     }
 
@@ -2227,7 +2257,7 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
         self.emit_message(turn, ChatRoleDto::User, text);
     }
 
-    fn on_control(&self, _turn: TurnId, control: &ReplyControl) {
+    fn on_control(&self, turn: TurnId, control: &ReplyControl) {
         let Some(context) = self.runtime.character_context() else {
             if let Some(emotion) = &control.emotion {
                 tracing::warn!(
@@ -2251,12 +2281,34 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
             &context.capabilities,
             context.renderer,
             control,
-            |event, name| {
-                if let Err(error) = self.runtime.emit_to_webview(CHARACTER_WEBVIEW, event, name) {
+            |name| {
+                if let Err(error) =
+                    self.runtime
+                        .emit_to_webview(CHARACTER_WEBVIEW, EXPRESSION_EVENT, name)
+                {
                     tracing::warn!(
                         %error,
                         renderer = %context.renderer,
-                        control = %event,
+                        control = EXPRESSION_EVENT,
+                        name = %name,
+                        "failed to emit character control"
+                    );
+                }
+            },
+            |name| {
+                let payload = CharacterMotionEventDto {
+                    schema_version: CHARACTER_MOTION_SCHEMA_VERSION,
+                    turn_id: turn.value(),
+                    group: name.to_owned(),
+                };
+                if let Err(error) =
+                    self.runtime
+                        .emit_motion_to_webview(CHARACTER_WEBVIEW, MOTION_EVENT, payload)
+                {
+                    tracing::warn!(
+                        %error,
+                        renderer = %context.renderer,
+                        control = MOTION_EVENT,
                         name = %name,
                         "failed to emit character control"
                     );
@@ -2347,6 +2399,9 @@ mod tests {
 
         assert!(instruction.contains("利用できる表情(emotion): neutral, happy"));
         assert!(instruction.contains("利用できるモーション(motion): Idle, Tap"));
+        assert!(
+            instruction.contains("motionは発話内容に自然に合う場合だけ指定し、変更不要ならnull")
+        );
     }
 
     fn resolved_persona_for_test(id: &str, prompt: &str) -> crate::behavior::ResolvedPersonaPrompt {
@@ -2500,6 +2555,7 @@ mod tests {
         target: String,
         event: String,
         name: String,
+        turn_id: Option<u64>,
     }
 
     struct RecordingConversationRuntime {
@@ -2525,6 +2581,26 @@ mod tests {
                 target: target.into(),
                 event: event.into(),
                 name: name.into(),
+                turn_id: None,
+            });
+            if self.fail_emit {
+                Err("injected character event failure".into())
+            } else {
+                Ok(())
+            }
+        }
+
+        fn emit_motion_to_webview(
+            &self,
+            target: &'static str,
+            event: &'static str,
+            payload: CharacterMotionEventDto,
+        ) -> Result<(), String> {
+            self.attempts.lock().unwrap().push(RecordedCharacterEvent {
+                target: target.into(),
+                event: event.into(),
+                name: payload.group,
+                turn_id: Some(payload.turn_id),
             });
             if self.fail_emit {
                 Err("injected character event failure".into())
@@ -2739,11 +2815,13 @@ mod tests {
                     target: "character".into(),
                     event: EXPRESSION_EVENT.into(),
                     name: "happy".into(),
+                    turn_id: None,
                 },
                 RecordedCharacterEvent {
                     target: "character".into(),
                     event: MOTION_EVENT.into(),
                     name: "Tap".into(),
+                    turn_id: Some(turn.value()),
                 },
             ]
         );

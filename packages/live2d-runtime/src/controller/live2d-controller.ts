@@ -95,6 +95,11 @@ export class Live2DController {
     return this.#model?.startMotion(group, index) ?? false;
   }
 
+  /** Stops the active gesture and returns to the model's idle motion. */
+  startIdleMotion(): boolean {
+    return this.#model?.startIdleMotion() ?? false;
+  }
+
   /**
    * Sets the mouth-open value (0..1) from the playing audio.
    * False when no model is loaded.

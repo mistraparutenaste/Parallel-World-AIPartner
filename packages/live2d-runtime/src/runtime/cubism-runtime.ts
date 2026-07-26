@@ -30,6 +30,8 @@ export interface ModelHandle {
    * Returns false for unknown groups.
    */
   startMotion(group: string, index?: number): boolean;
+  /** Stops the current motion and returns to the model's idle group. */
+  startIdleMotion(): boolean;
   /**
    * Sets the mouth-open value (0..1) computed from the playing audio
    * (Live2Dリップシンク).
