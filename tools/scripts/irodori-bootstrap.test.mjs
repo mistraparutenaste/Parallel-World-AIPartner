@@ -61,9 +61,12 @@ function runBootstrapEntryHarness(mode, { useDefaults = false } = {}) {
   }
 }
 
-function runManagedLauncherHarness(powerShellExitCode, { corepackExitCode = 0, cargoExitCode = 0 } = {}) {
+function runManagedLauncherHarness(powerShellExitCode, { pnpmExitCode = 0, cargoExitCode = 0 } = {}) {
   const temp = mkdtempSync(path.join(os.tmpdir(), "pw-managed-launcher-"));
-  writeFileSync(path.join(temp, "corepack.cmd"), `@exit /b ${corepackExitCode}\r\n`, "ascii");
+  // The launcher validates the frontend through tools/scripts/pnpm.mjs, which
+  // spawns PW_PNPM_BIN verbatim when it is set.
+  const pnpmShim = path.join(temp, "pnpm-shim.cmd");
+  writeFileSync(pnpmShim, `@exit /b ${pnpmExitCode}\r\n`, "ascii");
   writeFileSync(path.join(temp, "cargo.cmd"), `@exit /b ${cargoExitCode}\r\n`, "ascii");
   writeFileSync(
     path.join(temp, "powershell.cmd"),
@@ -76,7 +79,11 @@ function runManagedLauncherHarness(powerShellExitCode, { corepackExitCode = 0, c
       ["/d", "/c", "call", managedLauncherPath],
       {
         cwd: repositoryRoot,
-        env: { ...process.env, PATH: `${temp}${path.delimiter}${process.env.PATH ?? ""}` },
+        env: {
+          ...process.env,
+          PATH: `${temp}${path.delimiter}${process.env.PATH ?? ""}`,
+          PW_PNPM_BIN: pnpmShim,
+        },
         input: "",
         timeout: 20_000,
         windowsHide: true,
@@ -2115,7 +2122,7 @@ test(
   "managed launcher keeps the existing build failure exit code",
   { skip: process.platform !== "win32" },
   () => {
-    const result = runManagedLauncherHarness(0, { corepackExitCode: 1 });
+    const result = runManagedLauncherHarness(0, { pnpmExitCode: 1 });
     assert.equal(result.status, 1);
   },
 );

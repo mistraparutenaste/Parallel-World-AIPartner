@@ -97,12 +97,14 @@ if [[ ! -d node_modules ]]; then
   if ! confirm_download 'JavaScript dependencies' 'several hundred MB'; then
     fail 'JavaScript dependency installation was declined.'
   fi
-  corepack pnpm install --frozen-lockfile
+  # tools/scripts/pnpm.mjs resolves the pinned pnpm with or without Corepack,
+  # which Node.js 25 and newer no longer bundle.
+  node tools/scripts/pnpm.mjs install --frozen-lockfile
 fi
 
 if [[ ! -d packages/live2d-runtime/dist ]]; then
   printf '%s\n' '[Setup] Building workspace packages.'
-  corepack pnpm build
+  node tools/scripts/pnpm.mjs build
 fi
 
 printf '%s\n' '[Setup] Synchronizing available Live2D development assets.'

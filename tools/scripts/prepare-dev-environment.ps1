@@ -103,15 +103,16 @@ function Assert-NodeVersion {
 Write-Host ''
 Write-Host '===== Parallel World: environment preparation =====' -ForegroundColor Cyan
 
-# Corepack asks for confirmation before it downloads the pinned pnpm release.
-# The launcher already asked for consent, so keep the automated path silent.
+# Corepack, when this Node.js still bundles it, asks for confirmation before it
+# downloads the pinned pnpm release. The launcher already asked for consent, so
+# keep the automated path silent.
 $env:COREPACK_ENABLE_DOWNLOAD_PROMPT = '0'
 
 if (-not (Test-Command 'node.exe')) {
     if (-not (Confirm-Download -Description 'Node.js' -Size 'about 40 MB')) {
         throw 'Node.js installation was declined. The app cannot start without Node.js.'
     }
-    # The LTS package is the line this repository targets and still ships Corepack.
+    # The LTS package is the line this repository targets and verifies in CI.
     Invoke-WingetInstall -Id 'OpenJS.NodeJS.LTS'
 } elseif (-not (Test-NodeVersion)) {
     Write-Host "[Setup] Node.js $(Get-NodeVersion) is too old for this project." -ForegroundColor Yellow
@@ -155,29 +156,20 @@ if (-not (Test-WebView2Runtime)) {
     Invoke-WingetInstall -Id 'Microsoft.EdgeWebView2Runtime'
 }
 
-if (-not (Test-Command 'corepack.cmd')) {
-    # Newer Node.js builds may ship without Corepack; install it from npm instead of failing.
-    Write-Host '[Setup] Corepack was not bundled with Node.js. Installing it from npm.' -ForegroundColor Cyan
-    & npm.cmd install --global corepack
-    if ($LASTEXITCODE -ne 0) { throw 'Corepack installation failed. Repair the Node.js installation and run this launcher again.' }
-    Refresh-ProcessPath
-    if (-not (Test-Command 'corepack.cmd')) {
-        throw 'Corepack is still unavailable after installation. Repair the Node.js installation and run this launcher again.'
-    }
-}
-
 if (-not (Test-Path -LiteralPath (Join-Path $repositoryRoot 'node_modules') -PathType Container)) {
     if (-not (Confirm-Download -Description 'JavaScript dependencies' -Size 'several hundred MB')) {
         throw 'JavaScript dependency installation was declined. The app cannot start without these packages.'
     }
-    & corepack.cmd pnpm install --frozen-lockfile
+    # tools/scripts/pnpm.mjs resolves the pinned pnpm with or without Corepack,
+    # which Node.js 25 and newer no longer bundle.
+    & node.exe tools/scripts/pnpm.mjs install --frozen-lockfile
     if ($LASTEXITCODE -ne 0) { throw 'JavaScript dependency installation failed.' }
 }
 
 $live2dDist = Join-Path $repositoryRoot 'packages\live2d-runtime\dist'
 if (-not (Test-Path -LiteralPath $live2dDist -PathType Container)) {
     Write-Host '[Setup] Building workspace packages.' -ForegroundColor Cyan
-    & corepack.cmd pnpm build
+    & node.exe tools/scripts/pnpm.mjs build
     if ($LASTEXITCODE -ne 0) { throw 'Workspace build failed.' }
 }
 

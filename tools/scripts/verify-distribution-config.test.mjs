@@ -452,7 +452,7 @@ test("local bundle scripts run distribution verification before Tauri", async ()
   for (const scriptName of ["bundle:windows:local", "bundle:macos:local"]) {
     assert.match(
       packageJson.scripts[scriptName],
-      /^corepack pnpm distribution:verify && corepack pnpm .* tauri build /,
+      /^node tools\/scripts\/pnpm\.mjs distribution:verify && node tools\/scripts\/pnpm\.mjs .* tauri build /,
       scriptName,
     );
   }

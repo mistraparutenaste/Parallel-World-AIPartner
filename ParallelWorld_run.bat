@@ -28,7 +28,7 @@ for /f "usebackq delims=" %%P in (`powershell -NoProfile -ExecutionPolicy Bypass
 
 echo.
 echo ===== [2/4] Validate the frontend =====
-call corepack pnpm typecheck
+call node tools\scripts\pnpm.mjs typecheck
 if errorlevel 1 goto :build_error
 
 echo.

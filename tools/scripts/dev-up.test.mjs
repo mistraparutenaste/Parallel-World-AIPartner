@@ -135,10 +135,12 @@ async function startHttpListenerProcess(temp, { healthy = false, voiceId = "fixt
   return { process: child, port, requestLog };
 }
 
-async function createCorepackHarness(exitCode = 0) {
+async function createPnpmHarness(exitCode = 0) {
   const temp = await mkdtemp(path.join(os.tmpdir(), "pw-dev-up-"));
   const marker = path.join(temp, "app-called.txt");
-  const shim = path.join(temp, "corepack.cmd");
+  // dev-up.ps1 starts the app through tools/scripts/pnpm.mjs; PW_PNPM_BIN makes
+  // that launcher spawn this shim instead of resolving the real pnpm.
+  const shim = path.join(temp, "pnpm-shim.cmd");
   await writeFile(
     shim,
     `@echo off\r\necho called>"%PW_TEST_APP_MARKER%"\r\nexit /b %PW_TEST_APP_EXIT%\r\n`,
@@ -150,6 +152,7 @@ async function createCorepackHarness(exitCode = 0) {
     env: {
       ...process.env,
       PATH: `${temp}${path.delimiter}${process.env.PATH ?? ""}`,
+      PW_PNPM_BIN: shim,
       PW_TEST_APP_MARKER: marker,
       PW_TEST_APP_EXIT: String(exitCode),
       APPDATA: path.join(temp, "appdata"),
@@ -266,7 +269,7 @@ test(
   "Aivis start failure degrades to app startup without touching external LLM",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const closedPortProbe = await listenOnLoopback();
     const ttsPort = closedPortProbe.address().port;
     await closeServer(closedPortProbe);
@@ -300,7 +303,7 @@ test(
   "Irodori start failure hides managed paths and exception details",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const secretPathSegment = "Bearer-TOP-SECRET-Authorization-SensitiveUser-DoNotLeak";
     const irodoriDir = path.join(harness.temp, secretPathSegment, "irodori-server");
     const invalidUv = path.join(harness.temp, "uv.exe");
@@ -331,7 +334,7 @@ test(
   "warm-up success does not expose a server-provided voice identifier",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const secretVoice = "Bearer-TOP-SECRET-Authorization-C:\\Users\\SensitiveUser-DoNotLeak\\voice.wav";
     const irodori = await startHttpListenerProcess(harness.temp, { healthy: true, voiceId: secretVoice });
     try {
@@ -355,7 +358,7 @@ test(
   "returns the native tauri exit code after owned TTS cleanup",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(7);
+    const harness = await createPnpmHarness(7);
     try {
       const result = runDevUp({
         ...harness.env,
@@ -375,7 +378,7 @@ test(
   "does not claim or stop a TTS listener that was already open",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const externalTts = await listenOnLoopback();
     try {
       const result = runDevUp({
@@ -401,7 +404,7 @@ test(
   "does not start or claim Irodori when its port has an unknown listener",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const externalTts = await startHttpListenerProcess(harness.temp);
     try {
       const result = runDevUp({
@@ -427,7 +430,7 @@ test(
   "does not repeat voices or speech warm-up after managed bootstrap validation",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
     try {
       const result = runDevUp({
@@ -460,7 +463,7 @@ test(
       { status: "ready_without_voice", message: /voice.*0|voice.*配置/i },
       { status: "warmup_failed", message: /WAV.*warm-up.*失敗|縮退/i },
     ]) {
-      const harness = await createCorepackHarness(0);
+      const harness = await createPnpmHarness(0);
       const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
       try {
         const secretPathSegment = "SensitiveUser-DoNotLeak";
@@ -496,7 +499,7 @@ test(
   "uses a redacted LOCALAPPDATA-relative voice path without exposing the username",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
     try {
       const secretUsername = "SensitiveUser-DoNotLeak";
@@ -529,7 +532,7 @@ test(
   "does not trust a stale skip flag without a recognized bootstrap status",
   { skip: process.platform !== "win32" },
   async () => {
-    const harness = await createCorepackHarness(0);
+    const harness = await createPnpmHarness(0);
     const irodori = await startHttpListenerProcess(harness.temp, { healthy: true });
     try {
       const result = runDevUp({

@@ -31,7 +31,7 @@ test('Windows setup prompts before each large prerequisite or model download', (
     );
   }
   assert.match(windowsSetup, /winget\.exe/);
-  assert.match(windowsSetup, /pnpm install --frozen-lockfile/);
+  assert.match(windowsSetup, /pnpm\.mjs install --frozen-lockfile/);
   assert.match(windowsSetup, /download-stt-models\.mjs/);
 });
 
@@ -42,7 +42,7 @@ test('Windows setup recognizes the installed WebView2 Runtime product', () => {
 
 test('Windows launcher prepares the environment before validation and TTS', () => {
   const prepare = windowsLauncher.indexOf('prepare-dev-environment.ps1');
-  const typecheck = windowsLauncher.indexOf('corepack pnpm typecheck');
+  const typecheck = windowsLauncher.indexOf('node tools\\scripts\\pnpm.mjs typecheck');
   const cargo = windowsLauncher.indexOf('cargo check -p parallel-world-desktop');
   const tts = windowsLauncher.indexOf('irodori-bootstrap.ps1');
   assert.ok(prepare >= 0);

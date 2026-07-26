@@ -4,8 +4,8 @@
 
 | ツール | バージョン | 備考 |
 | --- | --- | --- |
-| Node.js | 24.15.0以上 | corepack同梱版を想定 |
-| pnpm | 11.11.0 | `package.json` の `packageManager` で固定。`corepack pnpm ...` で実行 |
+| Node.js | 24.15.0以上 | 検証済みは24.15.0（`.node-version`）。25以降はCorepack非同梱 |
+| pnpm | 11.11.0 | `package.json` の `packageManager` で固定。`node tools/scripts/pnpm.mjs ...` で実行 |
 | Rust | 1.96.0 | `rust-toolchain.toml` で固定（rustfmt / clippy含む） |
 
 ### Windows
@@ -20,15 +20,20 @@
 ## セットアップ
 
 ```powershell
-corepack enable pnpm
-corepack pnpm install
-corepack pnpm build
+node tools/scripts/pnpm.mjs install
+node tools/scripts/pnpm.mjs build
 cargo test --workspace
 ```
 
-`corepack pnpm build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
+`node tools/scripts/pnpm.mjs build` は `@parallel-world/live2d-runtime` の dist を生成する。desktopのtypecheck/testはdistを参照するため、初回とvendor更新時に必要。
 
-`corepack enable pnpm` はNodeと同じinstall先へshimを作る。管理された実行環境でそこへ書けない場合は、PATH上でfallbackより前にある書込み可能directoryを `corepack enable --install-directory <directory> pnpm` へ指定する。root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`も`corepack pnpm`を呼ぶ。`pnpm --version`、`corepack pnpm --version`、`corepack pnpm -r exec pnpm --version`がすべて`11.11.0`であることを確認する。
+pnpmは必ず `node tools/scripts/pnpm.mjs ...` から呼ぶ。このlauncherは `package.json` の `packageManager` を読み、次の順で最初に実行できたものを使う。
+
+1. PATH上のpnpm（pinnedと同じmajorのときのみ）
+2. `corepack pnpm`（Corepackが使えるNode.js 24以前）
+3. `npm install --global pnpm@11.11.0` で導入したpnpm
+
+Node.js 25でCorepackの同梱が廃止されたため、`corepack` を前提にしたコマンドは新しいPCで動かない。root scriptとTauriの`beforeDevCommand` / `beforeBuildCommand`もこのlauncher経由に統一している。`node tools/scripts/pnpm.mjs --version` と `node tools/scripts/pnpm.mjs -r exec pnpm --version` がともに`11.11.0`であることを確認する。`PW_PNPM_BIN` を設定すると解決を飛ばしてそのbinaryを直接使う（テスト用）。
 
 ## 開発用Live2Dモデルの配置
 
@@ -91,7 +96,7 @@ cargo test -p pw-tts --test real_engine -- --ignored --nocapture
 ## 開発起動
 
 ```powershell
-corepack pnpm --filter @parallel-world/desktop tauri dev
+node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev
 ```
 
 一括起動（AivisSpeech Engineの起動試行 + LLM疎通・アセット配置の確認 + tauri dev）:
@@ -114,11 +119,11 @@ GitHub Actionsの `CI` ワークフローは同じゲートをWindows / macOSで
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-corepack pnpm typecheck
-corepack pnpm test
-corepack pnpm build
-corepack pnpm distribution:verify
-corepack pnpm --filter @parallel-world/desktop tauri build --debug --no-bundle
+node tools/scripts/pnpm.mjs typecheck
+node tools/scripts/pnpm.mjs test
+node tools/scripts/pnpm.mjs build
+node tools/scripts/pnpm.mjs distribution:verify
+node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri build --debug --no-bundle
 ```
 
 Phase 6の自動障害マトリクスと実時間2時間soakは [phase6-acceptance.md](phase6-acceptance.md) にまとめている。2時間試験は短縮runで代替できない実機ゲートとして扱う。

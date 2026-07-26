@@ -35,7 +35,7 @@ printf '\n===== [1/4] Prepare this computer =====\n'
 export PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 printf '\n===== [2/4] Validate the frontend =====\n'
-corepack pnpm typecheck || fail "Frontend typecheck failed."
+node tools/scripts/pnpm.mjs typecheck || fail "Frontend typecheck failed."
 
 printf '\n===== [3/4] Validate the Rust application =====\n'
 cargo check -p parallel-world-desktop || fail "Rust cargo check failed."
@@ -81,7 +81,7 @@ if [[ -f "$IRODORI_ROOT/.ready" ]]; then
   fi
 fi
 
-corepack pnpm --filter @parallel-world/desktop tauri dev
+node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev
 launcher_exit=$?
 
 printf '\n[Parallel World] exited with code %s.\n' "$launcher_exit"

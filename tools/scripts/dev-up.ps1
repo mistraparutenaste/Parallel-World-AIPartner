@@ -5,7 +5,7 @@
 # 1. 選択したTTSエンジンが未起動なら起動を試みる（既定: AivisSpeech）
 # 2. LLMサーバー（既定 127.0.0.1:1234、LM Studio等）の疎通を確認（起動はしない）
 # 3. 開発用アセット（Live2Dモデル / STTモデル）の配置を確認
-# 4. corepack pnpm --filter @parallel-world/desktop tauri dev を起動
+# 4. node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev を起動
 #
 # 環境変数:
 #   PW_TTS_ENGINE      TTSエンジン（aivis / irodori、既定 aivis）
@@ -263,7 +263,7 @@ try {
 
     # --- 4. アプリ起動 -------------------------------------------------------
     Write-Host "[APP] tauri dev を起動します…" -ForegroundColor Cyan
-    corepack pnpm --filter @parallel-world/desktop tauri dev
+    node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev
     $appExitCode = $LASTEXITCODE
     $appInvoked = $true
 } finally {

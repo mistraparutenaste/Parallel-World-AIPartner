@@ -20,7 +20,7 @@ Parallel Worldはデュアルライセンスです。[LICENSE](LICENSE)（PolyFo
 品質ゲートは[README](README.md)に記載のコマンドで確認します。Pull Requestを出す前に、次がすべて通ることを確認してください。
 
 ```bash
-corepack pnpm typecheck && corepack pnpm test && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace
+node tools/scripts/pnpm.mjs typecheck && node tools/scripts/pnpm.mjs test && cargo clippy --workspace --all-targets --all-features -- -D warnings && cargo test --workspace
 ```
 
 第三者のコード、モデル、フォント、キャラクターアセットを新たに追加する場合は、[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)への追記も同じPull Requestに含めてください。コピーレフト系（GPL / AGPL / LGPL）の依存はPolyForm Noncommercial Licenseと矛盾するため受け入れられません。

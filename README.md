@@ -81,12 +81,11 @@ Live2Dのサンプルモデルは利用規約により再配布できないた�
 ```powershell
 git clone https://github.com/mistraparutenaste/Parallel-World-AIPartner.git
 Set-Location Parallel-World-AIPartner
-corepack enable pnpm
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
+node tools/scripts/pnpm.mjs install --frozen-lockfile
+node tools/scripts/pnpm.mjs build
 ```
 
-`corepack pnpm build`では、アプリが参照するLive2D runtimeの`dist`も生成します。
+`node tools/scripts/pnpm.mjs build`では、アプリが参照するLive2D runtimeの`dist`も生成します。
 
 任意のモデルは次のコマンドで配置します。どちらも未配置のまま起動でき、テキスト会話と静止画キャラクターは利用できます。
 
@@ -99,7 +98,7 @@ node tools/scripts/sync-live2d-dev-assets.mjs
 
 | 起動方法 | 用途 |
 | --- | --- |
-| `corepack pnpm --filter @parallel-world/desktop tauri dev` | 通常の開発起動 |
+| `node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev` | 通常の開発起動 |
 | `powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1` | AivisSpeech、LLM、開発用アセットを確認してから起動 |
 | `ParallelWorld_run.bat` | 環境準備から検証、起動までを一括実行 |
 
@@ -147,9 +146,8 @@ xcode-select --install
 ```bash
 git clone https://github.com/mistraparutenaste/Parallel-World-AIPartner.git
 cd Parallel-World-AIPartner
-corepack enable pnpm
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
+node tools/scripts/pnpm.mjs install --frozen-lockfile
+node tools/scripts/pnpm.mjs build
 chmod +x ParallelWorld_run.command
 ```
 
@@ -273,20 +271,20 @@ Responses API専用モデルには未対応です。クラウド接続はユー�
 ### 主な開発チェック
 
 ```powershell
-corepack pnpm build
-corepack pnpm typecheck
-corepack pnpm test
+node tools/scripts/pnpm.mjs build
+node tools/scripts/pnpm.mjs typecheck
+node tools/scripts/pnpm.mjs test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-corepack pnpm distribution:verify
+node tools/scripts/pnpm.mjs distribution:verify
 ```
 
 ローカル開発用bundleは次のコマンドで生成できます。一般公開用の署名・updater付きreleaseではありません。
 
 ```powershell
-corepack pnpm bundle:windows:local
-corepack pnpm bundle:macos:local
+node tools/scripts/pnpm.mjs bundle:windows:local
+node tools/scripts/pnpm.mjs bundle:macos:local
 ```
 
 ### 関連ドキュメント

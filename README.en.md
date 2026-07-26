@@ -81,12 +81,11 @@ Install Git, Node.js 24.15.0 or newer, Rust 1.96.0, Visual Studio Build Tools (D
 ```powershell
 git clone https://github.com/mistraparutenaste/Parallel-World-AIPartner.git
 Set-Location Parallel-World-AIPartner
-corepack enable pnpm
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
+node tools/scripts/pnpm.mjs install --frozen-lockfile
+node tools/scripts/pnpm.mjs build
 ```
 
-`corepack pnpm build` also produces the Live2D runtime `dist` that the app loads.
+`node tools/scripts/pnpm.mjs build` also produces the Live2D runtime `dist` that the app loads.
 
 Optional models are placed with the commands below. The app starts without either of them; text chat and still-image characters remain available.
 
@@ -99,7 +98,7 @@ Pick a startup method for your purpose:
 
 | Command | Purpose |
 | --- | --- |
-| `corepack pnpm --filter @parallel-world/desktop tauri dev` | Ordinary development run |
+| `node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev` | Ordinary development run |
 | `powershell -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1` | Checks AivisSpeech, the LLM, and development assets, then starts |
 | `ParallelWorld_run.bat` | Environment preparation, validation, and startup in one go |
 
@@ -147,9 +146,8 @@ Then prepare the dependencies:
 ```bash
 git clone https://github.com/mistraparutenaste/Parallel-World-AIPartner.git
 cd Parallel-World-AIPartner
-corepack enable pnpm
-corepack pnpm install --frozen-lockfile
-corepack pnpm build
+node tools/scripts/pnpm.mjs install --frozen-lockfile
+node tools/scripts/pnpm.mjs build
 chmod +x ParallelWorld_run.command
 ```
 
@@ -273,20 +271,20 @@ Models that are only available through the Responses API are not supported. Clou
 ### Main development checks
 
 ```powershell
-corepack pnpm build
-corepack pnpm typecheck
-corepack pnpm test
+node tools/scripts/pnpm.mjs build
+node tools/scripts/pnpm.mjs typecheck
+node tools/scripts/pnpm.mjs test
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
-corepack pnpm distribution:verify
+node tools/scripts/pnpm.mjs distribution:verify
 ```
 
 Local development bundles can be produced with the following commands. These are not signed public releases with an updater.
 
 ```powershell
-corepack pnpm bundle:windows:local
-corepack pnpm bundle:macos:local
+node tools/scripts/pnpm.mjs bundle:windows:local
+node tools/scripts/pnpm.mjs bundle:macos:local
 ```
 
 ### Related documents

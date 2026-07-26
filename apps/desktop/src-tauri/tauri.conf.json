@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.parallelworld.desktop",
   "build": {
-    "beforeDevCommand": "corepack pnpm dev",
+    "beforeDevCommand": "node ../../tools/scripts/pnpm.mjs dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "corepack pnpm build",
+    "beforeBuildCommand": "node ../../tools/scripts/pnpm.mjs build",
     "frontendDist": "../dist"
   },
   "app": {

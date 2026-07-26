@@ -26,9 +26,9 @@ Commands run from the repository root:
 ```powershell
 cargo fmt --all -- --check
 cargo test --workspace --no-default-features --target-dir .codex-target/baseline
-corepack pnpm -r test
-corepack pnpm typecheck
-corepack pnpm -r build
+node tools/scripts/pnpm.mjs -r test
+node tools/scripts/pnpm.mjs typecheck
+node tools/scripts/pnpm.mjs -r build
 git diff --check
 ```
 

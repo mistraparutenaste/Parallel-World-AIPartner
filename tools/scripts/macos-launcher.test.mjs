@@ -23,10 +23,10 @@ test('macOS launcher resolves the repository and delegates first-run preparation
 });
 
 test('macOS launcher validates both stacks before starting Tauri', () => {
-  const typecheck = launcher.indexOf('corepack pnpm typecheck');
+  const typecheck = launcher.indexOf('node tools/scripts/pnpm.mjs typecheck');
   const cargoCheck = launcher.indexOf('cargo check -p parallel-world-desktop');
   const tauriDev = launcher.indexOf(
-    'corepack pnpm --filter @parallel-world/desktop tauri dev',
+    'node tools/scripts/pnpm.mjs --filter @parallel-world/desktop tauri dev',
   );
 
   assert.ok(typecheck >= 0);
