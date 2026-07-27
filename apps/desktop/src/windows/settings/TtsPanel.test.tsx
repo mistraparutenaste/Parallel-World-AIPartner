@@ -12,6 +12,11 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: invokeMock,
 }));
 
+const openMock = vi.hoisted(() => vi.fn());
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: openMock,
+}));
+
 const AIVIS_SETTINGS: TtsSettingsDto = {
   schema_version: 1,
   enabled: true,
@@ -73,6 +78,8 @@ function deferred<T>() {
 describe('TtsPanel', () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    openMock.mockReset();
+    openMock.mockResolvedValue(null);
     mockSettings();
   });
 
@@ -180,6 +187,58 @@ describe('TtsPanel', () => {
       engine: 'irodori',
       baseUrl: 'http://127.0.0.1:8088',
     });
+  });
+
+  it('fills the LoRA adapter path from the folder picker', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    openMock.mockResolvedValue('/Users/me/models/adapters/character-a');
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'フォルダを選択' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('LoRA adapter path')).toHaveValue(
+        '/Users/me/models/adapters/character-a',
+      );
+    });
+    expect(openMock).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+    });
+  });
+
+  it('keeps the LoRA adapter path when the folder picker is cancelled', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+      irodori_lora_adapter: '/Users/me/models/adapters/character-a',
+    });
+    openMock.mockResolvedValue(null);
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'フォルダを選択' }),
+    );
+
+    await waitFor(() => {
+      expect(openMock).toHaveBeenCalledWith({
+        directory: true,
+        multiple: false,
+        defaultPath: '/Users/me/models/adapters/character-a',
+      });
+    });
+    expect(screen.getByLabelText('LoRA adapter path')).toHaveValue(
+      '/Users/me/models/adapters/character-a',
+    );
   });
 
   it('ignores an old Aivis voice response after switching to irodori', async () => {

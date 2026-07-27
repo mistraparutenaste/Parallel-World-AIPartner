@@ -6,6 +6,7 @@ import type {
   UserDictWordDto,
 } from '@parallel-world/contracts';
 import { invoke } from '@tauri-apps/api/core';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useEffect, useRef, useState } from 'react';
 
 /**
@@ -72,6 +73,23 @@ export function TtsPanel() {
       setMessage(`Irodoriインストーラーを起動できません: ${String(error)}`);
     } finally {
       setInstallingIrodori(false);
+    }
+  };
+
+  const browseLoraAdapter = async () => {
+    setMessage(null);
+    try {
+      const current = settingsRef.current?.irodori_lora_adapter ?? '';
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        ...(current === '' ? {} : { defaultPath: current }),
+      });
+      if (typeof selected === 'string') {
+        update({ irodori_lora_adapter: selected });
+      }
+    } catch (error) {
+      setMessage(`フォルダを選択できません: ${String(error)}`);
     }
   };
 
@@ -319,6 +337,9 @@ export function TtsPanel() {
                     update({ irodori_lora_adapter: event.target.value })
                   }
                 />
+                <button type="button" onClick={() => void browseLoraAdapter()}>
+                  フォルダを選択
+                </button>
               </div>
               <p>
                 未指定時はbase modelを使用します。Irodoriサーバーから参照できるadapterディレクトリを指定してください。
