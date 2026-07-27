@@ -24,6 +24,11 @@ pub struct OrchestratorConfig {
     pub max_history_messages: usize,
     /// Remove emoji from spoken text (display and TTS safety).
     pub strip_emoji: bool,
+    /// Upper bound on the spoken characters of one reply; the stream
+    /// is cut at the last completed sentence past it. `0` disables the
+    /// cap. Small local models otherwise monologue past the persona's
+    /// intended length and flood the TTS queue.
+    pub max_reply_chars: usize,
 }
 
 /// Runs conversation turns synchronously; the Tauri layer provides
@@ -210,9 +215,22 @@ where
         let events = &self.events;
         let state_cell = &mut self.state;
         let strip = self.config.strip_emoji;
+        let max_reply_chars = self.config.max_reply_chars;
+        let mut spoken_chars = 0usize;
+        // Byte end of the last sentence handed to the sink, so a
+        // truncated reply records exactly what was spoken.
+        let mut spoken_end = 0usize;
+        let mut truncated = false;
+        // Stops the stream on either a user cancel or the length cap,
+        // keeping the cancel flag itself free of truncation meaning.
+        let stop = AtomicBool::new(false);
         let result = {
             let mut on_delta = |delta: &str| {
                 if cancel.load(Ordering::Relaxed) {
+                    stop.store(true, Ordering::Relaxed);
+                    return;
+                }
+                if truncated {
                     return;
                 }
                 for event in parser.push(delta) {
@@ -232,13 +250,22 @@ where
                                     *state_cell = ConversationState::Speaking;
                                     events.on_state(ConversationState::Speaking);
                                 }
+                                spoken_chars += sentence.chars().count();
+                                if let Some(offset) = speech_text[spoken_end..].find(&sentence) {
+                                    spoken_end += offset + sentence.len();
+                                }
                                 events.on_sentence(turn, &sentence);
+                            }
+                            if max_reply_chars > 0 && spoken_chars >= max_reply_chars {
+                                truncated = true;
+                                stop.store(true, Ordering::Relaxed);
+                                break;
                             }
                         }
                     }
                 }
             };
-            self.llm.stream_chat(&messages, &cancel, &mut on_delta)
+            self.llm.stream_chat(&messages, &stop, &mut on_delta)
         };
 
         if self.cancel.load(Ordering::Relaxed) {
@@ -248,18 +275,25 @@ where
         match result {
             Ok(()) => {
                 let mut trailing = Vec::new();
-                for event in parser.finish() {
-                    if let ReplyEvent::Speech(chunk) = event {
-                        let chunk = if self.config.strip_emoji {
-                            strip_emoji(&chunk)
-                        } else {
-                            chunk
-                        };
-                        speech_text.push_str(&chunk);
-                        trailing.extend(splitter.push(&chunk));
+                if truncated {
+                    // The reply is cut at the last completed sentence,
+                    // so the buffered fragment is dropped rather than
+                    // spoken or recorded.
+                    speech_text.truncate(spoken_end);
+                } else {
+                    for event in parser.finish() {
+                        if let ReplyEvent::Speech(chunk) = event {
+                            let chunk = if self.config.strip_emoji {
+                                strip_emoji(&chunk)
+                            } else {
+                                chunk
+                            };
+                            speech_text.push_str(&chunk);
+                            trailing.extend(splitter.push(&chunk));
+                        }
                     }
+                    trailing.extend(splitter.finish());
                 }
-                trailing.extend(splitter.finish());
                 for sentence in trailing {
                     if self.cancel.load(Ordering::Relaxed) {
                         break;
@@ -341,7 +375,7 @@ mod tests {
     use crate::PortError;
     use crate::memory::MemoryContext;
 
-    const EXPECTED_CONVERSATIONAL_STYLE_POLICY: &str = "自然な話し言葉で応答する。応答の長さ、口調、フィラーや相づちの量、話題の広げ方はキャラクター設定に従う。説明の羅列、箇条書き、メタ発言、定型的な書き出し、サービスメニューのような言い回しを避ける。習慣的な締めの質問や「今日は何をしますか」のような定型質問を繰り返さない。不明な事実は推測と明示し、約束・実行・感情を偽らない。";
+    const EXPECTED_CONVERSATIONAL_STYLE_POLICY: &str = "自然な話し言葉で応答する。応答は音声で読み上げるため、1回につき最大3文・全角150文字以内に収め、話題を1つに絞る。その上限の範囲内で、応答の長さ、口調、フィラーや相づちの量、話題の広げ方はキャラクター設定に従う。説明の羅列、箇条書き、メタ発言、定型的な書き出し、サービスメニューのような言い回しを避ける。習慣的な締めの質問や「今日は何をしますか」のような定型質問を繰り返さない。不明な事実は推測と明示し、約束・実行・感情を偽らない。";
 
     /// Emits scripted chunks, honouring the cancel flag.
     struct ScriptedLlm {
@@ -424,6 +458,7 @@ mod tests {
             },
             max_history_messages: 4,
             strip_emoji: true,
+            max_reply_chars: 0,
         }
     }
 
@@ -630,6 +665,106 @@ mod tests {
         let states = recording.states.lock().unwrap();
         assert!(states.contains(&ConversationState::Cancelled));
         assert_eq!(*states.last().unwrap(), ConversationState::Idle);
+    }
+
+    #[test]
+    fn a_rambling_reply_is_cut_at_the_last_completed_sentence() {
+        let recording = Arc::new(Recording::default());
+        let llm = ScriptedLlm {
+            chunks: vec![
+                "一文目です。",
+                "二文目です。",
+                "三文目です。",
+                "四文目です。",
+            ],
+            received_prompts: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        };
+        let config = OrchestratorConfig {
+            max_reply_chars: 12,
+            ..config()
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config,
+            llm,
+            Events(Arc::clone(&recording)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let turn = orchestrator.submit_user_text("長い話をして");
+
+        let sentences: Vec<_> = recording
+            .sentences
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(_, sentence)| sentence.clone())
+            .collect();
+        assert_eq!(sentences, ["一文目です。", "二文目です。"]);
+        // A truncated reply still completes the turn normally.
+        assert_eq!(
+            *recording.completions.lock().unwrap(),
+            ["一文目です。二文目です。"]
+        );
+        assert!(recording.cancellations.lock().unwrap().is_empty());
+        assert_eq!(orchestrator.state(), ConversationState::Idle);
+        let _ = turn;
+    }
+
+    #[test]
+    fn the_truncated_reply_is_what_later_prompts_carry() {
+        let recording = Arc::new(Recording::default());
+        let prompts = Arc::new(Mutex::new(Vec::new()));
+        let llm = ScriptedLlm {
+            chunks: vec![
+                "みじかい返事です。",
+                "余分な話が続きます。",
+                "まだ続きます。",
+            ],
+            received_prompts: Arc::clone(&prompts),
+            fail: false,
+        };
+        let config = OrchestratorConfig {
+            max_reply_chars: 5,
+            ..config()
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config,
+            llm,
+            Events(Arc::clone(&recording)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("やあ");
+        orchestrator.submit_user_text("もう一度");
+
+        let prompts = prompts.lock().unwrap();
+        let assistant: Vec<_> = prompts[1]
+            .iter()
+            .filter(|message| message.role == ChatRole::Assistant)
+            .map(|message| message.content.clone())
+            .collect();
+        assert_eq!(assistant, ["みじかい返事です。"]);
+    }
+
+    #[test]
+    fn no_cap_keeps_the_whole_reply() {
+        let recording = Arc::new(Recording::default());
+        let llm = ScriptedLlm {
+            chunks: vec!["一文目です。", "二文目です。", "三文目です。"],
+            received_prompts: Arc::new(Mutex::new(Vec::new())),
+            fail: false,
+        };
+        let mut orchestrator = ConversationOrchestrator::new(
+            config(),
+            llm,
+            Events(Arc::clone(&recording)),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        orchestrator.submit_user_text("話して");
+
+        assert_eq!(recording.sentences.lock().unwrap().len(), 3);
     }
 
     #[test]

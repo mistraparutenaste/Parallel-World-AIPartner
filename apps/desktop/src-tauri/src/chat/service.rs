@@ -60,6 +60,10 @@ const CHARACTER_WEBVIEW: &str = "character";
 
 /// Kept messages of context (user + assistant combined).
 const MAX_HISTORY_MESSAGES: usize = 20;
+/// Spoken characters after which a reply is cut at the last completed
+/// sentence. Small local models ignore the length instruction and
+/// monologue; the cap bounds one turn of speech synthesis.
+const MAX_REPLY_CHARS: usize = 200;
 const DEFAULT_CONVERSATION_ID: &str = "default";
 const SUBMIT_QUEUE_CAPACITY: usize = 8;
 const CONVERSATION_QUEUE_CAPACITY: usize = 8;
@@ -1885,6 +1889,7 @@ impl ChatService {
             },
             max_history_messages: MAX_HISTORY_MESSAGES,
             strip_emoji: settings.strip_emoji,
+            max_reply_chars: MAX_REPLY_CHARS,
         };
         let cancel = Arc::clone(&self.cancel);
         let (tx, context_rx) = sync_channel::<Command>(SUBMIT_QUEUE_CAPACITY);
@@ -2064,6 +2069,10 @@ fn character_instruction(base: &str, capabilities: &CharacterCapabilities) -> St
             "利用できる表情(emotion): {}",
             capabilities.expressions.join(", ")
         ));
+        lines.push(
+            "emotionとmotionには上記の名前をそのまま英字で書き、和訳や別名を使わないでください。"
+                .to_owned(),
+        );
     }
     if !capabilities.motions.is_empty() {
         lines.push(format!(
@@ -2082,7 +2091,65 @@ fn character_instruction(base: &str, capabilities: &CharacterCapabilities) -> St
             lines.push("待機用のIdleは発話モーションとして指定しないでください。".to_owned());
         }
     }
+    if !capabilities.expressions.is_empty() || !capabilities.motions.is_empty() {
+        lines.push(
+            "制御JSONは応答の1行目に {\"emotion\":…,\"intensity\":…,\"motion\":…} の1行だけで書き、\
+箇条書き・コードブロック・記号で飾らないでください。本文中には書かないでください。"
+                .to_owned(),
+        );
+    }
     lines.join("\n")
+}
+
+/// Japanese labels a small model returns instead of the character's
+/// expression names, mapped to the English names characters use.
+const EMOTION_ALIASES: [(&str, &str); 24] = [
+    ("喜び", "happy"),
+    ("嬉しい", "happy"),
+    ("うれしい", "happy"),
+    ("笑顔", "happy"),
+    ("楽しい", "happy"),
+    ("幸せ", "happy"),
+    ("ハッピー", "happy"),
+    ("悲しみ", "sad"),
+    ("悲しい", "sad"),
+    ("かなしい", "sad"),
+    ("落ち込み", "sad"),
+    ("怒り", "angry"),
+    ("不機嫌", "angry"),
+    ("驚き", "surprised"),
+    ("驚いた", "surprised"),
+    ("びっくり", "surprised"),
+    ("照れ", "shy"),
+    ("恥ずかしい", "shy"),
+    ("普通", "neutral"),
+    ("通常", "neutral"),
+    ("無表情", "neutral"),
+    ("平常", "neutral"),
+    ("落ち着き", "calm"),
+    ("穏やか", "calm"),
+];
+
+/// Resolves a requested control name against the character's own
+/// names, tolerating case differences and the Japanese labels small
+/// models emit. Returns `None` when the character has no such control.
+fn resolve_control_name<'a>(
+    known: &'a [String],
+    requested: &str,
+    aliases: &[(&str, &str)],
+) -> Option<&'a str> {
+    let matches = |name: &str| {
+        known
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(name))
+            .map(String::as_str)
+    };
+    matches(requested).or_else(|| {
+        aliases
+            .iter()
+            .find(|(alias, _)| *alias == requested)
+            .and_then(|(_, canonical)| matches(canonical))
+    })
 }
 
 fn dispatch_character_control(
@@ -2093,12 +2160,10 @@ fn dispatch_character_control(
     mut emit_motion: impl FnMut(&str),
 ) {
     if let Some(emotion) = &control.emotion {
-        if capabilities
-            .expressions
-            .iter()
-            .any(|known| known == emotion)
+        if let Some(resolved) =
+            resolve_control_name(&capabilities.expressions, emotion, &EMOTION_ALIASES)
         {
-            emit_expression(emotion);
+            emit_expression(resolved);
         } else {
             tracing::warn!(
                 renderer = %renderer,
@@ -2109,8 +2174,8 @@ fn dispatch_character_control(
         }
     }
     if let Some(motion) = &control.motion {
-        if capabilities.motions.iter().any(|known| known == motion) {
-            emit_motion(motion);
+        if let Some(resolved) = resolve_control_name(&capabilities.motions, motion, &[]) {
+            emit_motion(resolved);
         } else {
             tracing::warn!(
                 renderer = %renderer,
@@ -2401,6 +2466,71 @@ mod tests {
         assert!(instruction.contains("利用できるモーション(motion): Idle, Tap"));
         assert!(
             instruction.contains("motionは発話内容に自然に合う場合だけ指定し、変更不要ならnull")
+        );
+    }
+
+    #[test]
+    fn character_instruction_pins_the_control_json_shape() {
+        let instruction = character_instruction("base", &live2d_capabilities());
+
+        assert!(instruction.contains("和訳や別名を使わない"));
+        assert!(instruction.contains("応答の1行目"));
+        assert!(instruction.contains("本文中には書かないでください"));
+    }
+
+    #[test]
+    fn japanese_emotion_labels_resolve_to_the_character_expression() {
+        let capabilities = static_capabilities();
+
+        assert_eq!(
+            resolve_control_name(&capabilities.expressions, "喜び", &EMOTION_ALIASES),
+            Some("happy")
+        );
+        assert_eq!(
+            resolve_control_name(&capabilities.expressions, "Happy", &EMOTION_ALIASES),
+            Some("happy")
+        );
+        // Aliases never invent an expression the character lacks.
+        assert_eq!(
+            resolve_control_name(&capabilities.expressions, "驚き", &EMOTION_ALIASES),
+            None
+        );
+        assert_eq!(
+            resolve_control_name(&capabilities.expressions, "手を合わせる", &EMOTION_ALIASES),
+            None
+        );
+    }
+
+    #[test]
+    fn a_japanese_emotion_label_drives_the_expression_event() {
+        let state = Arc::new(CharacterState::default());
+        state.cache_manifest(static_character()).unwrap();
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let events = recording_events(
+            &state,
+            Arc::clone(&attempts),
+            false,
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let turn = TurnTracker::new().begin_turn();
+
+        events.on_control(
+            turn,
+            &ReplyControl {
+                emotion: Some("喜び".into()),
+                intensity: None,
+                motion: None,
+            },
+        );
+
+        assert_eq!(
+            *attempts.lock().unwrap(),
+            [RecordedCharacterEvent {
+                target: "character".into(),
+                event: EXPRESSION_EVENT.into(),
+                name: "happy".into(),
+                turn_id: None,
+            }]
         );
     }
 
@@ -2886,6 +3016,7 @@ mod tests {
                 },
                 max_history_messages: 4,
                 strip_emoji: true,
+                max_reply_chars: 0,
             },
             ScriptedLlm("{\"emotion\":\"happy\"}\n続きます。"),
             events,

@@ -55,7 +55,10 @@ pub fn default_llm_settings() -> LlmSettingsDto {
         system_prompt: "あなたはデスクトップに常駐するAIパートナーです。\
 応答の1行目には {\"emotion\":\"表情名\",\"intensity\":0.0から1.0,\"motion\":\"モーション名\"} \
 という制御JSONだけを出力し、空行を1行挟んでから本文を書いてください。\
-本文は日本語の話し言葉で、短く自然な文にしてください。\n絵文字・顔文字・記号の羅列は使わないでください。"
+制御JSONは1行目以外に書かず、箇条書き・コードブロック・記号で飾らないでください。\
+本文は日本語の話し言葉で、最大3文・全角150文字以内に収めてください。\
+話題は1つに絞り、思いついたことを次々に並べないでください。\n\
+絵文字・顔文字・記号の羅列は使わないでください。"
             .to_owned(),
         character_prompt: "あなたの名前はエプシロン。明るく丁寧な口調で話す、\
 好奇心旺盛なパートナーです。"
@@ -63,7 +66,9 @@ pub fn default_llm_settings() -> LlmSettingsDto {
         strip_emoji: true,
         temperature: None,
         top_p: None,
-        max_tokens: None,
+        // A spoken turn never needs more; small models otherwise keep
+        // generating until the context window ends.
+        max_tokens: Some(256),
         repeat_penalty: None,
     }
 }

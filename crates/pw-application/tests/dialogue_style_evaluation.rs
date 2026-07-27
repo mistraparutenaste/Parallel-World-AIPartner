@@ -288,6 +288,7 @@ fn fixture_cases_keep_personas_history_and_current_turn_boundaries() {
             },
             max_history_messages: 8,
             strip_emoji: false,
+            max_reply_chars: 0,
         };
         let mut orchestrator = ConversationOrchestrator::new_with_history(
             config,

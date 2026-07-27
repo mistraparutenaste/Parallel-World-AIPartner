@@ -55,6 +55,7 @@ fn config() -> OrchestratorConfig {
         },
         max_history_messages: 8,
         strip_emoji: false,
+        max_reply_chars: 0,
     }
 }
 

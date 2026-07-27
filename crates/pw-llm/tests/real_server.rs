@@ -86,6 +86,7 @@ fn full_turn_against_the_real_server() {
         },
         max_history_messages: 20,
         strip_emoji: true,
+        max_reply_chars: 0,
     };
 
     let log = Arc::new(Log::default());
@@ -144,6 +145,7 @@ fn build_dialogue_measurement_orchestrator(
             },
             max_history_messages: 20,
             strip_emoji: true,
+            max_reply_chars: 0,
         },
         llm,
         events,
