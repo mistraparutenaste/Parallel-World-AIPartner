@@ -285,6 +285,12 @@
           "markdownDescription": "Enables the get_behavior_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_capture_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-capture-enabled",
+          "markdownDescription": "Enables the get_capture_enabled command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_character_manifest command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-character-manifest",
@@ -751,6 +757,12 @@
           "type": "string",
           "const": "deny-get-behavior-settings",
           "markdownDescription": "Denies the get_behavior_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_capture_enabled command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-capture-enabled",
+          "markdownDescription": "Denies the get_capture_enabled command without any pre-configured scope."
         },
         {
           "description": "Denies the get_character_manifest command without any pre-configured scope.",
