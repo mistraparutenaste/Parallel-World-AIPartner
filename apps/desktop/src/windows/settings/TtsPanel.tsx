@@ -24,6 +24,23 @@ const ENGINE_LABELS: Record<TtsEngineKind, string> = {
   irodori: 'irodori-TTS',
 };
 
+/**
+ * Irodori expects the adapter directory, so a picked adapter file such as
+ * `adapter_model.safetensors` resolves to the directory that contains it.
+ * Both separators are handled because the settings value may come from a
+ * Windows host.
+ */
+function parentDirectory(filePath: string): string {
+  const index = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'));
+  if (index < 0) {
+    return filePath;
+  }
+  if (index === 0 || filePath[index - 1] === ':') {
+    return filePath.slice(0, index + 1);
+  }
+  return filePath.slice(0, index);
+}
+
 export function TtsPanel() {
   const [settings, setSettings] = useState<TtsSettingsDto | null>(null);
   const settingsRef = useRef<TtsSettingsDto | null>(null);
@@ -76,20 +93,37 @@ export function TtsPanel() {
     }
   };
 
-  const browseLoraAdapter = async () => {
+  const browseLoraAdapter = async (mode: 'directory' | 'file') => {
     setMessage(null);
+    const current = settingsRef.current?.irodori_lora_adapter ?? '';
+    const defaultPath = current === '' ? {} : { defaultPath: current };
     try {
-      const current = settingsRef.current?.irodori_lora_adapter ?? '';
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        ...(current === '' ? {} : { defaultPath: current }),
-      });
-      if (typeof selected === 'string') {
-        update({ irodori_lora_adapter: selected });
+      const selected = await open(
+        mode === 'directory'
+          ? { directory: true, multiple: false, ...defaultPath }
+          : {
+              multiple: false,
+              filters: [
+                {
+                  name: 'LoRA adapter',
+                  extensions: ['safetensors', 'bin', 'pt', 'json'],
+                },
+                { name: 'すべてのファイル', extensions: ['*'] },
+              ],
+              ...defaultPath,
+            },
+      );
+      if (typeof selected !== 'string') {
+        return;
       }
+      update({
+        irodori_lora_adapter:
+          mode === 'directory' ? selected : parentDirectory(selected),
+      });
     } catch (error) {
-      setMessage(`フォルダを選択できません: ${String(error)}`);
+      setMessage(
+        `${mode === 'directory' ? 'フォルダ' : 'ファイル'}を選択できません: ${String(error)}`,
+      );
     }
   };
 
@@ -337,12 +371,24 @@ export function TtsPanel() {
                     update({ irodori_lora_adapter: event.target.value })
                   }
                 />
-                <button type="button" onClick={() => void browseLoraAdapter()}>
+                <button
+                  type="button"
+                  onClick={() => void browseLoraAdapter('directory')}
+                >
                   フォルダを選択
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void browseLoraAdapter('file')}
+                >
+                  ファイルから選択
                 </button>
               </div>
               <p>
                 未指定時はbase modelを使用します。Irodoriサーバーから参照できるadapterディレクトリを指定してください。
+              </p>
+              <p>
+                「ファイルから選択」では adapter_model.safetensors などを選ぶと、そのファイルがあるフォルダを設定します。
               </p>
               <p>
             Dynamic LoRA使用時はサーバーでIRODORI_COMPILE_MODEL=falseにしてください。

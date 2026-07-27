@@ -3,7 +3,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
+use std::sync::mpsc::{RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -11,10 +11,10 @@ use crate::diagnostics::QueueMetrics;
 use pw_application::recovery::{
     FeatureHealthSupervisor, HealthTransition, SystemClock, TimeJitter,
 };
-use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue};
+use pw_application::speech_synthesis::{SpeechAudioSink, SpeechSynthesisQueue, SynthesisBatching};
 use pw_contracts::{
-    RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION, SpeechAudioEventDto,
-    SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
+    ChatMessageEventDto, ChatRoleDto, RUNTIME_HEALTH_EVENT, RuntimeHealthEventDto, SCHEMA_VERSION,
+    SpeechAudioEventDto, SpeechStopEventDto, TtsEngineKind, TtsSettingsDto, TtsStateEventDto,
 };
 use pw_domain::reply::TurnId;
 use pw_domain::runtime_health::{FailureCode, RuntimeFailure, RuntimeFeature, redact_diagnostic};
@@ -38,13 +38,43 @@ const TTS_QUEUE_CAPACITY: usize = 8;
 // especially during model warm-up. Keep synthesis finite without mistaking a
 // slow but healthy inference for an adapter failure.
 const ADAPTER_TIMEOUT: Duration = Duration::from_secs(30);
+// Irodori synthesizes a whole reply per request (see IRODORI_BATCH_CHARS), so
+// one inference covers up to that many characters instead of one sentence.
+const IRODORI_ADAPTER_TIMEOUT: Duration = Duration::from_mins(2);
+// Upper bound for one Irodori request. Chat replies are capped well below this
+// (MAX_REPLY_CHARS) and proactive lines at 500, so in practice a whole reply
+// becomes a single request and the voice never changes mid-turn.
+const IRODORI_BATCH_CHARS: usize = 500;
 // Queue admission has a separate, shorter bound so one stalled adapter cannot
 // hold the conversation producer for the full synthesis timeout.
 const BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(5);
 const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+// How long the worker waits for another sentence before treating a completed
+// reply as ready to synthesize. The reply is complete only once the queue has
+// drained, so this bounds the extra delay, not the whole wait.
+const FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
-enum Command {
-    Sentence { turn: TurnId, text: String },
+struct Command {
+    turn: TurnId,
+    text: String,
+}
+
+/// Grouping and per-request timeout for one engine.
+///
+/// Aivis is deterministic, so per-sentence synthesis keeps latency low
+/// with no audible seam. Irodori is flow-matching based and samples a
+/// fresh timbre per request, so its sentences are batched into one
+/// request per turn.
+fn engine_batching(engine: TtsEngineKind) -> (SynthesisBatching, Duration) {
+    match engine {
+        TtsEngineKind::Aivis => (SynthesisBatching::PerSentence, ADAPTER_TIMEOUT),
+        TtsEngineKind::Irodori => (
+            SynthesisBatching::WholeTurn {
+                max_chars: IRODORI_BATCH_CHARS,
+            },
+            IRODORI_ADAPTER_TIMEOUT,
+        ),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,9 +103,7 @@ fn enqueue_command_with_backpressure_observer(
     let started = Instant::now();
     let mut backpressured = false;
     loop {
-        let turn = match &command {
-            Command::Sentence { turn, .. } => *turn,
-        };
+        let turn = command.turn;
         if turn.value() <= invalid_up_to.load(Ordering::SeqCst) {
             return Ok(QueueAdmission::Cancelled);
         }
@@ -152,6 +180,9 @@ pub struct TtsService {
     settings_fingerprint: Mutex<Option<String>>,
     latest_turn: AtomicU64,
     invalid_up_to: Arc<AtomicU64>,
+    /// Turns at or below this id have finished streaming, so a batched
+    /// worker may synthesize what it buffered for them.
+    completed_turn: Arc<AtomicU64>,
     event_gate: Arc<Mutex<()>>,
     dropped_sentences: AtomicU64,
     text_only_turn: AtomicU64,
@@ -166,6 +197,7 @@ impl Default for TtsService {
             settings_fingerprint: Mutex::new(None),
             latest_turn: AtomicU64::new(0),
             invalid_up_to: Arc::new(AtomicU64::new(0)),
+            completed_turn: Arc::new(AtomicU64::new(0)),
             event_gate: Arc::new(Mutex::new(())),
             dropped_sentences: AtomicU64::new(0),
             text_only_turn: AtomicU64::new(0),
@@ -203,9 +235,10 @@ fn fingerprint(settings: &TtsSettingsDto) -> String {
 }
 
 fn engine_client(settings: &TtsSettingsDto) -> Result<EngineClient, String> {
+    let (_, timeout) = engine_batching(settings.engine);
     let config = TtsClientConfig {
         base_url: settings.base_url.clone(),
-        timeout: ADAPTER_TIMEOUT,
+        timeout,
     };
     match settings.engine {
         TtsEngineKind::Aivis => AivisSpeechClient::new(&config)
@@ -350,11 +383,16 @@ impl TtsService {
 
     /// Queues one sentence for synthesis. No-op while TTS is disabled;
     /// engine failures degrade to text-only via `tts-state`.
-    pub fn enqueue<R: Runtime>(&self, app: &AppHandle<R>, turn: TurnId, text: &str) {
+    ///
+    /// Returns whether the worker took ownership of `text`. On `true`
+    /// the sink releases it later, exactly once, through `speech-audio`
+    /// or the unspoken path; on `false` the caller still owes the user
+    /// this text and must show it now.
+    pub fn enqueue<R: Runtime>(&self, app: &AppHandle<R>, turn: TurnId, text: &str) -> bool {
         let layout = app.state::<AppDataLayout>();
         let settings = super::settings::load_tts_settings(&layout);
         if !settings.enabled {
-            return;
+            return false;
         }
         let wanted = fingerprint(&settings);
         self.refresh_configuration(&wanted);
@@ -370,16 +408,16 @@ impl TtsService {
                 false,
                 Some("tts is recovering; continuing this turn text-only".to_owned()),
             );
-            return;
+            return false;
         }
         let mut guard = self.lock();
         self.register_turn_locked_with(&guard, turn, || emit_stop(app));
         if turn.value() <= self.invalid_up_to.load(Ordering::SeqCst) {
-            return;
+            return false;
         }
         let text_only = self.text_only_turn.load(Ordering::Relaxed);
         if text_only == turn.value() {
-            return;
+            return false;
         }
         if turn.value() > text_only {
             let _ = self.text_only_turn.compare_exchange(
@@ -404,20 +442,25 @@ impl TtsService {
                 Err(message) => {
                     emit_state(app, false, Some(message));
                     emit_tts_health(app, &self.health, false);
-                    return;
+                    return false;
                 }
             }
         }
+        let mut accepted = false;
         let disconnected = guard.as_ref().is_some_and(|worker| {
             self.queue_metrics.enqueued();
             let admission = enqueue_command(
                 &worker.tx,
-                Command::Sentence {
+                Command {
                     turn,
                     text: text.to_owned(),
                 },
                 &self.invalid_up_to,
                 BACKPRESSURE_TIMEOUT,
+            );
+            accepted = matches!(
+                admission,
+                Ok(QueueAdmission::Immediate | QueueAdmission::Backpressured)
             );
             self.handle_queue_admission(app, turn, admission)
         });
@@ -427,6 +470,18 @@ impl TtsService {
             }
             self.queue_metrics.reset_depth();
         }
+        accepted
+    }
+
+    /// Signals that the reply for `turn` has finished streaming, so a
+    /// batched worker may synthesize what it buffered.
+    ///
+    /// A watermark rather than a queued command: a full queue must never
+    /// be able to drop it, because the worker holds the only copy of the
+    /// buffered text and the caller is withholding its display.
+    pub fn finish_turn(&self, turn: TurnId) {
+        self.completed_turn
+            .fetch_max(turn.value(), Ordering::SeqCst);
     }
 
     fn handle_queue_admission<R: Runtime>(
@@ -485,6 +540,7 @@ impl TtsService {
         settings: &TtsSettingsDto,
     ) -> Result<Worker, String> {
         let client = engine_client(settings)?;
+        let (batching, _) = engine_batching(settings.engine);
         let layout = app.state::<AppDataLayout>();
         let cache = WavCache::new(layout.cache.join("tts"), DEFAULT_MAX_ENTRIES);
         let synthesizer = CachedSpeechSynthesizer::new(
@@ -497,6 +553,7 @@ impl TtsService {
             },
         );
         let invalid = Arc::clone(&self.invalid_up_to);
+        let completed = Arc::clone(&self.completed_turn);
         let event_gate = Arc::clone(&self.event_gate);
         let cancel = Arc::new(AtomicBool::new(false));
         let worker_cancel = Arc::clone(&cancel);
@@ -518,33 +575,16 @@ impl TtsService {
             .name("pw-tts".into())
             .spawn(move || {
                 tracing::info!(engine = engine_name, voice_id_chars, "tts worker started");
-                let mut queue = SpeechSynthesisQueue::new(synthesizer, sink);
-                while let Ok(command) = rx.recv() {
-                    queue_metrics.dequeued();
-                    if worker_cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    match command {
-                        Command::Sentence { turn, text } => {
-                            if turn.value() <= invalid.load(Ordering::SeqCst) {
-                                continue;
-                            }
-                            let started = Instant::now();
-                            tracing::info!(
-                                turn_id = turn.value(),
-                                text_chars = text.chars().count(),
-                                "tts synthesis started"
-                            );
-                            queue.push_sentence(turn, &text);
-                            tracing::info!(
-                                turn_id = turn.value(),
-                                elapsed_ms = u64::try_from(started.elapsed().as_millis())
-                                    .unwrap_or(u64::MAX),
-                                "tts synthesis processed"
-                            );
-                        }
-                    }
-                }
+                run_worker(
+                    SpeechSynthesisQueue::with_batching(synthesizer, sink, batching),
+                    &rx,
+                    &WorkerSignals {
+                        invalid: &invalid,
+                        completed: &completed,
+                        cancel: &worker_cancel,
+                    },
+                    &queue_metrics,
+                );
                 tracing::info!(engine = engine_name, "tts worker exited");
             })
             .map_err(|error| format!("failed to spawn tts worker: {error}"))?;
@@ -558,8 +598,122 @@ impl TtsService {
     }
 }
 
+/// Watermarks the worker shares with [`TtsService`].
+struct WorkerSignals<'a> {
+    /// Turns at or below this id were stopped or superseded.
+    invalid: &'a AtomicU64,
+    /// Turns at or below this id have finished streaming.
+    completed: &'a AtomicU64,
+    cancel: &'a AtomicBool,
+}
+
+/// Drains synthesis commands until the service drops the sender.
+///
+/// Text is released exactly once on every exit path — spoken, skipped,
+/// cancelled or stranded by shutdown — because the caller withholds the
+/// chat message until this worker hands it back.
+fn run_worker<S, K>(
+    mut queue: SpeechSynthesisQueue<S, K>,
+    rx: &std::sync::mpsc::Receiver<Command>,
+    signals: &WorkerSignals<'_>,
+    queue_metrics: &QueueMetrics,
+) where
+    S: pw_application::speech_synthesis::TtsSynthesizer,
+    K: SpeechAudioSink,
+{
+    loop {
+        // Poll only while a batch waits to be flushed; otherwise block,
+        // so an idle worker never wakes up.
+        let command = match queue.pending_turn() {
+            Some(_) => match rx.recv_timeout(FLUSH_POLL_INTERVAL) {
+                Ok(command) => Some(command),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
+            },
+            None => match rx.recv() {
+                Ok(command) => Some(command),
+                Err(_) => break,
+            },
+        };
+
+        let Some(command) = command else {
+            if signals.cancel.load(Ordering::Relaxed) {
+                break;
+            }
+            // The channel is empty, so every sentence of a completed
+            // reply has already arrived: the batch is whole.
+            if let Some(turn) = queue.pending_turn()
+                && signals.completed.load(Ordering::SeqCst) >= turn.value()
+            {
+                let started = Instant::now();
+                tracing::info!(turn_id = turn.value(), "tts turn flush started");
+                queue.finish_turn(turn);
+                log_processed(turn, started);
+            }
+            continue;
+        };
+
+        queue_metrics.dequeued();
+        let turn = command.turn;
+        if signals.cancel.load(Ordering::Relaxed) {
+            queue.release_unspoken(turn, &command.text);
+            break;
+        }
+        if turn.value() <= signals.invalid.load(Ordering::SeqCst) {
+            // Buffered text of a cancelled turn must never be spoken by a
+            // later flush, but words the model already produced still
+            // belong on screen.
+            queue.discard_pending();
+            queue.release_unspoken(turn, &command.text);
+            continue;
+        }
+        let started = Instant::now();
+        tracing::info!(
+            turn_id = turn.value(),
+            text_chars = command.text.chars().count(),
+            "tts synthesis started"
+        );
+        queue.push_sentence(turn, &command.text);
+        log_processed(turn, started);
+    }
+
+    // Shutdown must not swallow text the caller is withholding until
+    // this worker releases it.
+    queue.discard_pending();
+    for command in rx.try_iter() {
+        queue_metrics.dequeued();
+        queue.release_unspoken(command.turn, &command.text);
+    }
+}
+
+fn log_processed(turn: TurnId, started: Instant) {
+    tracing::info!(
+        turn_id = turn.value(),
+        elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "tts synthesis processed"
+    );
+}
+
 fn enqueue_error_is_adapter_failure(error: &TrySendError<Command>) -> bool {
     matches!(error, TrySendError::Disconnected(_))
+}
+
+/// Releases assistant text the chat window withheld until it was spoken.
+///
+/// The chat window appends same-turn assistant messages into one bubble,
+/// so a batched turn arrives as a single release and reads identically to
+/// the sentence-by-sentence stream it replaces.
+fn emit_assistant_text<R: Runtime>(app: &AppHandle<R>, turn: TurnId, text: &str) {
+    let _ = app.emit(
+        pw_contracts::CHAT_MESSAGE_EVENT,
+        ChatMessageEventDto {
+            schema_version: SCHEMA_VERSION,
+            turn_id: turn.value(),
+            message_id: None,
+            role: ChatRoleDto::Assistant,
+            text: text.to_owned(),
+        },
+    );
 }
 
 fn emit_stop<R: Runtime>(app: &AppHandle<R>) {
@@ -618,7 +772,7 @@ struct TauriSpeechAudioSink<R: Runtime> {
 
 impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
     fn on_audio(&self, turn: TurnId, seq: u32, wav_path: &Path, text: &str) {
-        emit_audio_if_current(&self.event_gate, &self.invalid, turn, || {
+        let emitted = emit_audio_if_current(&self.event_gate, &self.invalid, turn, || {
             emit_state(&self.app, true, None);
             emit_tts_health(&self.app, &self.health, true);
             let payload = SpeechAudioEventDto {
@@ -633,7 +787,17 @@ impl<R: Runtime> SpeechAudioSink for TauriSpeechAudioSink<R> {
                 AUDIO_EVENT,
                 payload,
             );
+            emit_assistant_text(&self.app, turn, text);
         });
+        if !emitted {
+            // A stale turn gets no audio, but the chat still owes the
+            // user the text it withheld.
+            emit_assistant_text(&self.app, turn, text);
+        }
+    }
+
+    fn on_unspoken(&self, turn: TurnId, text: &str) {
+        emit_assistant_text(&self.app, turn, text);
     }
 
     fn on_stop(&self) {
@@ -736,11 +900,39 @@ mod tests {
     fn production_tts_timeout_covers_slow_local_synthesis_without_extending_backpressure() {
         assert!(ADAPTER_TIMEOUT >= Duration::from_secs(30));
         assert_eq!(BACKPRESSURE_TIMEOUT, Duration::from_secs(5));
+        assert!(
+            FLUSH_POLL_INTERVAL < BACKPRESSURE_TIMEOUT,
+            "flush polling must not add a delay comparable to the queue's own"
+        );
+    }
+
+    #[test]
+    fn irodori_batches_a_whole_turn_while_aivis_stays_per_sentence() {
+        let (aivis, aivis_timeout) = engine_batching(TtsEngineKind::Aivis);
+        let (irodori, irodori_timeout) = engine_batching(TtsEngineKind::Irodori);
+
+        assert_eq!(aivis, SynthesisBatching::PerSentence);
+        assert_eq!(aivis_timeout, ADAPTER_TIMEOUT);
+        assert_eq!(
+            irodori,
+            SynthesisBatching::WholeTurn {
+                max_chars: IRODORI_BATCH_CHARS
+            }
+        );
+        // One Irodori request now covers a whole reply, so it needs more
+        // headroom than a single sentence did.
+        assert!(irodori_timeout > aivis_timeout);
+    }
+
+    #[test]
+    fn the_irodori_batch_cap_never_splits_a_reply_the_app_can_produce() {
+        // chat replies: MAX_REPLY_CHARS, proactive lines: 500 (chat/service.rs).
+        const { assert!(IRODORI_BATCH_CHARS >= 500) }
     }
 
     #[test]
     fn queue_backpressure_is_not_classified_as_an_adapter_failure() {
-        let full = TrySendError::Full(Command::Sentence {
+        let full = TrySendError::Full(Command {
             turn: pw_domain::reply::TurnTracker::new().begin_turn(),
             text: "busy".into(),
         });
@@ -753,7 +945,7 @@ mod tests {
         let turn = pw_domain::reply::TurnTracker::new().begin_turn();
         let invalid_up_to = AtomicU64::new(0);
         for index in 0..TTS_QUEUE_CAPACITY {
-            tx.try_send(Command::Sentence {
+            tx.try_send(Command {
                 turn,
                 text: format!("queued-{index}"),
             })
@@ -762,16 +954,14 @@ mod tests {
         let receiver = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(100));
             (0..=TTS_QUEUE_CAPACITY)
-                .map(|_| match rx.recv().unwrap() {
-                    Command::Sentence { text, .. } => text,
-                })
+                .map(|_| rx.recv().unwrap().text)
                 .collect::<Vec<_>>()
         });
 
         let started = std::time::Instant::now();
         let admission = enqueue_command(
             &tx,
-            Command::Sentence {
+            Command {
                 turn,
                 text: "backpressured".into(),
             },
@@ -878,7 +1068,7 @@ mod tests {
             let (tx, _rx) = sync_channel(1);
             let admission = enqueue_command(
                 &tx,
-                Command::Sentence {
+                Command {
                     turn: racing_turn,
                     text: "must remain stopped".into(),
                 },
@@ -930,7 +1120,7 @@ mod tests {
         let (tx, _rx) = sync_channel(TTS_QUEUE_CAPACITY);
         let turn = pw_domain::reply::TurnTracker::new().begin_turn();
         for index in 0..TTS_QUEUE_CAPACITY {
-            tx.try_send(Command::Sentence {
+            tx.try_send(Command {
                 turn,
                 text: format!("queued-{index}"),
             })
@@ -944,7 +1134,7 @@ mod tests {
             producer_service.register_turn_locked(&guard, turn);
             let result = enqueue_command_with_backpressure_observer(
                 &tx,
-                Command::Sentence {
+                Command {
                     turn,
                     text: "cancelled".into(),
                 },
@@ -1101,7 +1291,7 @@ mod tests {
         let turn = pw_domain::reply::TurnTracker::new().begin_turn();
         let invalid_up_to = AtomicU64::new(0);
         for index in 0..TTS_QUEUE_CAPACITY {
-            tx.try_send(Command::Sentence {
+            tx.try_send(Command {
                 turn,
                 text: format!("queued-{index}"),
             })
@@ -1111,7 +1301,7 @@ mod tests {
         let started = Instant::now();
         let result = enqueue_command(
             &tx,
-            Command::Sentence {
+            Command {
                 turn,
                 text: "timed-out".into(),
             },

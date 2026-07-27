@@ -1,7 +1,11 @@
 //! Incremental sentence segmentation for streamed replies.
 
 /// Characters that end a sentence (newline handled separately).
-fn is_terminator(ch: char) -> bool {
+///
+/// Public so consumers that re-join split sentences can tell whether a
+/// boundary already carries its own punctuation.
+#[must_use]
+pub fn is_terminator(ch: char) -> bool {
     matches!(ch, '。' | '！' | '？' | '!' | '?' | '…')
 }
 

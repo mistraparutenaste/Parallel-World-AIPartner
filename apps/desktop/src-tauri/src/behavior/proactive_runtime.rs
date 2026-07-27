@@ -336,20 +336,31 @@ fn persist_and_deliver<R: Runtime>(
             created_at: now,
         })
         .map_err(|error| error.to_string())?;
-    let _ = app.emit(
-        "chat-message",
-        ChatMessageEventDto {
-            schema_version: SCHEMA_VERSION,
-            turn_id: persisted.turn_id,
-            message_id: Some(persisted.message_id),
-            role: ChatRoleDto::Assistant,
-            text: text.to_owned(),
-        },
-    );
-    if tts_enabled {
+    // Like a chat reply, the line is shown when it is spoken. TTS emits
+    // the message itself once it has the audio, so emitting here too
+    // would leave the user reading it well before hearing it — and as a
+    // second bubble, since the two carry different message ids.
+    let spoken_by_tts = tts_enabled && {
         let mut tracker = TurnTracker::after(persisted.turn_id.saturating_sub(1));
-        app.state::<crate::tts::TtsService>()
-            .enqueue(app, tracker.begin_turn(), text);
+        let turn = tracker.begin_turn();
+        let tts = app.state::<crate::tts::TtsService>();
+        let accepted = tts.enqueue(app, turn, text);
+        // The whole line is already one item; the completion mark is what
+        // makes a batched engine speak it.
+        tts.finish_turn(turn);
+        accepted
+    };
+    if !spoken_by_tts {
+        let _ = app.emit(
+            "chat-message",
+            ChatMessageEventDto {
+                schema_version: SCHEMA_VERSION,
+                turn_id: persisted.turn_id,
+                message_id: Some(persisted.message_id),
+                role: ChatRoleDto::Assistant,
+                text: text.to_owned(),
+            },
+        );
     }
     Ok(())
 }

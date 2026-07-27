@@ -5,4 +5,4 @@ mod ports;
 mod queue;
 
 pub use ports::{SpeechAudioSink, TtsSynthesizer};
-pub use queue::SpeechSynthesisQueue;
+pub use queue::{SpeechSynthesisQueue, SynthesisBatching};

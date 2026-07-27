@@ -100,8 +100,33 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/scripts/dev-up.ps1
 
 `ParallelWorld_run.bat`は既定（`PW_TTS_ENGINE`未設定、または`PW_TTS_ENGINE=aivis`などIrodori以外を明示した場合）ではmanaged Irodoriの確認・download・起動は行いません。
 
+## 合成単位（返答まるごと1リクエスト）
+
+Irodoriは参照音声からのゼロショットcloningをFlow Matchingで行うため、リクエストごとに音色と抑揚を独立にサンプリングします。AivisSpeechと同じく1文ずつ合成すると、文の切れ目で声が変わり、合成待ちの無音も文の数だけ入ります。
+
+このためIrodoriを選んだ場合だけ、返答の文をworker内で蓄積し、返答が完結した時点で**まとめて1回の`POST /v1/audio/speech`**に送ります。1リクエストの上限は500文字で、チャット返答（200文字上限）と自発発話（500文字上限）はいずれも1リクエストに収まります。
+
+- 発話開始はLLMの生成完了後になります。engineをAivisにすると従来の文単位・低遅延に戻ります。
+- 1リクエストが長くなるため、Irodoriのadapter timeoutは120秒です（Aivisは30秒）。
+- 発話の割り込み・停止は従来どおりです。
+
+実装: `SynthesisBatching`（`crates/pw-application/src/speech_synthesis/queue.rs`）と`engine_batching`（`apps/desktop/src-tauri/src/tts/service.rs`）。
+
+## テキスト表示のタイミング
+
+TTSが有効で合成を引き受けた文は、**音声が用意できた時点でチャットに表示されます**。返答が読み上げよりずっと先に画面へ出てしまうのを防ぐためで、Irodoriのまとめ合成では返答全体が1つの吹き出しとして音声と同時に現れます。Aivisでは従来どおり文単位ですが、表示はLLMのストリームではなく音声に追随します。
+
+TTSに接続できていない場合は、テキストをそのまま即時表示します（TTS障害 → テキスト表示、基本設計 Phase 6縮退表）。具体的には次のいずれかです。
+
+- 設定でTTSが無効
+- health circuitが開いていて、そのターンがtext-onlyに縮退した
+- engine clientを構築できない（endpoint不正など）
+- 合成キューが埋まって文を投入できなかった／workerが停止した
+
+引き受けたあとで話せなくなった場合（合成失敗、ターンの割り込み、設定変更によるworker再起動など）も、そのテキストはTTS側から解放されて表示されます。`SpeechAudioSink`は「受理した文は`on_audio`か`on_unspoken`のどちらかで必ず1回返す」という約束になっており、テキストが消えることはありません。
+
 ## Dynamic LoRAの注意
 
-設定画面でTTS engineをIrodoriにし、「LoRA adapter path」へIrodori server processから参照できるディレクトリを入力します。空欄はbase modelです。指定値は`POST /v1/audio/speech`の`irodori.lora_adapter`としてloopback serverへ渡されます。Dockerではhost pathではなくcontainer内のpathを指定してください。
+設定画面でTTS engineをIrodoriにし、「LoRA adapter path」へIrodori server processから参照できるディレクトリを入力します。「フォルダを選択」でディレクトリを直接選ぶか、「ファイルから選択」で`adapter_model.safetensors`などを選ぶとそのファイルの親ディレクトリが設定されます。空欄はbase modelです。指定値は`POST /v1/audio/speech`の`irodori.lora_adapter`としてloopback serverへ渡されます。Dockerではhost pathではなくcontainer内のpathを指定してください。
 
 `IRODORI_COMPILE_MODEL=true`とは併用できません。adapter初回読込には時間がかかり、同じserver processではcacheされます。同じpathの内容を更新した場合はserverを再起動し、必要に応じて設定画面からTTS WAV cacheを消去してください。

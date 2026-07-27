@@ -2204,7 +2204,14 @@ trait ConversationEventRuntime: Send {
     fn emit_chat_message(&self, payload: ChatMessageEventDto);
     fn emit_conversation_state(&self, payload: ConversationStateEventDto);
     fn emit_runtime_health(&self, payload: RuntimeHealthEventDto);
-    fn enqueue_speech(&self, turn: TurnId, sentence: &str);
+    /// Returns whether TTS took ownership of the text. When it did, the
+    /// TTS layer emits the chat message once the sentence is spoken (or
+    /// once it is known it will not be); when it did not, the caller
+    /// must show the text itself.
+    fn enqueue_speech(&self, turn: TurnId, sentence: &str) -> bool;
+    /// Marks the reply complete so a batched TTS engine synthesizes the
+    /// sentences it buffered for this turn.
+    fn finish_speech(&self, turn: TurnId);
 }
 
 struct AppConversationEventRuntime<R: Runtime> {
@@ -2251,10 +2258,14 @@ impl<R: Runtime> ConversationEventRuntime for AppConversationEventRuntime<R> {
         let _ = self.app.emit(RUNTIME_HEALTH_EVENT, payload);
     }
 
-    fn enqueue_speech(&self, turn: TurnId, sentence: &str) {
+    fn enqueue_speech(&self, turn: TurnId, sentence: &str) -> bool {
         self.app
             .state::<crate::tts::TtsService>()
-            .enqueue(&self.app, turn, sentence);
+            .enqueue(&self.app, turn, sentence)
+    }
+
+    fn finish_speech(&self, turn: TurnId) {
+        self.app.state::<crate::tts::TtsService>().finish_turn(turn);
     }
 }
 
@@ -2384,10 +2395,14 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
 
     fn on_sentence(&self, turn: TurnId, sentence: &str) {
         let sentence = redact_persistent_content(sentence);
-        self.emit_message(turn, ChatRoleDto::Assistant, &sentence);
-        // Sentence-level read-ahead: synthesis of this sentence runs
-        // while earlier ones are still playing (基本設計 8章).
-        self.runtime.enqueue_speech(turn, &sentence);
+        // Text follows the voice: the TTS layer emits the chat message
+        // when the sentence is spoken, so the reply is not read on screen
+        // long before it is heard. With TTS unavailable nothing would
+        // ever emit it, so it goes out immediately (TTS障害 →
+        // テキスト表示, 基本設計 Phase 6縮退表).
+        if !self.runtime.enqueue_speech(turn, &sentence) {
+            self.emit_message(turn, ChatRoleDto::Assistant, &sentence);
+        }
     }
 
     fn on_reply_complete(&self, turn: TurnId, speech_text: &str) {
@@ -2396,12 +2411,16 @@ impl<A: ConversationEventRuntime> ConversationEvents for TauriConversationEvents
             assistant_chars = speech_text.chars().count(),
             "chat reply completed"
         );
+        self.runtime.finish_speech(turn);
         self.emit_health(true);
     }
 
     fn on_cancelled(&self, _turn: TurnId) {}
 
-    fn on_error(&self, _turn: TurnId, message: &str) {
+    fn on_error(&self, turn: TurnId, message: &str) {
+        // The sentences already shown were queued for speech, so let a
+        // batched engine speak the partial reply rather than lose it.
+        self.runtime.finish_speech(turn);
         self.emit_health(false);
         self.emit_state(ConversationState::LlmUnavailable, Some(message.to_owned()));
     }
@@ -2667,6 +2686,7 @@ mod tests {
             Arc::clone(&attempts),
             false,
             Arc::new(Mutex::new(Vec::new())),
+            false,
         );
         events.on_control(
             TurnTracker::new().begin_turn(),
@@ -2694,6 +2714,10 @@ mod tests {
         fail_emit: bool,
         messages: Arc<Mutex<Vec<ChatMessageEventDto>>>,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
+        finished: Arc<Mutex<Vec<TurnId>>>,
+        /// Whether TTS takes ownership of the text; when it does the
+        /// chat layer must not emit the message itself.
+        speech_accepted: bool,
     }
 
     impl ConversationEventRuntime for RecordingConversationRuntime {
@@ -2747,8 +2771,13 @@ mod tests {
 
         fn emit_runtime_health(&self, _payload: RuntimeHealthEventDto) {}
 
-        fn enqueue_speech(&self, turn: TurnId, sentence: &str) {
+        fn enqueue_speech(&self, turn: TurnId, sentence: &str) -> bool {
             self.speech.lock().unwrap().push((turn, sentence.into()));
+            self.speech_accepted
+        }
+
+        fn finish_speech(&self, turn: TurnId) {
+            self.finished.lock().unwrap().push(turn);
         }
     }
 
@@ -2806,7 +2835,7 @@ mod tests {
         fail_emit: bool,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
     ) -> TauriConversationEvents<RecordingConversationRuntime> {
-        recording_events_with_context(state.control_context(), attempts, fail_emit, speech)
+        recording_events_with_context(state.control_context(), attempts, fail_emit, speech, false)
     }
 
     fn recording_events_with_context(
@@ -2814,6 +2843,7 @@ mod tests {
         attempts: Arc<Mutex<Vec<RecordedCharacterEvent>>>,
         fail_emit: bool,
         speech: Arc<Mutex<Vec<(TurnId, String)>>>,
+        speech_accepted: bool,
     ) -> TauriConversationEvents<RecordingConversationRuntime> {
         TauriConversationEvents {
             runtime: RecordingConversationRuntime {
@@ -2822,6 +2852,8 @@ mod tests {
                 fail_emit,
                 messages: Arc::new(Mutex::new(Vec::new())),
                 speech,
+                finished: Arc::new(Mutex::new(Vec::new())),
+                speech_accepted,
             },
             health: test_health(),
         }
@@ -2838,6 +2870,9 @@ mod tests {
                 fail_emit: false,
                 messages: Arc::clone(&messages),
                 speech: Arc::clone(&speech),
+                finished: Arc::new(Mutex::new(Vec::new())),
+                // Unavailable TTS: the chat layer shows the text itself.
+                speech_accepted: false,
             },
             health: test_health(),
         };
@@ -2859,6 +2894,83 @@ mod tests {
         );
         let speech = speech.lock().unwrap();
         assert_eq!(speech.as_slice(), [(turn, messages[1].text.clone())]);
+    }
+
+    #[test]
+    fn assistant_text_waits_for_speech_but_is_shown_when_tts_declines_it() {
+        for (accepted, expected_messages) in [(true, 0), (false, 1)] {
+            let speech = Arc::new(Mutex::new(Vec::new()));
+            let events = recording_events_with_context(
+                None,
+                Arc::new(Mutex::new(Vec::new())),
+                false,
+                Arc::clone(&speech),
+                accepted,
+            );
+            let turn = TurnTracker::new().begin_turn();
+
+            events.on_sentence(turn, "こんにちは。");
+
+            assert_eq!(
+                speech.lock().unwrap().len(),
+                1,
+                "the sentence must always be offered to TTS"
+            );
+            assert_eq!(
+                events.runtime.messages.lock().unwrap().len(),
+                expected_messages,
+                "accepted={accepted}: the text is either released by TTS with the audio, \
+                 or shown here because nothing else will"
+            );
+        }
+    }
+
+    #[test]
+    fn completing_or_failing_a_reply_signals_the_turn_end_to_a_batched_engine() {
+        for (label, run) in [
+            (
+                "complete",
+                Box::new(
+                    |events: &TauriConversationEvents<RecordingConversationRuntime>, turn| {
+                        events.on_reply_complete(turn, "こんにちは。またね。");
+                    },
+                )
+                    as Box<dyn Fn(&TauriConversationEvents<RecordingConversationRuntime>, TurnId)>,
+            ),
+            (
+                "llm error",
+                Box::new(
+                    |events: &TauriConversationEvents<RecordingConversationRuntime>, turn| {
+                        events.on_error(turn, "llm unreachable");
+                    },
+                ),
+            ),
+        ] {
+            let speech = Arc::new(Mutex::new(Vec::new()));
+            let events = recording_events_with_context(
+                None,
+                Arc::new(Mutex::new(Vec::new())),
+                false,
+                Arc::clone(&speech),
+                true,
+            );
+            let turn = TurnTracker::new().begin_turn();
+
+            events.on_sentence(turn, "こんにちは。");
+            assert!(
+                events.runtime.finished.lock().unwrap().is_empty(),
+                "{label}: the turn end must not be signalled while sentences still arrive"
+            );
+
+            run(&events, turn);
+
+            assert_eq!(
+                events.runtime.finished.lock().unwrap().as_slice(),
+                [turn],
+                "{label}: the batched engine never learned the reply ended"
+            );
+            assert_eq!(speech.lock().unwrap().len(), 1, "{label}");
+        }
     }
 
     #[test]

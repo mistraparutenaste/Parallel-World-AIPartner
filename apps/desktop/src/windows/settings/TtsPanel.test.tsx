@@ -214,6 +214,58 @@ describe('TtsPanel', () => {
     });
   });
 
+  it('resolves a picked adapter file to its directory', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    openMock.mockResolvedValue(
+      '/Users/me/models/adapters/character-a/adapter_model.safetensors',
+    );
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'ファイルから選択' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('LoRA adapter path')).toHaveValue(
+        '/Users/me/models/adapters/character-a',
+      );
+    });
+    expect(openMock).toHaveBeenCalledWith({
+      multiple: false,
+      filters: [
+        {
+          name: 'LoRA adapter',
+          extensions: ['safetensors', 'bin', 'pt', 'json'],
+        },
+        { name: 'すべてのファイル', extensions: ['*'] },
+      ],
+    });
+  });
+
+  it('resolves a picked adapter file below a Windows drive root', async () => {
+    mockSettings({
+      ...AIVIS_SETTINGS,
+      engine: 'irodori',
+      base_url: 'http://127.0.0.1:8088',
+      voice_id: 'irodori-voice',
+    });
+    openMock.mockResolvedValue('C:\\adapter_model.safetensors');
+    render(<TtsPanel />);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'ファイルから選択' }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('LoRA adapter path')).toHaveValue('C:\\');
+    });
+  });
+
   it('keeps the LoRA adapter path when the folder picker is cancelled', async () => {
     mockSettings({
       ...AIVIS_SETTINGS,
